@@ -120,12 +120,12 @@ services:
       # 代理仅用于外部 API，Ollama 本地服务不走代理
       - HTTP_PROXY=http://host.docker.internal:7897
       - HTTPS_PROXY=http://host.docker.internal:7897
-      # Ollama 使用 Windows 宿主机 IP 访问
-      - OLLAMA_BASE_URL=http://192.168.10.239:11434
+      # Ollama 使用 host.docker.internal 访问宿主机
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - LLM_PROVIDER=ollama
       # 禁用 Ollama 请求的代理
       - OLLAMA_NO_PROXY=true
-      - NO_PROXY=host.docker.internal,host-gateway,ollama,192.168.10.239,localhost,127.0.0.1
+      - NO_PROXY=host.docker.internal,host-gateway,ollama,192.168.10.239,localhost,127.0.0.1,host.docker.internal:11434,backend,postgres,redis,nats,clickhouse,frontend,gateway,172.19.0.0/16
       # CORS 配置，允许前端访问 (逗号分隔)
       - CORS_ORIGINS=http://frontend:3000,http://localhost:3002
       # Hummingbot API 集成（只读）

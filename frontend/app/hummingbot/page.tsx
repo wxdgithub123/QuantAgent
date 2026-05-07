@@ -64,24 +64,31 @@ export default function HummingbotPage() {
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
     try {
       const [statusRes, dockerRes, connectorsRes, portfolioRes, botsRes, ordersRes, positionsRes] = await Promise.allSettled([
-        fetch("/api/v1/hummingbot/status"),
-        fetch("/api/v1/hummingbot/docker"),
-        fetch("/api/v1/hummingbot/connectors"),
-        fetch("/api/v1/hummingbot/portfolio"),
-        fetch("/api/v1/hummingbot/bots"),
-        fetch("/api/v1/hummingbot/orders"),
-        fetch("/api/v1/hummingbot/positions"),
+        fetch("/api/v1/hummingbot/status", { signal: controller.signal }),
+        fetch("/api/v1/hummingbot/docker", { signal: controller.signal }),
+        fetch("/api/v1/hummingbot/connectors", { signal: controller.signal }),
+        fetch("/api/v1/hummingbot/portfolio", { signal: controller.signal }),
+        fetch("/api/v1/hummingbot/bots", { signal: controller.signal }),
+        fetch("/api/v1/hummingbot/orders", { signal: controller.signal }),
+        fetch("/api/v1/hummingbot/positions", { signal: controller.signal }),
       ]);
+      clearTimeout(timeoutId);
 
-      const parseResponse = async (result: PromiseSettledResult<Response>): Promise<ApiResponse | null> => {
-        if (result.status === "rejected") {
+      const parseResponse = async (result: PromiseSettledResult<Response>): Promise<ApiResponse> => {
+        if (result.status === "rejected" || result.status === "rejected") {
+          const reason = result.reason;
+          const isAbort = reason?.name === "AbortError" || reason?.message?.includes("aborted");
           return {
             connected: false,
             source: "hummingbot-api",
             data: null,
-            error: `请求失败: ${result.reason?.message || "网络错误"}`,
+            error: isAbort ? "请求超时（15秒）" : `请求失败: ${reason?.message || "网络错误"}`,
             timestamp: new Date().toISOString(),
           };
         }
@@ -95,7 +102,14 @@ export default function HummingbotPage() {
           };
         }
         try {
-          return await result.value.json();
+          const json = await result.value.json();
+          return json || {
+            connected: false,
+            source: "hummingbot-api",
+            data: null,
+            error: "响应为空",
+            timestamp: new Date().toISOString(),
+          };
         } catch {
           return {
             connected: false,
@@ -117,13 +131,13 @@ export default function HummingbotPage() {
         parseResponse(positionsRes),
       ]);
 
-      if (s) setStatus(s);
-      if (d) setDocker(d);
-      if (c) setConnectors(c);
-      if (p) setPortfolio(p);
-      if (b) setBots(b);
-      if (o) setOrders(o as ApiResponse<OrderData>);
-      if (pos) setPositions(pos as ApiResponse<PositionData>);
+      setStatus(s);
+      setDocker(d);
+      setConnectors(c);
+      setPortfolio(p);
+      setBots(b);
+      setOrders(o as ApiResponse<OrderData>);
+      setPositions(pos as ApiResponse<PositionData>);
       setLastRefresh(new Date());
     } finally {
       setLoading(false);
@@ -528,7 +542,7 @@ export default function HummingbotPage() {
                 <div className="w-8 h-8 bg-green-500/10 rounded-lg flex items-center justify-center border border-green-500/20">
                   <Bot className="w-4 h-4 text-green-400" />
                 </div>
-                实盘资产 (Portfolio)
+                Hummingbot 实盘资产（只读）
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -567,8 +581,10 @@ export default function HummingbotPage() {
                       </div>
                     </div>
                   ) : (
-                    <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center text-slate-500 text-sm">
-                      暂无实盘账户资产数据，请在 Hummingbot 中配置交易所账户。
+                    <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
+                      <Bot className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                      <p className="text-slate-400 text-sm">暂无实盘账户资产数据</p>
+                      <p className="text-slate-500 text-xs mt-1">请先在 Hummingbot 中配置交易所账户。</p>
                     </div>
                   )}
 
@@ -642,9 +658,18 @@ export default function HummingbotPage() {
                           : "bg-slate-500/10 text-slate-400 border-slate-500/20"
                       }
                     >
-                      {getBotsCount(bots?.data) > 0 ? "有运行中的 Bot" : "暂无运行中的 Bot"}
+                      {getBotsCount(bots?.data) > 0 ? "有运行中的 Bot" : "暂无运行中的 Hummingbot Bot"}
                     </Badge>
                   </div>
+
+                  {/* Empty state for no bots */}
+                  {getBotsCount(bots?.data) === 0 && !bots?.error && (
+                    <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
+                      <Bot className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                      <p className="text-slate-400 text-sm">暂无运行中的 Hummingbot Bot</p>
+                      <p className="text-slate-500 text-xs mt-1">请先在 Hummingbot 中启动 Bot。</p>
+                    </div>
+                  )}
 
                   {/* Fallback Notice */}
                   {bots?.data?.source === "docker-containers" && bots?.data?.containers_fallback?.note && (
@@ -696,7 +721,7 @@ export default function HummingbotPage() {
                 <div className="w-8 h-8 bg-orange-500/10 rounded-lg flex items-center justify-center border border-orange-500/20">
                   <ShoppingCart className="w-4 h-4 text-orange-400" />
                 </div>
-                实盘订单
+                Hummingbot 实盘订单（只读）
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -739,8 +764,9 @@ export default function HummingbotPage() {
                     const activeOrders = orders?.data?.active_orders || orders?.data?.history_orders;
                     if (!activeOrders || (Array.isArray(activeOrders) && activeOrders.length === 0)) {
                       return (
-                        <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center text-slate-500 text-sm">
-                          暂无实盘订单
+                        <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
+                          <ShoppingCart className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                          <p className="text-slate-400 text-sm">暂无实盘订单</p>
                         </div>
                       );
                     }
@@ -810,7 +836,7 @@ export default function HummingbotPage() {
                 <div className="w-8 h-8 bg-emerald-500/10 rounded-lg flex items-center justify-center border border-emerald-500/20">
                   <Wallet className="w-4 h-4 text-emerald-400" />
                 </div>
-                实盘持仓
+                Hummingbot 实盘持仓（只读）
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -841,8 +867,9 @@ export default function HummingbotPage() {
                     const posData = positions?.data?.positions;
                     if (!posData || (Array.isArray(posData) && posData.length === 0)) {
                       return (
-                        <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center text-slate-500 text-sm">
-                          暂无实盘持仓
+                        <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
+                          <Wallet className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                          <p className="text-slate-400 text-sm">暂无实盘持仓</p>
                         </div>
                       );
                     }

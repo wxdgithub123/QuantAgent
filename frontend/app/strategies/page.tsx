@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   BookOpen, BarChart2, TrendingUp, Activity, Brain, Terminal,
   LayoutDashboard, RefreshCw, Play, ChevronRight, Zap,
-  BarChart3, AlertTriangle, CheckCircle2, Trophy, Clock, Info, Settings2, History, Sparkles
+  BarChart3, AlertTriangle, CheckCircle2, Trophy, Clock, Info, Settings2, History, Sparkles, Server
 } from "lucide-react";
 import { ScatterChart, Scatter, XAxis, YAxis, ZAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from 'recharts';
 
@@ -440,6 +440,9 @@ export default function StrategiesPage() {
             </Link>
             <Link href="/terminal" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
               <Terminal className="w-4 h-4" /> 终端
+            </Link>
+            <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
+              <Server className="w-4 h-4" /> Hummingbot
             </Link>
           </nav>
         </div>

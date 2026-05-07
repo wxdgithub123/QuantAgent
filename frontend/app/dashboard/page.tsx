@@ -523,13 +523,39 @@ export default function DashboardPage() {
     setWsStatus("connecting");
     const wsUrl = getWsUrl();
     console.log("Connecting to WebSocket:", wsUrl);
-    
+
+    // 清理旧连接
+    if (wsRef.current) {
+      wsRef.current.onopen = null;
+      wsRef.current.onclose = null;
+      wsRef.current.onerror = null;
+      wsRef.current.onmessage = null;
+      if (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING) {
+        wsRef.current.close();
+      }
+      wsRef.current = null;
+    }
+
+    // 连接超时（10秒）
+    const connectTimeout = setTimeout(() => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.CONNECTING) {
+        console.warn("WebSocket connection timeout");
+        wsRef.current.close();
+        setWsStatus("disconnected");
+        reconnectAttempts.current += 1;
+        const delay = Math.min(3000 * Math.pow(1.5, reconnectAttempts.current), 30000);
+        reconnectTimer.current = setTimeout(() => connectWS(), delay);
+      }
+    }, 10000);
+
     try {
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
+        clearTimeout(connectTimeout);
         setWsStatus("connected");
+        reconnectAttempts.current = 0;
         ws.send(JSON.stringify({ action: "subscribe", symbol: currentSymbol }));
       };
 
@@ -546,37 +572,32 @@ export default function DashboardPage() {
               high_24h:       msg.high_24h,
               low_24h:        msg.low_24h,
             };
-            // 保存最后的价格数据，断连时保留显示
             lastTickerRef.current = tickerData;
             setTicker(tickerData);
-            // 重连成功后重置计数
             reconnectAttempts.current = 0;
           }
         } catch { /* ignore */ }
       };
 
-      ws.onerror = (e) => { 
-        // 仅在非关闭状态下记录错误，避免开发环境热重载时的干扰
-        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
-          console.warn("WebSocket error:", e);
-        }
+      ws.onerror = () => {
+        clearTimeout(connectTimeout);
         setWsStatus("disconnected");
-        // 增加重连计数
         reconnectAttempts.current += 1;
       };
+
       ws.onclose = () => {
+        clearTimeout(connectTimeout);
         setWsStatus("disconnected");
-        // 断连时不清除 ticker 数据，保留最后已知价格显示
-        // lastTickerRef.current 已在 onerror 之前保存
-        // 只有在未卸载且非主动关闭时才重连
         if (wsRef.current === ws) {
           const delay = Math.min(3000 * Math.pow(1.5, reconnectAttempts.current), 30000);
           reconnectTimer.current = setTimeout(() => connectWS(), delay);
         }
       };
     } catch (e) {
+      clearTimeout(connectTimeout);
       console.warn("Failed to create WebSocket:", e);
       setWsStatus("disconnected");
+      reconnectAttempts.current += 1;
       reconnectTimer.current = setTimeout(() => connectWS(), 5000);
     }
   }, [currentSymbol]);

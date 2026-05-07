@@ -11,6 +11,7 @@ import {
   ArrowLeft, RefreshCw, TrendingUp, TrendingDown,
   BarChart3, PieChart as PieChartIcon, Activity, DollarSign, Target,
   Zap, AlertTriangle, Clock, Wallet, ChevronDown, ChevronRight,
+  BarChart as BarChartIcon, History, Server
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -554,6 +555,30 @@ function AnalyticsContent() {
               </div>
             </div>
             <div className="flex items-center gap-3 flex-wrap">
+              {/* Navigation */}
+              <nav className="hidden lg:flex items-center gap-1 mr-4">
+                <Link href="/dashboard" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                  仪表盘
+                </Link>
+                <Link href="/trades" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                  交易流水
+                </Link>
+                <Link href="/analytics" className="px-2 py-1 text-xs text-purple-400 bg-purple-500/10 rounded border border-purple-500/20 font-medium">
+                  性能分析
+                </Link>
+                <Link href="/backtest" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                  回测
+                </Link>
+                <Link href="/replay" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                  历史回放
+                </Link>
+                <Link href="/terminal" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                  终端
+                </Link>
+                <Link href="/hummingbot" className="px-2 py-1 text-xs text-cyan-400 hover:text-cyan-100 rounded hover:bg-cyan-500/10">
+                  <span className="flex items-center gap-1"><Server className="w-3 h-3" /> Hummingbot</span>
+                </Link>
+              </nav>
               {/* 回放会话选择器 - Session Selector */}
               <div className="flex items-center gap-2">
                 <span className="text-xs text-slate-400 hidden sm:inline">查看会话:</span>

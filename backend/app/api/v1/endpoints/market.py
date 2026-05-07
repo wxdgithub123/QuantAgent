@@ -707,3 +707,194 @@ async def backfill_status():
         result.append({**info, "stale": stale})
 
     return {"intervals": result, "checked_at": now.isoformat()}
+
+
+# ============== Multi-Exchange Market Data Endpoints (只读行情) ==============
+
+@router.get("/exchanges", tags=["Multi-Exchange"])
+async def get_exchanges():
+    """
+    获取所有支持的交易所列表（行情）
+    """
+    from app.services.exchange_service import exchange_service
+    return {
+        "exchanges": exchange_service.get_supported_exchanges(),
+        "count": len(exchange_service.SUPPORTED_EXCHANGES)
+    }
+
+
+@router.get("/{exchange_id}/klines/{symbol}", response_model=KlineResponse, tags=["Multi-Exchange"])
+async def get_exchange_klines(
+    exchange_id: str,
+    symbol: str,
+    interval: str = Query("1h", description="K线周期: 1m, 5m, 15m, 30m, 1h, 4h, 1d"),
+    limit: int = Query(100, ge=1, le=1000),
+    testnet: bool = Query(False, description="是否使用测试网"),
+):
+    """
+    从指定交易所获取 K 线数据（只读行情）
+    """
+    from app.services.exchange_service import exchange_service
+
+    supported = [e["id"] for e in exchange_service.get_supported_exchanges()]
+    if exchange_id not in supported:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported exchange: {exchange_id}. Supported: {supported}"
+        )
+
+    try:
+        klines = await exchange_service.get_klines(
+            exchange_id=exchange_id,
+            symbol=symbol,
+            timeframe=interval,
+            limit=limit,
+            use_testnet=testnet
+        )
+        return KlineResponse(
+            symbol=symbol,
+            interval=interval,
+            data=klines,
+            source=exchange_id
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch klines: {str(e)}")
+
+
+@router.get("/{exchange_id}/ticker/{symbol}", tags=["Multi-Exchange"])
+async def get_exchange_ticker(
+    exchange_id: str,
+    symbol: str,
+    testnet: bool = Query(False),
+):
+    """
+    从指定交易所获取 24h 行情数据（只读）
+    """
+    from app.services.exchange_service import exchange_service
+
+    supported = [e["id"] for e in exchange_service.get_supported_exchanges()]
+    if exchange_id not in supported:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported exchange: {exchange_id}. Supported: {supported}"
+        )
+
+    try:
+        ticker = await exchange_service.get_ticker(exchange_id, symbol, testnet)
+        return ticker
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch ticker: {str(e)}")
+
+
+@router.get("/{exchange_id}/price/{symbol}", tags=["Multi-Exchange"])
+async def get_exchange_price(
+    exchange_id: str,
+    symbol: str,
+    testnet: bool = Query(False),
+):
+    """
+    从指定交易所获取当前价格（只读）
+    """
+    from app.services.exchange_service import exchange_service
+
+    supported = [e["id"] for e in exchange_service.get_supported_exchanges()]
+    if exchange_id not in supported:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported exchange: {exchange_id}. Supported: {supported}"
+        )
+
+    try:
+        price = await exchange_service.get_price(exchange_id, symbol, testnet)
+        return {"symbol": symbol, "price": price, "source": exchange_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch price: {str(e)}")
+
+
+@router.get("/{exchange_id}/orderbook/{symbol}", tags=["Multi-Exchange"])
+async def get_exchange_orderbook(
+    exchange_id: str,
+    symbol: str,
+    limit: int = Query(100, ge=1, le=500),
+    testnet: bool = Query(False),
+):
+    """
+    从指定交易所获取订单簿数据（只读）
+    """
+    from app.services.exchange_service import exchange_service
+
+    supported = [e["id"] for e in exchange_service.get_supported_exchanges()]
+    if exchange_id not in supported:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported exchange: {exchange_id}. Supported: {supported}"
+        )
+
+    try:
+        orderbook = await exchange_service.get_order_book(exchange_id, symbol, limit, testnet)
+        return orderbook
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch orderbook: {str(e)}")
+
+
+@router.get("/{exchange_id}/symbols", tags=["Multi-Exchange"])
+async def get_exchange_symbols(
+    exchange_id: str,
+    testnet: bool = Query(False),
+):
+    """
+    获取指定交易所的所有交易对（只读）
+    """
+    from app.services.exchange_service import exchange_service
+
+    supported = [e["id"] for e in exchange_service.get_supported_exchanges()]
+    if exchange_id not in supported:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported exchange: {exchange_id}. Supported: {supported}"
+        )
+
+    try:
+        symbols = await exchange_service.get_symbols(exchange_id, testnet)
+        return {
+            "exchange": exchange_id,
+            "symbols": [
+                {"symbol": s.symbol, "base": s.base, "quote": s.quote}
+                for s in symbols[:200]
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch symbols: {str(e)}")
+
+
+@router.get("/exchange-compare/{symbol}", tags=["Multi-Exchange"])
+async def compare_prices_multi_exchange(symbol: str):
+    """
+    对比多个交易所的同一交易对价格（只读行情）
+    """
+    from app.services.exchange_service import exchange_service
+
+    exchanges = ["binance", "okx", "bybit", "gateio"]
+    prices = {}
+
+    for exchange_id in exchanges:
+        try:
+            price = await exchange_service.get_price(exchange_id, symbol)
+            prices[exchange_id] = price
+        except Exception:
+            prices[exchange_id] = None
+
+    valid_prices = {k: v for k, v in prices.items() if v is not None}
+    if len(valid_prices) >= 2:
+        min_price = min(valid_prices.values())
+        max_price = max(valid_prices.values())
+        spread = ((max_price - min_price) / min_price) * 100
+    else:
+        spread = 0
+
+    return {
+        "symbol": symbol,
+        "prices": prices,
+        "spread_percent": round(spread, 4),
+        "exchanges": list(prices.keys())
+    }

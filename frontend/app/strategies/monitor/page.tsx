@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import {
   BookOpen, LayoutDashboard, BarChart2, History, Terminal, Activity,
   RefreshCw, PieChart as PieChartIcon, Target, Clock, AlertTriangle, ShieldAlert,
-  Play
+  Play, Server
 } from "lucide-react";
 import {
   Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
@@ -304,6 +304,9 @@ export default function StrategyMonitorPage() {
             </span>
             <Link href="/terminal" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
               <Terminal className="w-4 h-4" /> 终端
+            </Link>
+            <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
+              <Server className="w-4 h-4" /> Hummingbot
             </Link>
           </nav>
         </div>

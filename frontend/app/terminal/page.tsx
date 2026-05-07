@@ -12,7 +12,7 @@ import {
   Brain, Send, RefreshCw, BarChart3, BarChart, Activity,
   TrendingUp, Shield, Zap, ChevronDown, ChevronUp, X, Clock,
   AlertTriangle, CheckCircle, Info, BookOpen, LayoutDashboard, WifiOff, Cpu,
-  History
+  History, Server
 } from "lucide-react";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -417,6 +417,9 @@ export default function TerminalPage() {
               <span className="px-3 py-1.5 text-sm text-purple-400 bg-purple-500/10 rounded-lg border border-purple-500/20 font-medium flex items-center gap-1.5">
                 <Brain className="w-4 h-4" /> 终端
               </span>
+              <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
+                <Server className="w-4 h-4" /> Hummingbot
+              </Link>
             </nav>
 
             <div className="flex items-center gap-2">

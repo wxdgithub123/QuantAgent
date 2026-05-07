@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   ArrowLeft, RefreshCw, Download, TrendingUp, TrendingDown,
   BarChart3, Clock, DollarSign, Filter, AlertTriangle,
+  Activity, BarChart, History, Server
 } from "lucide-react";
 
 const API_BASE = ""; // 客户端请求强制使用相对路径，通过 Next.js rewrites 转发到后端
@@ -129,6 +130,30 @@ export default function TradesPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {/* Navigation */}
+              <nav className="hidden md:flex items-center gap-1 mr-4">
+                <Link href="/dashboard" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                  仪表盘
+                </Link>
+                <Link href="/trades" className="px-2 py-1 text-xs text-blue-400 bg-blue-500/10 rounded border border-blue-500/20 font-medium">
+                  交易流水
+                </Link>
+                <Link href="/analytics" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                  性能分析
+                </Link>
+                <Link href="/backtest" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                  回测
+                </Link>
+                <Link href="/replay" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                  历史回放
+                </Link>
+                <Link href="/terminal" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                  终端
+                </Link>
+                <Link href="/hummingbot" className="px-2 py-1 text-xs text-cyan-400 hover:text-cyan-100 rounded hover:bg-cyan-500/10">
+                  <span className="flex items-center gap-1"><Server className="w-3 h-3" /> Hummingbot</span>
+                </Link>
+              </nav>
               <Button variant="ghost" size="sm" className="h-8 text-xs text-slate-400 hover:text-slate-100" onClick={fetchPairs}>
                 <RefreshCw className="w-3 h-3 mr-1" /> 刷新
               </Button>

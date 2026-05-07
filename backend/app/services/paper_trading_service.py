@@ -484,24 +484,24 @@ class PaperTradingService:
         # Handle LIMIT orders (PENDING -> NEW)
         if order_type == "LIMIT":
             async with get_db() as session:
-            trade = PaperTrade(
-                client_order_id=client_order_id,
-                strategy_id=strategy_id,
-                symbol=symbol,
-                exchange_id=exchange_id,
-                side=side,
-                order_type="LIMIT",
-                quantity=qty_dec,
-                price=price_dec,
-                leverage=leverage,
-                benchmark_price=Decimal(str(benchmark_price)),
-                fee=fee,
-                pnl=None,
-                status="NEW",  # Initial state for Limit Order
-                mode=mode,
-                session_id=session_id,
-                created_at=now,
-            )
+                trade = PaperTrade(
+                    client_order_id=client_order_id,
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                    exchange_id=exchange_id,
+                    side=side,
+                    order_type="LIMIT",
+                    quantity=qty_dec,
+                    price=price_dec,
+                    leverage=leverage,
+                    benchmark_price=Decimal(str(benchmark_price)),
+                    fee=fee,
+                    pnl=None,
+                    status="NEW",
+                    mode=mode,
+                    session_id=session_id,
+                    created_at=now,
+                )
                 session.add(trade)
                 await session.commit()
                 await session.refresh(trade)
