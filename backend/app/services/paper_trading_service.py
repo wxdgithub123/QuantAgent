@@ -23,7 +23,7 @@ from app.models.db_models import (
     EquitySnapshot,
 )
 from app.services.risk_manager import risk_manager
-from app.services.binance_service import binance_service
+from app.services.exchange_service import exchange_service
 
 logger = logging.getLogger(__name__)
 
@@ -190,15 +190,19 @@ class PaperTradingService:
         self,
         current_prices: Optional[Dict[str, float]] = None,
         session_id: Optional[str] = None,
+        exchange_id: str = "binance",
     ) -> List[Dict[str, Any]]:
         """
         Return open positions with real-time PnL.
         current_prices: {symbol: price} dict for PnL calculation.
-        If not provided, will try to fetch from BinanceService.
+        If not provided, will try to fetch from ExchangeService.
         """
         # If no session_id, fallback to "paper" mode (global positions)
         async with get_db() as session:
-            stmt = select(PaperPosition).where(PaperPosition.quantity != 0)
+            stmt = select(PaperPosition).where(
+                PaperPosition.quantity != 0,
+                PaperPosition.exchange_id == exchange_id,
+            )
             if session_id:
                 stmt = stmt.where(PaperPosition.session_id == session_id)
             else:
@@ -213,13 +217,13 @@ class PaperTradingService:
         # If no current_prices provided, try to get real-time prices
         prices_to_use = current_prices or {}
         if not current_prices and symbols:
-            # Fetch real-time prices from BinanceService
+            # Fetch real-time prices from ExchangeService
             for sym in set(symbols):
                 try:
-                    price = await binance_service.get_price(sym)
+                    price = await exchange_service.get_price(exchange_id, sym)
                     prices_to_use[sym] = price
                 except Exception as e:
-                    logger.warning(f"Failed to fetch price for {sym}: {e}")
+                    logger.warning(f"Failed to fetch price for {sym} from {exchange_id}: {e}")
                     # Fallback to avg_price if we can't get real price
                     for row in rows:
                         if row.symbol == sym:
@@ -311,9 +315,9 @@ class PaperTradingService:
         await redis_delete(REDIS_POSITIONS_KEY)
 
     async def _get_position(
-        self, session, symbol: str, session_id: Optional[str] = None
+        self, session, symbol: str, session_id: Optional[str] = None, exchange_id: str = "binance"
     ) -> Optional[PaperPosition]:
-        stmt = select(PaperPosition).where(PaperPosition.symbol == symbol)
+        stmt = select(PaperPosition).where(PaperPosition.symbol == symbol).where(PaperPosition.exchange_id == exchange_id)
         if session_id:
             stmt = stmt.where(PaperPosition.session_id == session_id)
         else:
@@ -330,7 +334,7 @@ class PaperTradingService:
         symbol: str,
         side: str,  # "BUY" | "SELL"
         quantity: float,
-        price: float,  # real-time price from BinanceService
+        price: float,  # real-time price from ExchangeService
         order_type: str = "MARKET",
         benchmark_price: Optional[float] = None,  # For TCA (Implementation Shortfall)
         client_order_id: Optional[str] = None,  # For idempotency
@@ -338,6 +342,7 @@ class PaperTradingService:
         strategy_id: Optional[str] = None,  # Added for attribution
         mode: str = "paper",  # paper | backtest | historical_replay
         session_id: Optional[str] = None,  # For historical_replay session_id
+        exchange_id: str = "binance",  # Target exchange for simulated trading
     ) -> Dict[str, Any]:
         """
         Execute a simulated market order or place a limit order.
@@ -401,7 +406,7 @@ class PaperTradingService:
         # ── 风控前置检查 ────────────────────────────────────────────────────
         balance_data = await self.get_balance(session_id=session_id)
         available_balance = balance_data.get("available_balance", 0.0)
-        positions_data = await self.get_positions(session_id=session_id)
+        positions_data = await self.get_positions(session_id=session_id, exchange_id=exchange_id)
         current_positions = {p["symbol"]: p["quantity"] for p in positions_data}
         total_portfolio = available_balance + sum(
             p["quantity"] * p["mark_price"] for p in positions_data
@@ -479,23 +484,24 @@ class PaperTradingService:
         # Handle LIMIT orders (PENDING -> NEW)
         if order_type == "LIMIT":
             async with get_db() as session:
-                trade = PaperTrade(
-                    client_order_id=client_order_id,
-                    strategy_id=strategy_id,
-                    symbol=symbol,
-                    side=side,
-                    order_type="LIMIT",
-                    quantity=qty_dec,
-                    price=price_dec,
-                    leverage=leverage,
-                    benchmark_price=Decimal(str(benchmark_price)),
-                    fee=fee,
-                    pnl=None,
-                    status="NEW",  # Initial state for Limit Order
-                    mode=mode,
-                    session_id=session_id,
-                    created_at=now,
-                )
+            trade = PaperTrade(
+                client_order_id=client_order_id,
+                strategy_id=strategy_id,
+                symbol=symbol,
+                exchange_id=exchange_id,
+                side=side,
+                order_type="LIMIT",
+                quantity=qty_dec,
+                price=price_dec,
+                leverage=leverage,
+                benchmark_price=Decimal(str(benchmark_price)),
+                fee=fee,
+                pnl=None,
+                status="NEW",  # Initial state for Limit Order
+                mode=mode,
+                session_id=session_id,
+                created_at=now,
+            )
                 session.add(trade)
                 await session.commit()
                 await session.refresh(trade)
@@ -538,6 +544,7 @@ class PaperTradingService:
                 leverage,
                 strategy_id,
                 session_id,
+                exchange_id,
             )
 
             pnl_record = realized_pnl if realized_pnl != 0 else None
@@ -546,6 +553,7 @@ class PaperTradingService:
                 client_order_id=client_order_id,
                 strategy_id=strategy_id,
                 symbol=symbol,
+                exchange_id=exchange_id,
                 side=side,
                 order_type=order_type,
                 quantity=qty_dec,
@@ -608,7 +616,7 @@ class PaperTradingService:
         # Update Risk Peak Balance
         try:
             new_balance_data = await self.get_balance()
-            new_positions_data = await self.get_positions(session_id=session_id)
+            new_positions_data = await self.get_positions(session_id=session_id, exchange_id=exchange_id)
             total_value = new_balance_data.get("total_balance", 0.0) + sum(
                 p["quantity"] * p["mark_price"] for p in new_positions_data
             )
@@ -677,6 +685,7 @@ class PaperTradingService:
         leverage: Optional[int] = None,
         strategy_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        exchange_id: str = "binance",
     ):
         """Internal method to update position and balance on trade fill.
 
@@ -688,7 +697,7 @@ class PaperTradingService:
             usdt_balance = await self._get_replay_usdt_balance(session_id, session)
         else:
             usdt_balance = await self._get_usdt_balance(session)
-        position = await self._get_position(session, symbol, session_id)
+        position = await self._get_position(session, symbol, session_id, exchange_id)
 
         # Current Position State
         curr_qty = position.quantity if position else Decimal(0)
@@ -739,6 +748,7 @@ class PaperTradingService:
             if position is None:
                 position = PaperPosition(
                     symbol=symbol,
+                    exchange_id=exchange_id,
                     session_id=session_id,
                     strategy_id=strategy_id,
                     quantity=new_qty,
@@ -754,6 +764,7 @@ class PaperTradingService:
                 position.leverage = new_lev
                 position.liquidation_price = liq_price
                 position.updated_at = now
+                position.exchange_id = exchange_id
                 if strategy_id:
                     position.strategy_id = strategy_id
                 if session_id:
@@ -791,8 +802,8 @@ class PaperTradingService:
             matched_any = False
             for order in pending_orders:
                 try:
-                    # Optimized: Check Redis price first via updated BinanceService
-                    current_price = await binance_service.get_price(order.symbol)
+                    # Optimized: Check Redis price first via ExchangeService
+                    current_price = await exchange_service.get_price("binance", order.symbol)
                 except Exception:
                     continue
 
@@ -1034,16 +1045,19 @@ class PaperTradingService:
         self,
         current_prices: Dict[str, float],
         session_id: Optional[str] = None,
+        exchange_id: str = "binance",
     ) -> List[Dict[str, Any]]:
         """Close every open position at current market price.
 
         Args:
             current_prices: {symbol: price} dict
             session_id: If provided, only close positions for this replay session
+            exchange_id: Exchange to close positions for
         """
         positions = await self.get_positions(
             current_prices=current_prices,
             session_id=session_id,
+            exchange_id=exchange_id,
         )
         results = []
         for pos in positions:
@@ -1066,6 +1080,7 @@ class PaperTradingService:
                     quantity=abs_qty,
                     price=price,
                     session_id=session_id,
+                    exchange_id=exchange_id,
                 )
                 results.append(result)
             except Exception as e:
@@ -1099,7 +1114,7 @@ class PaperTradingService:
                     continue
 
                 try:
-                    current_price = await binance_service.get_price(symbol)
+                    current_price = await exchange_service.get_price("binance", symbol)
                 except Exception:
                     continue
 

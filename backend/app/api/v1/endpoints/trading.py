@@ -9,7 +9,7 @@ from typing import Literal, Optional, List, Dict, Any
 from datetime import datetime
 
 from app.services.paper_trading_service import paper_trading_service
-from app.services.binance_service import binance_service
+from app.services.exchange_service import exchange_service
 
 router = APIRouter()
 
@@ -24,6 +24,9 @@ class OrderRequest(BaseModel):
     order_type: Literal["MARKET"] = "MARKET"
     quantity: float
     price: Optional[float] = None            # If None, fetch real-time price
+    exchange_id: Literal[
+        "binance", "okx", "bybit", "gateio", "bitget", "coinbase", "kraken"
+    ] = "binance"                            # Target exchange for simulated trading
 
 
 class OrderResponse(BaseModel):
@@ -47,19 +50,18 @@ class OrderResponse(BaseModel):
 async def create_order(order: OrderRequest):
     """
     Place a paper trading order.
-    - If price is not provided, fetches real-time price from Binance.
+    - If price is not provided, fetches real-time price from the selected exchange.
     - BUY deducts USDT; SELL closes position and calculates PnL.
     """
     # Normalize symbol to ccxt format: "BTCUSDT" -> "BTC/USDT"
-    symbol_ccxt = _normalize_symbol(order.symbol)
 
-    # Get real-time price if not provided
+    # Get real-time price if not provided — use selected exchange
     if order.price is None:
         try:
-            ticker = await binance_service.get_ticker(symbol_ccxt)
+            ticker = await exchange_service.get_ticker(order.exchange_id, order.symbol)
             exec_price = ticker.price
         except Exception as e:
-            raise HTTPException(status_code=503, detail=f"Failed to get price for {order.symbol}: {e}")
+            raise HTTPException(status_code=503, detail=f"Failed to get price for {order.symbol} from {order.exchange_id}: {e}")
     else:
         exec_price = order.price
 
@@ -70,6 +72,7 @@ async def create_order(order: OrderRequest):
             quantity=order.quantity,
             price=exec_price,
             order_type=order.order_type,
+            exchange_id=order.exchange_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -93,51 +96,53 @@ async def get_orders(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/positions")
-async def get_positions():
+async def get_positions(
+    exchange_id: Optional[str] = Query("binance", description="交易所 ID，用于获取实时价格计算持仓盈亏"),
+):
     """
     Get current open positions with real-time PnL.
-    Fetches latest prices from Binance for each held symbol.
+    Fetches latest prices from the selected exchange for each held symbol.
     """
     # Get positions first (without prices, from cache)
-    positions_raw = await paper_trading_service.get_positions()
+    positions_raw = await paper_trading_service.get_positions(exchange_id=exchange_id)
     if not positions_raw:
         return {"positions": []}
 
-    # Fetch current prices for held symbols
+    # Fetch current prices for held symbols from selected exchange
     current_prices: Dict[str, float] = {}
     for pos in positions_raw:
         symbol = pos["symbol"]
-        symbol_ccxt = _normalize_symbol(symbol)
         try:
-            ticker = await binance_service.get_ticker(symbol_ccxt)
+            ticker = await exchange_service.get_ticker(exchange_id, symbol)
             current_prices[symbol] = ticker.price
         except Exception as e:
-            # Fall back to avg_price if Binance unavailable
+            # Fall back to avg_price if exchange unavailable
             current_prices[symbol] = pos["avg_price"]
 
     # Re-fetch with live prices (bypasses cache)
-    positions = await paper_trading_service.get_positions(current_prices=current_prices)
+    positions = await paper_trading_service.get_positions(current_prices=current_prices, exchange_id=exchange_id)
     return {"positions": positions}
 
 
 @router.post("/positions/close-all")
-async def close_all_positions():
+async def close_all_positions(
+    exchange_id: Optional[str] = Query("binance", description="交易所 ID"),
+):
     """Close every open position at current market price."""
-    positions_raw = await paper_trading_service.get_positions()
+    positions_raw = await paper_trading_service.get_positions(exchange_id=exchange_id)
     if not positions_raw:
         return {"message": "No open positions", "results": []}
 
     current_prices: Dict[str, float] = {}
     for pos in positions_raw:
         symbol = pos["symbol"]
-        symbol_ccxt = _normalize_symbol(symbol)
         try:
-            ticker = await binance_service.get_ticker(symbol_ccxt)
+            ticker = await exchange_service.get_ticker(exchange_id, symbol)
             current_prices[symbol] = ticker.price
         except Exception:
             current_prices[symbol] = pos["avg_price"]
 
-    results = await paper_trading_service.close_all_positions(current_prices)
+    results = await paper_trading_service.close_all_positions(current_prices, exchange_id=exchange_id)
     return {"message": "Positions closed", "results": results}
 
 
@@ -152,42 +157,37 @@ async def get_balance():
 
 
 @router.get("/risk-status")
-async def get_risk_status():
+async def get_risk_status(
+    exchange_id: Optional[str] = Query("binance", description="交易所 ID"),
+):
     """Get current account risk metrics and status."""
     from app.services.risk_manager import risk_manager
-    
-    # Need current portfolio value
+
     # 1. Balance
     balance_data = await paper_trading_service.get_balance()
     available = balance_data.get("available_balance", 0.0)
-    
-    # 2. Positions Value (Mark-to-Market)
-    positions_raw = await paper_trading_service.get_positions()
-    
-    # Fetch current prices for accurate equity calculation
+
+    # 2. Positions Value (Mark-to-Market) from selected exchange
+    positions_raw = await paper_trading_service.get_positions(exchange_id=exchange_id)
     current_prices: Dict[str, float] = {}
     for pos in positions_raw:
         symbol = pos["symbol"]
-        symbol_ccxt = _normalize_symbol(symbol)
         try:
-            ticker = await binance_service.get_ticker(symbol_ccxt)
+            ticker = await exchange_service.get_ticker(exchange_id, symbol)
             current_prices[symbol] = ticker.price
         except Exception:
-            # Fallback to avg_price if fetch fails
             current_prices[symbol] = pos.get("avg_price", 0.0)
-            
-    # Re-calculate positions with live prices
-    positions = await paper_trading_service.get_positions(current_prices=current_prices)
-    
+
+    positions = await paper_trading_service.get_positions(current_prices=current_prices, exchange_id=exchange_id)
+
     pos_value = 0.0
     for p in positions:
-        # Use mark price
         price = p.get("mark_price", p.get("avg_price", 0.0))
         qty = abs(p.get("quantity", 0.0))
         pos_value += qty * price
-        
+
     total_portfolio = available + pos_value
-    
+
     return await risk_manager.get_risk_status(total_portfolio)
 
 
@@ -196,19 +196,3 @@ async def get_macro_status(symbol: str = "BTCUSDT"):
     """获取当前宏观经济与链上指标状态 (Smart Beta & Anti-Black Swan)"""
     from app.services.macro_analysis_service import macro_analysis_service
     return await macro_analysis_service.get_macro_score(symbol)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _normalize_symbol(symbol: str) -> str:
-    """Convert 'BTCUSDT' to 'BTC/USDT' for ccxt."""
-    symbol = symbol.upper()
-    if "/" not in symbol:
-        # Common USDT pairs
-        for quote in ("USDT", "BTC", "ETH", "BNB", "BUSD"):
-            if symbol.endswith(quote):
-                base = symbol[: -len(quote)]
-                return f"{base}/{quote}"
-    return symbol

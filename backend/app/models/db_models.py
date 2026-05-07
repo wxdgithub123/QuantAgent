@@ -65,6 +65,7 @@ class PaperPosition(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     symbol = Column(String(20), nullable=False)
+    exchange_id = Column(String(20), nullable=False, default="binance")  # 支持多交易所
     session_id = Column(String(50), nullable=True)  # Added for isolation
     strategy_id = Column(String(30), nullable=True)  # Added for attribution
     quantity = Column(Numeric(20, 8), nullable=False, default=0)
@@ -93,6 +94,7 @@ class PaperTrade(Base):
         String(50), nullable=True
     )  # Client-provided order ID for idempotency
     symbol = Column(String(20), nullable=False)
+    exchange_id = Column(String(20), nullable=False, default="binance")  # 支持多交易所
     side = Column(String(4), nullable=False)
     order_type = Column(String(10), nullable=False, default="MARKET")
     quantity = Column(Numeric(20, 8), nullable=False)

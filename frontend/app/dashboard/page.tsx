@@ -96,12 +96,13 @@ const AGENT_STRATEGY_MAP: Record<string, { strategy_type: string; params: Record
 // ─── Order Panel ───────────────────────────────────────────────────────────
 interface OrderPanelProps {
   symbol: string;
+  exchangeId: string;
   currentPrice: number | null;
   onClose: () => void;
   onOrderPlaced: () => void;
 }
 
-function OrderPanel({ symbol, currentPrice, onClose, onOrderPlaced }: OrderPanelProps) {
+function OrderPanel({ symbol, exchangeId, currentPrice, onClose, onOrderPlaced }: OrderPanelProps) {
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [quantity, setQuantity] = useState("0.01");
   const [loading, setLoading] = useState(false);
@@ -119,7 +120,7 @@ function OrderPanel({ symbol, currentPrice, onClose, onOrderPlaced }: OrderPanel
       const res = await fetch("/api/v1/trading/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol, side, order_type: "MARKET", quantity: qty }),
+        body: JSON.stringify({ symbol, side, order_type: "MARKET", quantity: qty, exchange_id: exchangeId }),
       });
       const data = await res.json();
       if (!res.ok) { setError(data.detail || "下单失败"); return; }
@@ -250,6 +251,7 @@ export default function DashboardPage() {
   const [ticker, setTicker] = useState<Ticker | null>(null);
   const [currentSymbol, setCurrentSymbol] = useState("BTCUSDT");
   const [currentInterval, setCurrentInterval] = useState("1h");
+  const [currentExchange, setCurrentExchange] = useState("binance");
   const [wsStatus, setWsStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
 
   // Paper trading state
@@ -270,6 +272,7 @@ export default function DashboardPage() {
   const [hummingbotDocker, setHummingbotDocker] = useState<{ connected: boolean; containerCount: number } | null>(null);
   const [hummingbotConnectors, setHummingbotConnectors] = useState<{ connected: boolean; count: number } | null>(null);
   const [hummingbotBots, setHummingbotBots] = useState<{ connected: boolean; count: number; source: string } | null>(null);
+  const [hummingbotReadonly, setHummingbotReadonly] = useState<{ portfolio: boolean; orders: boolean; positions: boolean }>({ portfolio: false, orders: false, positions: false });
 
   useEffect(() => {
     // Fetch trending coins
@@ -289,32 +292,37 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!currentSymbol) return;
     setLoadingComparison(true);
-    fetch(`/api/v1/market/compare/${currentSymbol}`)
-      .then(res => res.json())
-      .then(d => {
-        // Mock data for demo if backend returns nulls (e.g. due to network issues)
-        if (!d.binance_price && !d.coingecko_price) {
-           setComparisonData({
-             binance_price: ticker ? ticker.price : 67154.98,
-             coingecko_price: ticker ? ticker.price * 0.9998 : 67141.55,
-             price_diff: ticker ? ticker.price * 0.0002 : 13.43,
-             price_diff_percent: 0.02
-           });
-        } else {
-           setComparisonData(d);
+
+    // 从选择的交易所获取价格对比
+    const fetchPriceFromExchange = async (exchangeId: string) => {
+      try {
+        const res = await fetch(`/api/v1/market/${exchangeId}/price/${currentSymbol}`);
+        if (res.ok) {
+          const data = await res.json();
+          return data.price;
         }
-      })
-      .catch(() => {
-         // Mock on error
-         setComparisonData({
-             binance_price: 67154.98,
-             coingecko_price: 67141.55,
-             price_diff: 13.43,
-             price_diff_percent: 0.02
-         });
-      })
-      .finally(() => setLoadingComparison(false));
-  }, [currentSymbol, ticker]);
+      } catch { /* ignore */ }
+      return null;
+    };
+
+    // 获取多个交易所的价格
+    Promise.all([
+      fetchPriceFromExchange("binance"),
+      fetchPriceFromExchange("okx"),
+    ]).then(([binancePrice, okxPrice]) => {
+      const bPrice = binancePrice || (ticker ? ticker.price : 67154.98);
+      const oPrice = okxPrice || (bPrice * 0.9999);
+      const diff = Math.abs(bPrice - oPrice);
+      const diffPct = (diff / ((bPrice + oPrice) / 2)) * 100;
+
+      setComparisonData({
+        binance_price: bPrice,
+        coingecko_price: oPrice,
+        price_diff: diff,
+        price_diff_percent: diffPct
+      });
+    }).finally(() => setLoadingComparison(false));
+  }, [currentSymbol, currentExchange, ticker]);
 
   // Cooldown & Cache refs
   const analysisCache = useRef<AnalysisCache>({});
@@ -341,6 +349,18 @@ export default function DashboardPage() {
     { value: "SOLUSDT", label: "SOL/USDT" }, { value: "BNBUSDT", label: "BNB/USDT" },
     { value: "DOGEUSDT", label: "DOGE/USDT" }, { value: "XRPUSDT", label: "XRP/USDT" },
   ];
+
+  // 支持的交易所列表
+  const exchanges = [
+    { value: "binance", label: "币安" },
+    { value: "okx", label: "OKX" },
+    { value: "bybit", label: "Bybit" },
+    { value: "gateio", label: "Gate.io" },
+    { value: "bitget", label: "Bitget" },
+    { value: "coinbase", label: "Coinbase" },
+    { value: "kraken", label: "Kraken" },
+  ];
+
   const intervals = [
     { value: "1m", label: "1分钟" }, { value: "5m", label: "5分钟" },
     { value: "15m", label: "15分钟" }, { value: "1h", label: "1小时" },
@@ -362,30 +382,33 @@ export default function DashboardPage() {
   const fetchPositions = useCallback(async () => {
     setPositionsLoading(true);
     try {
-      const res = await fetch("/api/v1/trading/positions");
+      const res = await fetch(`/api/v1/trading/positions?exchange_id=${currentExchange}`);
       if (res.ok) {
         const data = await res.json();
         setPositions(data.positions || []);
       }
     } catch { /* ignore */ }
     finally { setPositionsLoading(false); }
-  }, []);
+  }, [currentExchange]);
 
   const fetchRiskStatus = useCallback(async () => {
     try {
-      const res = await fetch("/api/v1/trading/risk-status");
+      const res = await fetch(`/api/v1/trading/risk-status?exchange_id=${currentExchange}`);
       if (res.ok) setRiskStatus(await res.json());
     } catch { /* ignore */ }
-  }, []);
+  }, [currentExchange]);
 
   // ── Fetch Hummingbot Status ────────────────────────────────────────────
   const fetchHummingbotStatus = useCallback(async () => {
     try {
-      const [statusRes, dockerRes, connectorsRes, botsRes] = await Promise.allSettled([
+      const [statusRes, dockerRes, connectorsRes, botsRes, portfolioRes, ordersRes, positionsRes] = await Promise.allSettled([
         fetch("/api/v1/hummingbot/status"),
         fetch("/api/v1/hummingbot/docker"),
         fetch("/api/v1/hummingbot/connectors"),
         fetch("/api/v1/hummingbot/bots"),
+        fetch("/api/v1/hummingbot/portfolio"),
+        fetch("/api/v1/hummingbot/orders"),
+        fetch("/api/v1/hummingbot/positions"),
       ]);
 
       // Status
@@ -439,6 +462,48 @@ export default function DashboardPage() {
       } else {
         setHummingbotBots({ connected: false, count: 0, source: "—" });
       }
+
+      // Portfolio
+      let hasPortfolio = false;
+      if (portfolioRes.status === "fulfilled" && portfolioRes.value.ok) {
+        try {
+          const data = await portfolioRes.value.json();
+          if (data.connected && data.data) {
+            const accounts = data.data?.accounts;
+            const portfolioState = data.data?.portfolio_state;
+            hasPortfolio = (Array.isArray(accounts) && accounts.length > 0) ||
+                           (portfolioState && typeof portfolioState === "object" && Object.keys(portfolioState).length > 0);
+          }
+        } catch { /* ignore */ }
+      }
+
+      // Orders
+      let hasOrders = false;
+      if (ordersRes.status === "fulfilled" && ordersRes.value.ok) {
+        try {
+          const data = await ordersRes.value.json();
+          if (data.connected && data.data) {
+            const active = data.data?.active_orders;
+            const history = data.data?.history_orders;
+            hasOrders = (Array.isArray(active) && active.length > 0) ||
+                        (Array.isArray(history) && history.length > 0);
+          }
+        } catch { /* ignore */ }
+      }
+
+      // Positions
+      let hasPositions = false;
+      if (positionsRes.status === "fulfilled" && positionsRes.value.ok) {
+        try {
+          const data = await positionsRes.value.json();
+          if (data.connected && data.data) {
+            const positions = data.data?.positions;
+            hasPositions = Array.isArray(positions) && positions.length > 0;
+          }
+        } catch { /* ignore */ }
+      }
+
+      setHummingbotReadonly({ portfolio: hasPortfolio, orders: hasOrders, positions: hasPositions });
     } catch { /* ignore */ }
   }, []);
 
@@ -749,7 +814,7 @@ export default function DashboardPage() {
       await fetch("/api/v1/trading/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: pos.symbol, side: "SELL", order_type: "MARKET", quantity: pos.quantity }),
+        body: JSON.stringify({ symbol: pos.symbol, side: "SELL", order_type: "MARKET", quantity: pos.quantity, exchange_id: currentExchange }),
       });
       fetchPositions();
       fetchBalance();
@@ -757,7 +822,7 @@ export default function DashboardPage() {
   };
 
   const handleCloseAll = async () => {
-    await fetch("/api/v1/trading/positions/close-all", { method: "POST" });
+    await fetch(`/api/v1/trading/positions/close-all?exchange_id=${currentExchange}`, { method: "POST" });
     fetchPositions();
     fetchBalance();
   };
@@ -815,6 +880,20 @@ export default function DashboardPage() {
                   </span>
                 </div>
               )}
+
+              {/* Exchange Selector */}
+              <Select value={currentExchange} onValueChange={setCurrentExchange}>
+                <SelectTrigger className="w-[110px] bg-slate-800 border-slate-700 text-slate-100 h-8 text-sm">
+                  <SelectValue placeholder="交易所" />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-800 border-slate-700">
+                  {exchanges.map(ex => (
+                    <SelectItem key={ex.value} value={ex.value} className="text-slate-100 focus:bg-slate-700 focus:text-slate-100 cursor-pointer">
+                      {ex.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
 
               {/* Symbol Selector */}
               <Select key="symbol-select" value={currentSymbol} onValueChange={setCurrentSymbol}>
@@ -1009,9 +1088,9 @@ export default function DashboardPage() {
               <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
                 <p className="text-[10px] text-slate-500 uppercase mb-1">Docker 容器</p>
                 <p className={`text-sm font-semibold ${hummingbotDocker?.connected ? "text-green-400" : "text-slate-400"}`}>
-                  {hummingbotDocker?.containerCount ?? "—"}
+                  {hummingbotDocker?.connected ? "可达" : "不可达"}
                 </p>
-                <p className="text-[10px] text-slate-500 mt-0.5">活跃容器</p>
+                <p className="text-[10px] text-slate-500 mt-0.5">{hummingbotDocker?.containerCount ?? 0} 个活跃</p>
               </div>
 
               {/* Connectors */}
@@ -1034,6 +1113,42 @@ export default function DashboardPage() {
                 </p>
               </div>
             </div>
+
+            {/* Readonly data indicators */}
+            {hummingbotStatus?.connected && (
+              <div className="mt-3 grid grid-cols-3 gap-3">
+                {/* Portfolio indicator */}
+                <div className={`flex items-center gap-2 p-2 rounded-lg border ${hummingbotReadonly.portfolio ? "bg-green-500/5 border-green-500/20" : "bg-slate-800/30 border-slate-700/30"}`}>
+                  <div className={`w-1.5 h-1.5 rounded-full ${hummingbotReadonly.portfolio ? "bg-green-400" : "bg-slate-600"}`} />
+                  <div>
+                    <p className="text-[10px] text-slate-400">实盘资产</p>
+                    <p className={`text-[10px] font-semibold ${hummingbotReadonly.portfolio ? "text-green-400" : "text-slate-500"}`}>
+                      {hummingbotReadonly.portfolio ? "有数据" : "无数据"}
+                    </p>
+                  </div>
+                </div>
+                {/* Orders indicator */}
+                <div className={`flex items-center gap-2 p-2 rounded-lg border ${hummingbotReadonly.orders ? "bg-orange-500/5 border-orange-500/20" : "bg-slate-800/30 border-slate-700/30"}`}>
+                  <div className={`w-1.5 h-1.5 rounded-full ${hummingbotReadonly.orders ? "bg-orange-400" : "bg-slate-600"}`} />
+                  <div>
+                    <p className="text-[10px] text-slate-400">实盘订单</p>
+                    <p className={`text-[10px] font-semibold ${hummingbotReadonly.orders ? "text-orange-400" : "text-slate-500"}`}>
+                      {hummingbotReadonly.orders ? "有数据" : "无数据"}
+                    </p>
+                  </div>
+                </div>
+                {/* Positions indicator */}
+                <div className={`flex items-center gap-2 p-2 rounded-lg border ${hummingbotReadonly.positions ? "bg-emerald-500/5 border-emerald-500/20" : "bg-slate-800/30 border-slate-700/30"}`}>
+                  <div className={`w-1.5 h-1.5 rounded-full ${hummingbotReadonly.positions ? "bg-emerald-400" : "bg-slate-600"}`} />
+                  <div>
+                    <p className="text-[10px] text-slate-400">实盘持仓</p>
+                    <p className={`text-[10px] font-semibold ${hummingbotReadonly.positions ? "text-emerald-400" : "text-slate-500"}`}>
+                      {hummingbotReadonly.positions ? "有数据" : "无数据"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Footer */}
             <div className="mt-3 flex items-center justify-between pt-3 border-t border-slate-800/50">
@@ -1384,6 +1499,7 @@ export default function DashboardPage() {
       {showOrderPanel && (
         <OrderPanel
           symbol={currentSymbol}
+          exchangeId={currentExchange}
           currentPrice={ticker?.price ?? null}
           onClose={() => setShowOrderPanel(false)}
           onOrderPlaced={() => { fetchPositions(); fetchBalance(); setShowOrderPanel(false); }}
