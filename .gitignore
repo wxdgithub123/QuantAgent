@@ -1,0 +1,132 @@
+# ── Secrets & Environment ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+.env.local
+.env.production
+Private_key.pem
+*.pem
+*.key
+
+# ── Local-only docs ───────────────────────────────────────────────────────────
+/AGENTS.md
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.cache/
+.tox/
+.nox/
+.ipynb_checkpoints/
+.coverage
+coverage.xml
+htmlcov/
+
+# ── Node / Next.js ────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-error.log
+.next/
+.package.json.md5
+**/*.tsbuildinfo
+
+# ── Build outputs ─────────────────────────────────────────────────────────────
+dist/
+build/
+logs/
+
+# ── IDE & OS ──────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+.claude/
+.qoder/
+.workbuddy/
+.trae/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Logs & Temp ───────────────────────────────────────────────────────────────
+*.log
+nul
+*.tmp
+
+# ── Compiled binaries ─────────────────────────────────────────────────────────
+gateway/main.exe
+gateway/main
+gateway/*.test
+coverage.out
+
+# ── Local smoke tests (keep real tests under tests/ or backend/tests/) ──────────
+/test_*.py
+backend/test_*.py
+
+# 保留 backend/scripts/ 下的测试脚本排除
+backend/scripts/test_*.py
+backend/scripts/verify_*.py
+scripts/test_*.py
+
+verify_*.py
+
+/prompt*.txt
+*prompt*.txt
+
+# ── Misc project-local files ──────────────────────────────────────────────────
+review_*.txt
+review_*.py
+backend/backend/
+
+# ── Backup & temp files ──────────────────────────────────────────────────────
+*.backup
+*.bak
+*.tmp
+fix_*.js
+fix_*.py
+
+# ── Local Docs & Specs (local only, not pushed to GitHub) ──
+/docs/
+
+# ── Root-level screenshots & debugging artifacts ──
+/*.png
+/*.jpg
+/*.jpeg
+tmp_*.txt
+temp_*.txt
+
+# ── Developer-specific configuration ──
+config/mcporter.json
+
+# ── Frontend build cache & temp directories ──
+frontend/.swc/
+frontend/DDesktopQuantAgentfrontend/
+
+# ── Test output files ──
+test_output*.txt
+backend/test_output*.txt
+
+# ── Personal notes & checklists ──
+焚诀.md
+WFA功能问题清单.txt
+
+# ── Backend local docs (design documents, not pushed to GitHub) ──
+backend/docs/
+
+# ── Backend scripts exclusions | 后端脚本排除规则 ──
+# 排除测试和验证脚本 (保留 run_migrations.py, generate_mock_user_data.py 等核心脚本)
+backend/scripts/output/
+backend/scripts/*.csv
+backend/scripts/wfa_*.csv
+
+# ── Root-level debug scripts ──
+/debug_*.py
