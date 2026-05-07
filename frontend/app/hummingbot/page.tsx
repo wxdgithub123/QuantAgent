@@ -7,8 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   RefreshCw, Wifi, WifiOff, Server, Container, Plug, Bot, AlertTriangle,
-  CheckCircle, XCircle, ArrowLeft, Activity, BarChart, History, BarChart3, ShoppingCart, Wallet
+  CheckCircle, XCircle, ArrowLeft, Activity, BarChart, History, BarChart3, ShoppingCart, Wallet,
+  ShieldCheck, FileJson, Copy, Check, Play, AlertCircle
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 interface ApiResponse<T = unknown> {
   connected: boolean;
@@ -51,6 +54,134 @@ interface PositionData {
   positions?: unknown;
 }
 
+interface PaperBotPreviewResponse {
+  valid: boolean;
+  source: string;
+  mode: string;
+  live_trading: boolean;
+  testnet: boolean;
+  data: {
+    config_preview: {
+      bot_name: string;
+      mode: string;
+      live_trading: boolean;
+      testnet: boolean;
+      uses_real_exchange_account: boolean;
+      requires_api_key: boolean;
+      strategy_type: string;
+      trading_pair: string;
+      paper_initial_balance: number;
+      order_amount: number;
+      risk: {
+        stop_loss_pct: number;
+        take_profit_pct: number;
+        max_runtime_minutes: number;
+      };
+      strategy_params: Record<string, unknown>;
+      notes: string[];
+    };
+    warnings: string[];
+  } | null;
+  error: string | null;
+  timestamp: string;
+}
+
+interface PaperBotStartResponse {
+  started: boolean;
+  source: string;
+  mode: string;
+  live_trading: boolean;
+  testnet: boolean;
+  data: {
+    paper_bot_id: string;
+    bot_name: string;
+    strategy_type: string;
+    trading_pair: string;
+    status: string;
+    started_at: string;
+    hummingbot_response?: Record<string, unknown>;
+    config?: Record<string, unknown>;
+  } | null;
+  error: string | null;
+  timestamp: string;
+}
+
+interface PaperBotFormData {
+  bot_name: string;
+  strategy_type: string;
+  trading_pair: string;
+  paper_initial_balance: number;
+  order_amount: number;
+  max_runtime_minutes: number;
+  spread_pct: number;
+  grid_spacing_pct: number;
+  grid_levels: number;
+  stop_loss_pct: number;
+  take_profit_pct: number;
+}
+
+interface PaperBot {
+  paper_bot_id: string;
+  bot_name: string;
+  strategy_type: string;
+  trading_pair: string;
+  mode: string;
+  live_trading: boolean;
+  testnet: boolean;
+  status: string;
+  started_at: string;
+  runtime_seconds: number;
+  source: string;
+  config?: Record<string, unknown>;
+  last_error?: string;
+  hummingbot_status_raw?: Record<string, unknown>;
+}
+
+interface PaperBotOrdersResponse {
+  connected: boolean;
+  source: string;
+  data: {
+    paper_bot_id: string;
+    orders: Record<string, unknown>[];
+    filter_note?: string;
+  } | null;
+  error: string | null;
+}
+
+interface PaperBotPositionsResponse {
+  connected: boolean;
+  source: string;
+  data: {
+    paper_bot_id: string;
+    positions: Record<string, unknown>[];
+    filter_note?: string;
+  } | null;
+  error: string | null;
+}
+
+interface PaperBotPortfolioResponse {
+  connected: boolean;
+  source: string;
+  data: {
+    paper_bot_id: string;
+    portfolio: Record<string, unknown> | null;
+    filter_note?: string;
+  } | null;
+  error: string | null;
+}
+
+interface PaperBotLogsResponse {
+  connected: boolean;
+  source: string;
+  data: {
+    paper_bot_id: string;
+    logs_available: boolean;
+    lines: string[];
+    message?: string;
+  } | null;
+  error: string | null;
+}
+
 export default function HummingbotPage() {
   const [status, setStatus] = useState<ApiResponse<StatusData> | null>(null);
   const [docker, setDocker] = useState<ApiResponse<DockerData> | null>(null);
@@ -61,6 +192,21 @@ export default function HummingbotPage() {
   const [positions, setPositions] = useState<ApiResponse<PositionData> | null>(null);
   const [loading, setLoading] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+
+  // Paper Bot 监控
+  const [paperBots, setPaperBots] = useState<{ bots: PaperBot[] } | null>(null);
+  const [paperBotsLoading, setPaperBotsLoading] = useState(false);
+  const [selectedPaperBot, setSelectedPaperBot] = useState<PaperBot | null>(null);
+  const [paperBotDetail, setPaperBotDetail] = useState<Record<string, unknown> | null>(null);
+  const [paperBotOrders, setPaperBotOrders] = useState<PaperBotOrdersResponse | null>(null);
+  const [paperBotPositions, setPaperBotPositions] = useState<PaperBotPositionsResponse | null>(null);
+  const [paperBotPortfolio, setPaperBotPortfolio] = useState<PaperBotPortfolioResponse | null>(null);
+  const [paperBotLogs, setPaperBotLogs] = useState<PaperBotLogsResponse | null>(null);
+
+  // 停止 Paper Bot
+  const [showStopDialog, setShowStopDialog] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [stopResult, setStopResult] = useState<Record<string, unknown> | null>(null);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -147,6 +293,118 @@ export default function HummingbotPage() {
   useEffect(() => {
     fetchAll();
   }, [fetchAll]);
+
+  // ── Paper Bot 监控函数 ──────────────────────────────────────────────────
+
+  const fetchPaperBots = useCallback(async () => {
+    setPaperBotsLoading(true);
+    try {
+      const response = await fetch("/api/v1/hummingbot/paper-bots");
+      if (response.ok) {
+        const data = await response.json();
+        setPaperBots(data.data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch paper bots:", err);
+    } finally {
+      setPaperBotsLoading(false);
+    }
+  }, []);
+
+  const fetchPaperBotDetail = useCallback(async (paperBotId: string) => {
+    try {
+      const response = await fetch(`/api/v1/hummingbot/paper-bots/${paperBotId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setPaperBotDetail(data.data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch paper bot detail:", err);
+    }
+  }, []);
+
+  const fetchPaperBotOrders = useCallback(async (paperBotId: string) => {
+    try {
+      const response = await fetch(`/api/v1/hummingbot/paper-bots/${paperBotId}/orders`);
+      if (response.ok) {
+        const data = await response.json();
+        setPaperBotOrders(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch paper bot orders:", err);
+    }
+  }, []);
+
+  const fetchPaperBotPositions = useCallback(async (paperBotId: string) => {
+    try {
+      const response = await fetch(`/api/v1/hummingbot/paper-bots/${paperBotId}/positions`);
+      if (response.ok) {
+        const data = await response.json();
+        setPaperBotPositions(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch paper bot positions:", err);
+    }
+  }, []);
+
+  const fetchPaperBotPortfolio = useCallback(async (paperBotId: string) => {
+    try {
+      const response = await fetch(`/api/v1/hummingbot/paper-bots/${paperBotId}/portfolio`);
+      if (response.ok) {
+        const data = await response.json();
+        setPaperBotPortfolio(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch paper bot portfolio:", err);
+    }
+  }, []);
+
+  const fetchPaperBotLogs = useCallback(async (paperBotId: string) => {
+    try {
+      const response = await fetch(`/api/v1/hummingbot/paper-bots/${paperBotId}/logs`);
+      if (response.ok) {
+        const data = await response.json();
+        setPaperBotLogs(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch paper bot logs:", err);
+    }
+  }, []);
+
+  // 初始加载 Paper Bots
+  useEffect(() => {
+    fetchPaperBots();
+  }, [fetchPaperBots]);
+
+  // 当选中 Paper Bot 时，获取详情并设置轮询
+  useEffect(() => {
+    if (!selectedPaperBot) {
+      setPaperBotDetail(null);
+      setPaperBotOrders(null);
+      setPaperBotPositions(null);
+      setPaperBotPortfolio(null);
+      setPaperBotLogs(null);
+      return;
+    }
+
+    // 获取详情
+    fetchPaperBotDetail(selectedPaperBot.paper_bot_id);
+    fetchPaperBotOrders(selectedPaperBot.paper_bot_id);
+    fetchPaperBotPositions(selectedPaperBot.paper_bot_id);
+    fetchPaperBotPortfolio(selectedPaperBot.paper_bot_id);
+    fetchPaperBotLogs(selectedPaperBot.paper_bot_id);
+
+    // 设置轮询（每 10 秒刷新）
+    const interval = setInterval(() => {
+      fetchPaperBotDetail(selectedPaperBot.paper_bot_id);
+      fetchPaperBotOrders(selectedPaperBot.paper_bot_id);
+      fetchPaperBotPositions(selectedPaperBot.paper_bot_id);
+      fetchPaperBotPortfolio(selectedPaperBot.paper_bot_id);
+      fetchPaperBotLogs(selectedPaperBot.paper_bot_id);
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [selectedPaperBot, fetchPaperBotDetail, fetchPaperBotOrders, fetchPaperBotPositions, fetchPaperBotPortfolio, fetchPaperBotLogs]);
 
   // 辅助函数：计算 connectors 数量
   const getConnectorsCount = (data: unknown): number => {
@@ -314,6 +572,73 @@ export default function HummingbotPage() {
             </p>
           </div>
         </div>
+
+        {/* Paper Bot Configuration Section */}
+        <PaperBotSection />
+
+        {/* Paper Bot Monitor Section */}
+        <PaperBotMonitorSection
+          paperBots={paperBots}
+          paperBotsLoading={paperBotsLoading}
+          selectedPaperBot={selectedPaperBot}
+          onSelectPaperBot={setSelectedPaperBot}
+          onRefresh={fetchPaperBots}
+          paperBotDetail={paperBotDetail}
+          paperBotOrders={paperBotOrders}
+          paperBotPositions={paperBotPositions}
+          paperBotPortfolio={paperBotPortfolio}
+          paperBotLogs={paperBotLogs}
+          stopResult={stopResult}
+          onStopClick={() => setShowStopDialog(true)}
+        />
+
+        {/* Stop Paper Bot Confirmation Dialog */}
+        {showStopDialog && selectedPaperBot && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 max-w-md w-full mx-4">
+              <h3 className="text-lg font-bold text-slate-100 mb-4">确认停止 Hummingbot Paper Bot？</h3>
+              <div className="space-y-3 mb-6">
+                <p className="text-slate-300 text-sm">当前操作仅停止 Paper Bot：</p>
+                <ul className="text-slate-400 text-xs space-y-1 ml-4">
+                  <li>• 使用虚拟资金</li>
+                  <li>• 不会执行真实交易</li>
+                  <li>• 不会撤单</li>
+                  <li>• 不会平仓</li>
+                  <li>• 不会影响真实交易所账户</li>
+                  <li>• 不支持 Testnet</li>
+                  <li>• 不支持 Live</li>
+                </ul>
+              </div>
+              <div className="flex justify-end gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowStopDialog(false)}
+                  disabled={stopping}
+                  className="text-slate-300"
+                >
+                  取消
+                </Button>
+                <Button
+                  onClick={handleStopBot}
+                  disabled={stopping}
+                  className="bg-red-600 hover:bg-red-500 text-white"
+                >
+                  {stopping ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                      停止中...
+                    </>
+                  ) : (
+                    <>
+                      <Activity className="w-4 h-4 mr-2" />
+                      确认停止 Paper Bot
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Last Refresh Time */}
         {lastRefresh && (
@@ -955,4 +1280,1160 @@ export default function HummingbotPage() {
       </main>
     </div>
   );
+}
+
+// ── Paper Bot Section Component ──────────────────────────────────────────────────
+
+function PaperBotSection() {
+  const [formData, setFormData] = useState<PaperBotFormData>({
+    bot_name: "",
+    strategy_type: "grid",
+    trading_pair: "BTC-USDT",
+    paper_initial_balance: 10000,
+    order_amount: 100,
+    max_runtime_minutes: 120,
+    spread_pct: 0.5,
+    grid_spacing_pct: 0.5,
+    grid_levels: 20,
+    stop_loss_pct: 3,
+    take_profit_pct: 5,
+  });
+
+  const [previewResult, setPreviewResult] = useState<PaperBotPreviewResponse | null>(null);
+  const [startResult, setStartResult] = useState<PaperBotStartResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const updateField = (field: keyof PaperBotFormData, value: string | number) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+    // 清除字段错误
+    if (errors[field]) {
+      setErrors(prev => {
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+    }
+  };
+
+  const validateForm = (): boolean => {
+    const newErrors: Record<string, string> = {};
+
+    if (!formData.bot_name || formData.bot_name.length < 3) {
+      newErrors.bot_name = "Bot 名称至少 3 个字符";
+    } else if (!/^[a-zA-Z0-9_-]+$/.test(formData.bot_name)) {
+      newErrors.bot_name = "只能包含字母、数字、下划线和中划线";
+    }
+
+    if (formData.order_amount > formData.paper_initial_balance) {
+      newErrors.order_amount = "单笔订单金额不能大于初始资金";
+    }
+
+    if (formData.strategy_type === "grid") {
+      if (!formData.grid_spacing_pct || formData.grid_spacing_pct <= 0) {
+        newErrors.grid_spacing_pct = "网格间距必须大于 0";
+      }
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleSubmit = async () => {
+    if (!validateForm()) return;
+
+    setLoading(true);
+    setPreviewResult(null);
+
+    try {
+      const response = await fetch("/api/v1/hummingbot/paper-bots/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formData),
+      });
+
+      const result = await response.json();
+      setPreviewResult(result);
+    } catch (err) {
+      setPreviewResult({
+        valid: false,
+        source: "quantagent",
+        mode: "paper",
+        live_trading: false,
+        testnet: false,
+        data: null,
+        error: `请求失败: ${err instanceof Error ? err.message : "网络错误"}`,
+        timestamp: new Date().toISOString(),
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCopy = () => {
+    if (previewResult?.data) {
+      navigator.clipboard.writeText(JSON.stringify(previewResult.data.config_preview, null, 2));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleStopBot = async () => {
+    if (!selectedPaperBot) return;
+
+    setStopping(true);
+    setStopResult(null);
+
+    try {
+      const response = await fetch(`/api/v1/hummingbot/paper-bots/${selectedPaperBot.paper_bot_id}/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+
+      const result = await response.json();
+      setStopResult(result);
+
+      // 如果停止成功，刷新 Paper Bot 列表和详情
+      if (result.stopped) {
+        // 刷新 Paper Bot 列表
+        await fetchPaperBots();
+
+        // 重新获取详情
+        await fetchPaperBotDetail(selectedPaperBot.paper_bot_id);
+        await fetchPaperBotOrders(selectedPaperBot.paper_bot_id);
+        await fetchPaperBotPositions(selectedPaperBot.paper_bot_id);
+        await fetchPaperBotPortfolio(selectedPaperBot.paper_bot_id);
+        await fetchPaperBotLogs(selectedPaperBot.paper_bot_id);
+      }
+    } catch (err) {
+      setStopResult({
+        stopped: false,
+        source: "quantagent",
+        mode: "paper",
+        live_trading: false,
+        testnet: false,
+        data: null,
+        error: `请求失败: ${err instanceof Error ? err.message : "网络错误"}`,
+        timestamp: new Date().toISOString(),
+      });
+    } finally {
+      setStopping(false);
+      setShowStopDialog(false);
+    }
+  };
+
+  const handleStartBot = async () => {
+    setStarting(true);
+    setStartResult(null);
+
+    try {
+      const response = await fetch("/api/v1/hummingbot/paper-bots/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formData),
+      });
+
+      const result = await response.json();
+      setStartResult(result);
+    } catch (err) {
+      setStartResult({
+        started: false,
+        source: "quantagent",
+        mode: "paper",
+        live_trading: false,
+        testnet: false,
+        data: null,
+        error: `请求失败: ${err instanceof Error ? err.message : "网络错误"}`,
+        timestamp: new Date().toISOString(),
+      });
+    } finally {
+      setStarting(false);
+      setShowConfirmDialog(false);
+    }
+  };
+
+  return (
+    <div className="mb-8">
+      {/* Section Header */}
+      <div className="mb-4">
+        <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
+          <div className="w-8 h-8 bg-green-500/10 rounded-lg flex items-center justify-center border border-green-500/20">
+            <Play className="w-4 h-4 text-green-400" />
+          </div>
+          创建 Hummingbot Paper Bot
+        </h2>
+        <p className="text-slate-400 text-xs mt-1 ml-10">
+          当前仅支持 Paper Bot 配置预览，使用虚拟资金模拟运行，不会启动 Bot，不会执行真实交易。
+        </p>
+      </div>
+
+      {/* Security Notice */}
+      <div className="mb-6 p-4 bg-green-500/10 border border-green-500/20 rounded-xl">
+        <div className="flex items-start gap-3">
+          <ShieldCheck className="w-5 h-5 text-green-400 shrink-0 mt-0.5" />
+          <div className="text-sm text-green-300">
+            <p className="font-semibold">安全提示</p>
+            <ul className="mt-2 space-y-1 text-green-400/70 text-xs">
+              <li>• 不启动 Bot</li>
+              <li>• 不执行真实下单</li>
+              <li>• 不连接真实交易所账户</li>
+              <li>• 不需要 API Key</li>
+              <li>• 不支持 Testnet</li>
+              <li>• 不支持 Live</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      {/* Form Card */}
+      <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50 mb-6">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-slate-100 text-base">配置参数</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* Bot Name */}
+            <div className="space-y-1">
+              <Label htmlFor="bot_name" className="text-slate-300 text-xs">
+                Bot 名称 <span className="text-red-400">*</span>
+              </Label>
+              <Input
+                id="bot_name"
+                placeholder="paper_grid_btc_001"
+                value={formData.bot_name}
+                onChange={e => updateField("bot_name", e.target.value)}
+                className={`bg-slate-800 border-slate-700 text-slate-100 text-sm ${
+                  errors.bot_name ? "border-red-500" : ""
+                }`}
+              />
+              {errors.bot_name && (
+                <p className="text-red-400 text-[10px]">{errors.bot_name}</p>
+              )}
+            </div>
+
+            {/* Strategy Type */}
+            <div className="space-y-1">
+              <Label htmlFor="strategy_type" className="text-slate-300 text-xs">
+                策略类型 <span className="text-red-400">*</span>
+              </Label>
+              <select
+                id="strategy_type"
+                value={formData.strategy_type}
+                onChange={e => updateField("strategy_type", e.target.value)}
+                className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              >
+                <option value="grid">Grid (网格交易)</option>
+                <option value="position_executor">Position Executor (仓位执行)</option>
+              </select>
+            </div>
+
+            {/* Trading Pair */}
+            <div className="space-y-1">
+              <Label htmlFor="trading_pair" className="text-slate-300 text-xs">
+                交易对 <span className="text-red-400">*</span>
+              </Label>
+              <select
+                id="trading_pair"
+                value={formData.trading_pair}
+                onChange={e => updateField("trading_pair", e.target.value)}
+                className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              >
+                <option value="BTC-USDT">BTC-USDT</option>
+                <option value="ETH-USDT">ETH-USDT</option>
+                <option value="SOL-USDT">SOL-USDT</option>
+                <option value="BNBUSDT">BNB-USDT</option>
+                <option value="DOGEUSDT">DOGE-USDT</option>
+              </select>
+            </div>
+
+            {/* Paper Initial Balance */}
+            <div className="space-y-1">
+              <Label htmlFor="paper_initial_balance" className="text-slate-300 text-xs">
+                Paper 初始资金 <span className="text-red-400">*</span>
+              </Label>
+              <Input
+                id="paper_initial_balance"
+                type="number"
+                min={1}
+                max={1000000}
+                value={formData.paper_initial_balance}
+                onChange={e => updateField("paper_initial_balance", Number(e.target.value))}
+                className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+              />
+              <p className="text-slate-500 text-[10px]">建议不超过 1,000,000</p>
+            </div>
+
+            {/* Order Amount */}
+            <div className="space-y-1">
+              <Label htmlFor="order_amount" className="text-slate-300 text-xs">
+                单笔订单金额 <span className="text-red-400">*</span>
+              </Label>
+              <Input
+                id="order_amount"
+                type="number"
+                min={1}
+                value={formData.order_amount}
+                onChange={e => updateField("order_amount", Number(e.target.value))}
+                className={`bg-slate-800 border-slate-700 text-slate-100 text-sm ${
+                  errors.order_amount ? "border-red-500" : ""
+                }`}
+              />
+              {errors.order_amount && (
+                <p className="text-red-400 text-[10px]">{errors.order_amount}</p>
+              )}
+              <p className="text-slate-500 text-[10px]">建议不超过初始资金的 50%</p>
+            </div>
+
+            {/* Max Runtime */}
+            <div className="space-y-1">
+              <Label htmlFor="max_runtime_minutes" className="text-slate-300 text-xs">
+                最大运行时间 (分钟)
+              </Label>
+              <Input
+                id="max_runtime_minutes"
+                type="number"
+                min={1}
+                max={10080}
+                value={formData.max_runtime_minutes}
+                onChange={e => updateField("max_runtime_minutes", Number(e.target.value))}
+                className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+              />
+              <p className="text-slate-500 text-[10px]">最大 10080 分钟 (7天)</p>
+            </div>
+
+            {/* Stop Loss */}
+            <div className="space-y-1">
+              <Label htmlFor="stop_loss_pct" className="text-slate-300 text-xs">
+                止损比例 stop_loss_pct
+              </Label>
+              <Input
+                id="stop_loss_pct"
+                type="number"
+                min={0}
+                max={50}
+                step={0.1}
+                value={formData.stop_loss_pct}
+                onChange={e => updateField("stop_loss_pct", Number(e.target.value))}
+                className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+              />
+              <p className="text-slate-500 text-[10px]">0 表示不启用止损</p>
+            </div>
+
+            {/* Take Profit */}
+            <div className="space-y-1">
+              <Label htmlFor="take_profit_pct" className="text-slate-300 text-xs">
+                止盈比例 take_profit_pct
+              </Label>
+              <Input
+                id="take_profit_pct"
+                type="number"
+                min={0}
+                max={100}
+                step={0.1}
+                value={formData.take_profit_pct}
+                onChange={e => updateField("take_profit_pct", Number(e.target.value))}
+                className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+              />
+              <p className="text-slate-500 text-[10px]">0 表示不启用止盈</p>
+            </div>
+
+            {/* Strategy-specific fields */}
+            {formData.strategy_type === "position_executor" && (
+              <>
+                {/* Spread */}
+                <div className="space-y-1">
+                  <Label htmlFor="spread_pct" className="text-slate-300 text-xs">
+                    价差 spread_pct
+                  </Label>
+                  <Input
+                    id="spread_pct"
+                    type="number"
+                    min={0}
+                    max={20}
+                    step={0.1}
+                    value={formData.spread_pct}
+                    onChange={e => updateField("spread_pct", Number(e.target.value))}
+                    className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                  />
+                  <p className="text-slate-500 text-[10px]">0-20%，仅 position_executor 使用</p>
+                </div>
+              </>
+            )}
+
+            {formData.strategy_type === "grid" && (
+              <>
+                {/* Grid Spacing */}
+                <div className="space-y-1">
+                  <Label htmlFor="grid_spacing_pct" className="text-slate-300 text-xs">
+                    网格间距 grid_spacing_pct <span className="text-red-400">*</span>
+                  </Label>
+                  <Input
+                    id="grid_spacing_pct"
+                    type="number"
+                    min={0.01}
+                    max={20}
+                    step={0.01}
+                    value={formData.grid_spacing_pct}
+                    onChange={e => updateField("grid_spacing_pct", Number(e.target.value))}
+                    className={`bg-slate-800 border-slate-700 text-slate-100 text-sm ${
+                      errors.grid_spacing_pct ? "border-red-500" : ""
+                    }`}
+                  />
+                  {errors.grid_spacing_pct && (
+                    <p className="text-red-400 text-[10px]">{errors.grid_spacing_pct}</p>
+                  )}
+                  <p className="text-slate-500 text-[10px]">0.01-20%，仅 grid 使用</p>
+                </div>
+
+                {/* Grid Levels */}
+                <div className="space-y-1">
+                  <Label htmlFor="grid_levels" className="text-slate-300 text-xs">
+                    网格层数 grid_levels
+                  </Label>
+                  <Input
+                    id="grid_levels"
+                    type="number"
+                    min={2}
+                    max={200}
+                    value={formData.grid_levels}
+                    onChange={e => updateField("grid_levels", Number(e.target.value))}
+                    className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                  />
+                  <p className="text-slate-500 text-[10px]">2-200，默认 20</p>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Submit Button */}
+          <div className="mt-6 flex items-center gap-4">
+            <Button
+              onClick={handleSubmit}
+              disabled={loading}
+              className="bg-green-600 hover:bg-green-500 text-white"
+            >
+              {loading ? (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                  生成中...
+                </>
+              ) : (
+                <>
+                  <FileJson className="w-4 h-4 mr-2" />
+                  生成 Paper Bot 配置预览
+                </>
+              )}
+            </Button>
+            {loading && (
+              <p className="text-slate-400 text-xs">正在生成配置预览...</p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Preview Result */}
+      {previewResult && (
+        <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+                <FileJson className="w-4 h-4 text-cyan-400" />
+                Paper Bot 配置预览
+                {previewResult.valid ? (
+                  <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20 ml-2">
+                    <CheckCircle className="w-3 h-3 mr-1" />
+                    有效
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/20 ml-2">
+                    <XCircle className="w-3 h-3 mr-1" />
+                    无效
+                  </Badge>
+                )}
+              </CardTitle>
+              {previewResult.valid && previewResult.data && (
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCopy}
+                    className="h-8 text-xs"
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="w-3 h-3 mr-1" />
+                        已复制
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3 h-3 mr-1" />
+                        复制 JSON
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => setShowConfirmDialog(true)}
+                    className="h-8 bg-blue-600 hover:bg-blue-500 text-white text-xs"
+                  >
+                    <Play className="w-3 h-3 mr-1" />
+                    启动 Paper Bot
+                  </Button>
+                </div>
+              )}
+            </div>
+            {previewResult.valid && previewResult.data && (
+              <p className="text-green-400/70 text-xs mt-1">
+                仅启动 Paper Bot，不执行真实交易。
+              </p>
+            )}
+          </CardHeader>
+          <CardContent>
+            {previewResult.error ? (
+              /* Error Display */
+              <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-red-400 text-sm font-semibold">生成失败</p>
+                    <p className="text-red-300/70 text-xs mt-1">{previewResult.error}</p>
+                  </div>
+                </div>
+              </div>
+            ) : previewResult.data ? (
+              /* Success Display */
+              <div className="space-y-4">
+                {/* Mode Indicators */}
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20">
+                    <CheckCircle className="w-3 h-3 mr-1" />
+                    mode: {previewResult.data.config_preview.mode}
+                  </Badge>
+                  <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20">
+                    <CheckCircle className="w-3 h-3 mr-1" />
+                    live_trading: {String(previewResult.data.config_preview.live_trading)}
+                  </Badge>
+                  <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20">
+                    <CheckCircle className="w-3 h-3 mr-1" />
+                    testnet: {String(previewResult.data.config_preview.testnet)}
+                  </Badge>
+                </div>
+
+                {/* Warnings */}
+                {previewResult.data.warnings && previewResult.data.warnings.length > 0 && (
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                    {previewResult.data.warnings.map((warning, i) => (
+                      <p key={i} className="text-amber-300 text-xs flex items-start gap-2">
+                        <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+                        {warning}
+                      </p>
+                    ))}
+                  </div>
+                )}
+
+                {/* JSON Preview */}
+                <div className="p-4 bg-slate-950 rounded-lg border border-slate-800 overflow-x-auto">
+                  <pre className="text-slate-300 text-xs font-mono whitespace-pre-wrap">
+                    {JSON.stringify(previewResult.data.config_preview, null, 2)}
+                  </pre>
+                </div>
+
+                {/* Notes */}
+                {previewResult.data.config_preview.notes && (
+                  <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                    <p className="text-slate-400 text-xs mb-2 font-semibold">说明：</p>
+                    <ul className="space-y-1">
+                      {previewResult.data.config_preview.notes.map((note, i) => (
+                        <li key={i} className="text-slate-400 text-xs flex items-start gap-2">
+                          <span className="text-cyan-400">•</span>
+                          {note}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Start Result */}
+      {startResult && (
+        <Card className={`bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50 ${
+          startResult.started ? "border-green-500/30" : "border-red-500/30"
+        }`}>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+              <Play className={`w-4 h-4 ${startResult.started ? "text-green-400" : "text-red-400"}`} />
+              Paper Bot 启动结果
+              {startResult.started ? (
+                <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20 ml-2">
+                  <CheckCircle className="w-3 h-3 mr-1" />
+                  启动成功
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/20 ml-2">
+                  <XCircle className="w-3 h-3 mr-1" />
+                  启动失败
+                </Badge>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {startResult.error ? (
+              /* Error Display */
+              <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-red-400 text-sm font-semibold">启动失败</p>
+                    <p className="text-red-300/70 text-xs mt-1">{startResult.error}</p>
+                  </div>
+                </div>
+              </div>
+            ) : startResult.data ? (
+              /* Success Display */
+              <div className="space-y-4">
+                {/* Status Info */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                    <p className="text-slate-400 text-xs">Paper Bot ID</p>
+                    <p className="text-slate-100 text-xs font-mono mt-1">{startResult.data.paper_bot_id}</p>
+                  </div>
+                  <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                    <p className="text-slate-400 text-xs">Bot 名称</p>
+                    <p className="text-slate-100 text-xs mt-1">{startResult.data.bot_name}</p>
+                  </div>
+                  <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                    <p className="text-slate-400 text-xs">策略类型</p>
+                    <p className="text-slate-100 text-xs mt-1">{startResult.data.strategy_type}</p>
+                  </div>
+                  <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                    <p className="text-slate-400 text-xs">交易对</p>
+                    <p className="text-slate-100 text-xs mt-1">{startResult.data.trading_pair}</p>
+                  </div>
+                </div>
+
+                {/* Status */}
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20">
+                    <Activity className="w-3 h-3 mr-1" />
+                    status: {startResult.data.status}
+                  </Badge>
+                  <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20">
+                    mode: {startResult.mode}
+                  </Badge>
+                  <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20">
+                    live_trading: {String(startResult.live_trading)}
+                  </Badge>
+                </div>
+
+                {/* Started At */}
+                <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                  <p className="text-slate-400 text-xs">启动时间</p>
+                  <p className="text-slate-100 text-xs mt-1">
+                    {new Date(startResult.data.started_at).toLocaleString()}
+                  </p>
+                </div>
+
+                {/* Notice */}
+                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                  <p className="text-amber-300 text-xs">
+                    Paper Bot 启动请求已提交。请刷新 Bots 列表查看运行状态，或检查 Hummingbot 日志。
+                  </p>
+                </div>
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Confirmation Dialog */}
+      {showConfirmDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-bold text-slate-100 mb-4">确认启动 Hummingbot Paper Bot？</h3>
+            <div className="space-y-3 mb-6">
+              <p className="text-slate-300 text-sm">当前仅启动 Paper Bot：</p>
+              <ul className="text-slate-400 text-xs space-y-1 ml-4">
+                <li>• 使用虚拟资金</li>
+                <li>• 不连接真实交易所账户</li>
+                <li>• 不执行真实交易</li>
+                <li>• 不需要 API Key</li>
+                <li>• 不支持 Testnet</li>
+                <li>• 不支持 Live</li>
+              </ul>
+            </div>
+            <div className="flex justify-end gap-3">
+              <Button
+                variant="outline"
+                onClick={() => setShowConfirmDialog(false)}
+                className="text-slate-300"
+              >
+                取消
+              </Button>
+              <Button
+                onClick={handleStartBot}
+                disabled={starting}
+                className="bg-blue-600 hover:bg-blue-500 text-white"
+              >
+                {starting ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                    启动中...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4 mr-2" />
+                    确认启动
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Paper Bot Monitor Section moved to HummingbotPage ──
+
+// ── Paper Bot 监控区域组件 ──────────────────────────────────────────────────
+
+interface PaperBotMonitorSectionProps {
+  paperBots: { bots: PaperBot[] } | null;
+  paperBotsLoading: boolean;
+  selectedPaperBot: PaperBot | null;
+  onSelectPaperBot: (bot: PaperBot | null) => void;
+  onRefresh: () => void;
+  paperBotDetail: Record<string, unknown> | null;
+  paperBotOrders: PaperBotOrdersResponse | null;
+  paperBotPositions: PaperBotPositionsResponse | null;
+  paperBotPortfolio: PaperBotPortfolioResponse | null;
+  paperBotLogs: PaperBotLogsResponse | null;
+  stopResult: Record<string, unknown> | null;
+  onStopClick: () => void;
+}
+
+function PaperBotMonitorSection({
+  paperBots,
+  paperBotsLoading,
+  selectedPaperBot,
+  onSelectPaperBot,
+  onRefresh,
+  paperBotDetail,
+  paperBotOrders,
+  paperBotPositions,
+  paperBotPortfolio,
+  paperBotLogs,
+  stopResult,
+  onStopClick,
+}: PaperBotMonitorSectionProps) {
+  return (
+    <div className="mb-8">
+      {/* Section Header */}
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
+            <div className="w-8 h-8 bg-blue-500/10 rounded-lg flex items-center justify-center border border-blue-500/20">
+              <Activity className="w-4 h-4 text-blue-400" />
+            </div>
+            Hummingbot Paper Bot 运行监控
+          </h2>
+          <p className="text-slate-400 text-xs mt-1 ml-10">
+            当前仅展示 Paper Bot 运行状态和模拟数据，不执行真实交易。
+          </p>
+        </div>
+        <Button
+          size="sm"
+          onClick={onRefresh}
+          disabled={paperBotsLoading}
+          className="h-8 bg-blue-600 hover:bg-blue-500 text-white text-xs"
+        >
+          <RefreshCw className={`w-3 h-3 mr-1 ${paperBotsLoading ? "animate-spin" : ""}`} />
+          刷新
+        </Button>
+      </div>
+
+      {/* Paper Bot 列表 */}
+      <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50 mb-6">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+            <Bot className="w-4 h-4 text-blue-400" />
+            Paper Bot 列表
+            {paperBots?.bots && (
+              <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20 ml-2">
+                {paperBots.bots.length} 个
+              </Badge>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {paperBotsLoading && !paperBots ? (
+            <div className="flex items-center justify-center py-8 text-slate-500 text-sm">
+              <RefreshCw className="w-4 h-4 animate-spin mr-2" /> 加载中...
+            </div>
+          ) : !paperBots?.bots || paperBots.bots.length === 0 ? (
+            <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
+              <Bot className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+              <p className="text-slate-400 text-sm">暂无 Hummingbot Paper Bot。</p>
+              <p className="text-slate-500 text-xs mt-1">请先在上方创建并启动 Paper Bot。</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-700">
+                    <th className="text-left py-2 px-3 text-slate-400">Bot 名称</th>
+                    <th className="text-left py-2 px-3 text-slate-400">策略类型</th>
+                    <th className="text-left py-2 px-3 text-slate-400">交易对</th>
+                    <th className="text-left py-2 px-3 text-slate-400">模式</th>
+                    <th className="text-left py-2 px-3 text-slate-400">状态</th>
+                    <th className="text-left py-2 px-3 text-slate-400">运行时长</th>
+                    <th className="text-left py-2 px-3 text-slate-400">启动时间</th>
+                    <th className="text-left py-2 px-3 text-slate-400">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paperBots.bots.map((bot) => (
+                    <tr
+                      key={bot.paper_bot_id}
+                      className={`border-b border-slate-800 hover:bg-slate-800/30 cursor-pointer ${
+                        selectedPaperBot?.paper_bot_id === bot.paper_bot_id ? "bg-blue-500/10" : ""
+                      }`}
+                      onClick={() => onSelectPaperBot(bot)}
+                    >
+                      <td className="py-2 px-3 text-slate-300 font-mono">{bot.bot_name}</td>
+                      <td className="py-2 px-3 text-slate-300">{bot.strategy_type}</td>
+                      <td className="py-2 px-3 text-slate-300">{bot.trading_pair}</td>
+                      <td className="py-2 px-3">
+                        <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20">
+                          {bot.mode}
+                        </Badge>
+                      </td>
+                      <td className="py-2 px-3">
+                        <Badge
+                          variant="outline"
+                          className={
+                            bot.status === "running" ? "bg-green-500/10 text-green-400 border-green-500/20" :
+                            bot.status === "starting" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
+                            bot.status === "stopped" ? "bg-slate-500/10 text-slate-400 border-slate-500/20" :
+                            bot.status === "error" ? "bg-red-500/10 text-red-400 border-red-500/20" :
+                            "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                          }
+                        >
+                          {bot.status}
+                        </Badge>
+                      </td>
+                      <td className="py-2 px-3 text-slate-300">
+                        {formatRuntime(bot.runtime_seconds)}
+                      </td>
+                      <td className="py-2 px-3 text-slate-400">
+                        {bot.started_at ? new Date(bot.started_at).toLocaleString() : "-"}
+                      </td>
+                      <td className="py-2 px-3">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSelectPaperBot(bot);
+                          }}
+                          className="h-6 text-[10px]"
+                        >
+                          查看详情
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Paper Bot 详情 */}
+      {selectedPaperBot && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* 详情卡片 */}
+          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+                <Bot className="w-4 h-4 text-blue-400" />
+                Paper Bot 详情
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {paperBotDetail ? (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                      <p className="text-slate-400 text-xs">Paper Bot ID</p>
+                      <p className="text-slate-100 text-xs font-mono mt-1">
+                        {(paperBotDetail as Record<string, unknown>)?.paper_bot_id as string || "-"}
+                      </p>
+                    </div>
+                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                      <p className="text-slate-400 text-xs">Bot 名称</p>
+                      <p className="text-slate-100 text-xs mt-1">
+                        {(paperBotDetail as Record<string, unknown>)?.bot_name as string || "-"}
+                      </p>
+                    </div>
+                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                      <p className="text-slate-400 text-xs">策略类型</p>
+                      <p className="text-slate-100 text-xs mt-1">
+                        {(paperBotDetail as Record<string, unknown>)?.strategy_type as string || "-"}
+                      </p>
+                    </div>
+                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                      <p className="text-slate-400 text-xs">交易对</p>
+                      <p className="text-slate-100 text-xs mt-1">
+                        {(paperBotDetail as Record<string, unknown>)?.trading_pair as string || "-"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20">
+                      mode: {(paperBotDetail as Record<string, unknown>)?.mode as string || "-"}
+                    </Badge>
+                    <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20">
+                      live_trading: {String((paperBotDetail as Record<string, unknown>)?.live_trading)}
+                    </Badge>
+                    <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20">
+                      testnet: {String((paperBotDetail as Record<string, unknown>)?.testnet)}
+                    </Badge>
+                    <Badge
+                      variant="outline"
+                      className={
+                        (paperBotDetail as Record<string, unknown>)?.status === "running" ? "bg-green-500/10 text-green-400 border-green-500/20" :
+                        (paperBotDetail as Record<string, unknown>)?.status === "starting" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
+                        "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                      }
+                    >
+                      status: {(paperBotDetail as Record<string, unknown>)?.status as string || "-"}
+                    </Badge>
+                  </div>
+
+                  {/* 停止按钮 - 仅 Paper Bot 且 running/starting 时显示 */}
+                  {(paperBotDetail as Record<string, unknown>)?.mode === "paper" &&
+                   (paperBotDetail as Record<string, unknown>)?.live_trading === false &&
+                   (paperBotDetail as Record<string, unknown>)?.testnet === false &&
+                   ((paperBotDetail as Record<string, unknown>)?.status === "running" ||
+                    (paperBotDetail as Record<string, unknown>)?.status === "starting") && (
+                    <div className="mt-3">
+                      <Button
+                        size="sm"
+                        onClick={onStopClick}
+                        className="h-7 text-[10px] bg-red-600 hover:bg-red-500 text-white"
+                      >
+                        <Activity className="w-3 h-3 mr-1" />
+                        停止 Paper Bot
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* 停止结果展示 */}
+                  {stopResult && (
+                    <div className="mt-3 space-y-2">
+                      {stopResult.stopped ? (
+                        <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+                          <p className="text-green-400 text-xs">
+                            <span className="font-semibold">成功:</span> Paper Bot 已停止。
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
+                          <p className="text-red-400 text-xs">
+                            <span className="font-semibold">失败:</span> {String(stopResult.error || "未知错误")}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {paperBotDetail && (paperBotDetail as Record<string, unknown>)?.last_error && (
+                    <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
+                      <p className="text-red-400 text-xs">
+                        <span className="font-semibold">错误:</span> {String((paperBotDetail as Record<string, unknown>)?.last_error)}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Config Preview */}
+                  {(paperBotDetail as Record<string, unknown>)?.config && (
+                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                      <p className="text-slate-400 text-xs mb-2">配置预览</p>
+                      <pre className="text-slate-300 text-[10px] font-mono overflow-x-auto max-h-40">
+                        {JSON.stringify((paperBotDetail as Record<string, unknown>)?.config, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-center justify-center py-8 text-slate-500 text-sm">
+                  <RefreshCw className="w-4 h-4 animate-spin mr-2" /> 加载中...
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* 模拟订单卡片 */}
+          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+                <ShoppingCart className="w-4 h-4 text-orange-400" />
+                Paper Bot 模拟订单（只读）
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {paperBotOrders?.data?.filter_note && (
+                <div className="mb-3 p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                  <p className="text-amber-400 text-[10px]">{paperBotOrders.data.filter_note}</p>
+                </div>
+              )}
+              {!paperBotOrders?.data?.orders || paperBotOrders.data.orders.length === 0 ? (
+                <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
+                  <ShoppingCart className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                  <p className="text-slate-400 text-sm">暂无 Paper Bot 模拟订单。</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto max-h-60">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-700">
+                        <th className="text-left py-1 px-2 text-slate-400">交易对</th>
+                        <th className="text-left py-1 px-2 text-slate-400">方向</th>
+                        <th className="text-left py-1 px-2 text-slate-400">类型</th>
+                        <th className="text-right py-1 px-2 text-slate-400">价格</th>
+                        <th className="text-right py-1 px-2 text-slate-400">数量</th>
+                        <th className="text-left py-1 px-2 text-slate-400">状态</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paperBotOrders.data.orders.slice(0, 10).map((order, idx) => (
+                        <tr key={idx} className="border-b border-slate-800">
+                          <td className="py-1 px-2 text-slate-300">{String(order.symbol || order.trading_pair || "-")}</td>
+                          <td className={`py-1 px-2 ${order.side === "BUY" ? "text-green-400" : "text-red-400"}`}>
+                            {String(order.side || "-")}
+                          </td>
+                          <td className="py-1 px-2 text-slate-300">{String(order.order_type || order.type || "-")}</td>
+                          <td className="py-1 px-2 text-right text-slate-300">{order.price ? String(order.price) : "-"}</td>
+                          <td className="py-1 px-2 text-right text-slate-300">{String(order.amount || order.quantity || "-")}</td>
+                          <td className="py-1 px-2">
+                            <Badge variant="outline" className="text-[10px] bg-slate-700/50 text-slate-300 border-slate-600/50">
+                              {String(order.status || "-")}
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* 模拟持仓卡片 */}
+          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+                <Wallet className="w-4 h-4 text-emerald-400" />
+                Paper Bot 模拟持仓（只读）
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {paperBotPositions?.data?.filter_note && (
+                <div className="mb-3 p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                  <p className="text-amber-400 text-[10px]">{paperBotPositions.data.filter_note}</p>
+                </div>
+              )}
+              {!paperBotPositions?.data?.positions || paperBotPositions.data.positions.length === 0 ? (
+                <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
+                  <Wallet className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                  <p className="text-slate-400 text-sm">暂无 Paper Bot 模拟持仓。</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto max-h-60">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-700">
+                        <th className="text-left py-1 px-2 text-slate-400">交易对</th>
+                        <th className="text-left py-1 px-2 text-slate-400">方向</th>
+                        <th className="text-right py-1 px-2 text-slate-400">数量</th>
+                        <th className="text-right py-1 px-2 text-slate-400">开仓价</th>
+                        <th className="text-right py-1 px-2 text-slate-400">浮动盈亏</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paperBotPositions.data.positions.slice(0, 10).map((pos, idx) => {
+                        const pnl = pos.unrealized_pnl || pos.unrealizedPnl || pos.pnl;
+                        const isProfit = typeof pnl === "number" && pnl >= 0;
+                        return (
+                          <tr key={idx} className="border-b border-slate-800">
+                            <td className="py-1 px-2 text-slate-300">{String(pos.symbol || pos.trading_pair || "-")}</td>
+                            <td className={`py-1 px-2 ${pos.side === "LONG" || pos.side === "BUY" ? "text-green-400" : "text-red-400"}`}>
+                              {String(pos.side || "-")}
+                            </td>
+                            <td className="py-1 px-2 text-right text-slate-300">{String(pos.amount || pos.quantity || "-")}</td>
+                            <td className="py-1 px-2 text-right text-slate-300">{pos.entry_price ? String(pos.entry_price) : "-"}</td>
+                            <td className={`py-1 px-2 text-right ${isProfit ? "text-green-400" : "text-red-400"}`}>
+                              {pnl !== undefined ? String(pnl) : "-"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* 日志卡片 */}
+          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-purple-400" />
+                Paper Bot 日志（只读）
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!paperBotLogs?.data?.logs_available ? (
+                <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+                    <p className="text-slate-400 text-xs">
+                      {paperBotLogs?.data?.message || "当前 Hummingbot API 版本暂未提供 Paper Bot 日志接口，请通过 docker compose logs 查看。"}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 bg-slate-950 rounded-lg border border-slate-800 max-h-60 overflow-y-auto">
+                  <pre className="text-slate-300 text-[10px] font-mono whitespace-pre-wrap">
+                    {paperBotLogs.data.lines?.slice(0, 50).join("\n") || "暂无日志数据"}
+                  </pre>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 辅助函数 ────────────────────────────────────────────────────────────────
+
+function formatRuntime(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
 }

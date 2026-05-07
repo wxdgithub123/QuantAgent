@@ -1,26 +1,54 @@
 """
-Hummingbot API Endpoints (Read-only)
+Hummingbot API Endpoints (Read-only + Paper Bot)
 
 提供只读访问 Hummingbot API 的 REST 接口：
 - GET /hummingbot/status     - API 连接状态
 - GET /hummingbot/docker     - Docker 容器状态
 - GET /hummingbot/connectors - Connectors 列表
-- GET /hummingbot/portfolio - Portfolio 信息
+- GET /hummingbot/portfolio  - Portfolio 信息
 - GET /hummingbot/bots       - Bots 编排状态
+- GET /hummingbot/orders     - 订单信息（只读）
+- GET /hummingbot/positions  - 持仓信息（只读）
+- POST /hummingbot/paper-bots/preview - Paper Bot 配置预览（v1.2.1）
+- POST /hummingbot/paper-bots/start   - 启动 Paper Bot（v1.2.2）
+- GET  /hummingbot/paper-bots         - Paper Bot 列表（v1.2.3）
+- GET  /hummingbot/paper-bots/{id}    - Paper Bot 详情（v1.2.3）
+- GET  /hummingbot/paper-bots/{id}/orders     - Paper Bot 模拟订单（v1.2.3）
+- GET  /hummingbot/paper-bots/{id}/positions  - Paper Bot 模拟持仓（v1.2.3）
+- GET  /hummingbot/paper-bots/{id}/portfolio  - Paper Bot 模拟资产（v1.2.3）
+- GET  /hummingbot/paper-bots/{id}/logs      - Paper Bot 日志（v1.2.3）
+- POST /hummingbot/paper-bots/{id}/stop       - 停止 Paper Bot（v1.2.4）
 
 注意：
-- 所有接口仅返回只读数据，不执行真实交易
+- 所有只读接口仅返回数据，不执行真实交易
+- Paper Bot 接口仅生成配置预览，不启动 Bot
 - 不暴露 Hummingbot API 认证信息到前端
 """
 
 from datetime import datetime
 from typing import Any, Dict, Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.services.hummingbot_api_service import (
     get_hummingbot_service,
     HummingbotAPIError,
+)
+from app.services.hummingbot_paper_bot_service import (
+    generate_paper_bot_preview,
+    start_paper_bot,
+    get_paper_bots_list,
+    get_paper_bot_detail,
+    get_paper_bot_orders as svc_get_paper_bot_orders,
+    get_paper_bot_positions as svc_get_paper_bot_positions,
+    get_paper_bot_portfolio as svc_get_paper_bot_portfolio,
+    get_paper_bot_logs as svc_get_paper_bot_logs,
+    stop_paper_bot,
+)
+from app.schemas.hummingbot_paper_bot import (
+    PaperBotPreviewRequest,
+    PaperBotPreviewResponse,
+    PaperBotStartResponse,
 )
 
 
@@ -405,3 +433,276 @@ async def get_positions():
         return make_response(connected=False, error=e.message)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gateway error: {str(e)}")
+
+
+# ── Paper Bot 配置预览 (v1.2.1) ─────────────────────────────────────────────────
+
+@router.post("/paper-bots/preview", response_model=PaperBotPreviewResponse)
+async def preview_paper_bot(
+    paper_bot_request: PaperBotPreviewRequest,
+    raw_request: Request,
+):
+    """
+    生成 Hummingbot Paper Bot 配置预览。
+
+    v1.2.1 阶段仅生成配置预览，不启动 Bot，不执行真实交易。
+
+    功能：
+    1. 接收用户提交的 Paper Bot 配置参数
+    2. 后端安全校验（敏感字段检查、危险模式检查）
+    3. 策略参数校验
+    4. 生成标准化 config_preview JSON
+
+    安全保证：
+    - mode 强制固定为 "paper"
+    - live_trading 强制固定为 False
+    - testnet 强制固定为 False
+    - 检测到 api_key/secret 等敏感字段直接拒绝
+    - 检测到 mode=live/testnet/live_trading=true 直接拒绝
+
+    本接口不调用任何 Hummingbot API 启动接口。
+    """
+    try:
+        # 获取原始请求体（用于检查 Pydantic 未验证的额外字段）
+        raw_request_data = await raw_request.json()
+
+        # 调用 service 生成预览
+        result = await generate_paper_bot_preview(
+            request=paper_bot_request,
+            raw_request_data=raw_request_data,
+        )
+
+        return result
+
+    except Exception as e:
+        return PaperBotPreviewResponse(
+            valid=False,
+            error=f"生成预览时发生错误: {str(e)}",
+        )
+
+
+# ── Paper Bot 启动 (v1.2.2) ───────────────────────────────────────────────────
+
+@router.post("/paper-bots/start", response_model=PaperBotStartResponse)
+async def start_paper_bot_endpoint(
+    paper_bot_request: PaperBotPreviewRequest,
+    raw_request: Request,
+):
+    """
+    启动 Hummingbot Paper Bot。
+
+    v1.2.2 阶段启动 Paper Bot，使用虚拟资金模拟运行。
+
+    功能：
+    1. 接收用户提交的 Paper Bot 配置参数
+    2. 后端安全校验（敏感字段检查、危险模式检查）
+    3. 策略参数校验
+    4. 调用 Hummingbot API 启动 Paper Bot
+
+    安全保证：
+    - mode 强制固定为 "paper"
+    - live_trading 强制固定为 False
+    - testnet 强制固定为 False
+    - 检测到 api_key/secret 等敏感字段直接拒绝
+    - 检测到 mode=live/testnet/live_trading=true 直接拒绝
+    - 不调用任何真实交易接口
+
+    如果 Hummingbot API 当前版本不支持 Paper Bot 启动接口，返回清晰错误，不伪造成功。
+    """
+    try:
+        # 获取原始请求体（用于检查 Pydantic 未验证的额外字段）
+        raw_request_data = await raw_request.json()
+
+        # 调用 service 启动 Paper Bot
+        result = await start_paper_bot(
+            request=paper_bot_request,
+            raw_request_data=raw_request_data,
+        )
+
+        return result
+
+    except Exception as e:
+        return PaperBotStartResponse(
+            started=False,
+            error=f"启动 Paper Bot 时发生错误: {str(e)}",
+        )
+
+
+# ── Paper Bot 查询接口 (v1.2.3) ────────────────────────────────────────────
+
+@router.get("/paper-bots")
+async def list_paper_bots():
+    """
+    获取 Paper Bot 列表。
+
+    返回本地记录的 Paper Bot 和 Hummingbot API 中的 Bot。
+    """
+    try:
+        result = await get_paper_bots_list()
+        return result
+    except Exception as e:
+        return {
+            "connected": False,
+            "source": "quantagent",
+            "data": {"bots": []},
+            "error": str(e),
+        }
+
+
+@router.get("/paper-bots/{paper_bot_id}")
+async def get_paper_bot(paper_bot_id: str):
+    """
+    获取单个 Paper Bot 详情。
+    """
+    try:
+        result = await get_paper_bot_detail(paper_bot_id)
+        return result
+    except Exception as e:
+        return {
+            "connected": False,
+            "source": "quantagent",
+            "data": None,
+            "error": str(e),
+        }
+
+
+@router.get("/paper-bots/{paper_bot_id}/orders")
+async def get_paper_bot_orders(paper_bot_id: str):
+    """
+    获取 Paper Bot 模拟订单。
+
+    注意：当前 Hummingbot API 不支持按 bot_id 精确过滤，
+    返回全局订单数据。
+    """
+    try:
+        result = await svc_get_paper_bot_orders(paper_bot_id)
+        return result
+    except Exception as e:
+        return {
+            "connected": False,
+            "source": "quantagent",
+            "data": {
+                "paper_bot_id": paper_bot_id,
+                "orders": [],
+                "filter_note": "获取订单失败",
+            },
+            "error": str(e),
+        }
+
+
+@router.get("/paper-bots/{paper_bot_id}/positions")
+async def get_paper_bot_positions(paper_bot_id: str):
+    """
+    获取 Paper Bot 模拟持仓。
+
+    注意：当前 Hummingbot API 不支持按 bot_id 精确过滤，
+    返回全局持仓数据。
+    """
+    try:
+        result = await svc_get_paper_bot_positions(paper_bot_id)
+        return result
+    except Exception as e:
+        return {
+            "connected": False,
+            "source": "quantagent",
+            "data": {
+                "paper_bot_id": paper_bot_id,
+                "positions": [],
+                "filter_note": "获取持仓失败",
+            },
+            "error": str(e),
+        }
+
+
+@router.get("/paper-bots/{paper_bot_id}/portfolio")
+async def get_paper_bot_portfolio(paper_bot_id: str):
+    """
+    获取 Paper Bot 模拟资产。
+
+    注意：当前 Hummingbot API 不支持按 bot_id 精确隔离资产，
+    返回全局 Portfolio 数据。
+    """
+    try:
+        result = await svc_get_paper_bot_portfolio(paper_bot_id)
+        return result
+    except Exception as e:
+        return {
+            "connected": False,
+            "source": "quantagent",
+            "data": {
+                "paper_bot_id": paper_bot_id,
+                "portfolio": None,
+                "filter_note": "获取 Portfolio 失败",
+            },
+            "error": str(e),
+        }
+
+
+@router.get("/paper-bots/{paper_bot_id}/logs")
+async def get_paper_bot_logs(paper_bot_id: str):
+    """
+    获取 Paper Bot 日志（只读）。
+
+    如果日志接口不可用，返回友好提示。
+    """
+    try:
+        result = await svc_get_paper_bot_logs(paper_bot_id)
+        return result
+    except Exception as e:
+        return {
+            "connected": False,
+            "source": "quantagent",
+            "data": {
+                "paper_bot_id": paper_bot_id,
+                "logs_available": False,
+                "lines": [],
+                "message": f"获取日志失败: {str(e)}",
+            },
+            "error": str(e),
+        }
+
+
+# ── Paper Bot 停止接口 (v1.2.4) ────────────────────────────────────────────
+
+@router.post("/paper-bots/{paper_bot_id}/stop")
+async def stop_paper_bot_endpoint(
+    paper_bot_id: str,
+    raw_request: Request,
+):
+    """
+    停止 Paper Bot。
+
+    安全规则：
+    - 只允许停止 Paper Bot（mode=paper）
+    - 不允许停止 Testnet / Live Bot
+    - confirm 必须为 true
+    - 不允许包含敏感字段
+    - 不执行撤单
+    - 不执行任何真实交易操作
+    - 操作日志记录
+
+    如果 Hummingbot API 当前版本不支持停止接口，返回清晰错误，不伪造成功。
+    """
+    try:
+        raw_request_data = await raw_request.json()
+    except Exception:
+        raw_request_data = {}
+
+    try:
+        result = await stop_paper_bot(
+            paper_bot_id=paper_bot_id,
+            raw_request_data=raw_request_data,
+        )
+        return result
+    except Exception as e:
+        now = datetime.utcnow().isoformat() + "Z"
+        return {
+            "stopped": False,
+            "source": "quantagent",
+            "mode": "paper",
+            "live_trading": False,
+            "testnet": False,
+            "data": None,
+            "error": f"停止 Paper Bot 时发生错误: {str(e)}",
+            "timestamp": now,
+        }

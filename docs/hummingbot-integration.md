@@ -200,17 +200,7 @@ HUMMINGBOT_API_TIMEOUT=10
 
 ---
 
-## 八、相关文件
-
-| 文件 | 说明 |
-|------|------|
-| `backend/app/services/hummingbot_api_service.py` | Hummingbot API 服务层 |
-| `backend/app/api/v1/endpoints/hummingbot.py` | API 端点定义 |
-| `frontend/app/hummingbot/page.tsx` | 管理中心前端页面 |
-
----
-
-## 九、快速测试
+## 七、快速测试
 
 ### 测试 API 连接
 
@@ -230,6 +220,617 @@ curl http://localhost:3002/api/v1/hummingbot/positions
 打开浏览器访问：http://localhost:3002/hummingbot
 
 > **端口说明**：QuantAgent 前端默认运行在 `localhost:3002`（开发环境）或 `localhost:3000`（生产环境）。请根据实际启动命令确认。
+
+---
+
+## 八、v1.2.1 Hummingbot Paper Bot 配置预览
+
+### 8.1 当前目标
+
+- ✅ 只生成 Paper Bot 配置预览
+- ❌ 不启动 Bot
+- ❌ 不执行真实交易
+- ❌ 不支持 Testnet
+- ❌ 不支持 Live
+
+### 8.2 新增接口
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/v1/hummingbot/paper-bots/preview` | POST | 生成 Paper Bot 配置预览 |
+
+### 8.3 请求格式
+
+```bash
+curl -X POST http://localhost:8002/api/v1/hummingbot/paper-bots/preview \
+  -H "Content-Type: application/json" \
+  -d '{
+    "bot_name": "paper_grid_btc_001",
+    "strategy_type": "grid",
+    "trading_pair": "BTC-USDT",
+    "paper_initial_balance": 10000,
+    "order_amount": 100,
+    "grid_spacing_pct": 0.5,
+    "grid_levels": 20,
+    "stop_loss_pct": 3,
+    "take_profit_pct": 5,
+    "max_runtime_minutes": 120
+  }'
+```
+
+### 8.4 响应格式
+
+**成功响应：**
+```json
+{
+  "valid": true,
+  "source": "quantagent",
+  "mode": "paper",
+  "live_trading": false,
+  "testnet": false,
+  "data": {
+    "config_preview": {
+      "bot_name": "paper_grid_btc_001",
+      "mode": "paper",
+      "live_trading": false,
+      "testnet": false,
+      "uses_real_exchange_account": false,
+      "requires_api_key": false,
+      "strategy_type": "grid",
+      "trading_pair": "BTC-USDT",
+      "paper_initial_balance": 10000,
+      "order_amount": 100,
+      "risk": {
+        "stop_loss_pct": 3,
+        "take_profit_pct": 5,
+        "max_runtime_minutes": 120
+      },
+      "strategy_params": {
+        "grid_spacing_pct": 0.5,
+        "grid_levels": 20
+      },
+      "notes": [
+        "当前配置仅用于 Paper Bot 预览。",
+        "不会启动 Bot。",
+        "不会执行真实交易。",
+        "不会使用真实交易所 API Key。"
+      ]
+    },
+    "warnings": [
+      "当前仅生成配置预览，尚未调用 Hummingbot API 启动 Bot。"
+    ]
+  },
+  "error": null,
+  "timestamp": "2026-05-07T12:00:00Z"
+}
+```
+
+**错误响应：**
+```json
+{
+  "valid": false,
+  "source": "quantagent",
+  "mode": "paper",
+  "live_trading": false,
+  "testnet": false,
+  "data": null,
+  "error": "单笔订单金额不能大于初始资金",
+  "timestamp": "2026-05-07T12:00:00Z"
+}
+```
+
+### 8.5 安全边界
+
+- ✅ 只支持 Paper 模式
+- ❌ 不支持 Testnet
+- ❌ 不支持 Live
+- ❌ 不接 API Key
+- ❌ 不调用 Hummingbot 启动接口
+- ✅ 检测到 `api_key`/`secret` 等敏感字段直接拒绝
+- ✅ 检测到 `mode=live`/`testnet`/`live_trading=true` 直接拒绝
+
+### 8.6 敏感字段拦截示例
+
+**测试敏感字段拦截：**
+```bash
+curl -X POST http://localhost:8002/api/v1/hummingbot/paper-bots/preview \
+  -H "Content-Type: application/json" \
+  -d '{
+    "bot_name": "bad_bot",
+    "strategy_type": "grid",
+    "trading_pair": "BTC-USDT",
+    "paper_initial_balance": 10000,
+    "order_amount": 100,
+    "grid_spacing_pct": 0.5,
+    "live_trading": true,
+    "api_key": "SHOULD_NOT_BE_ALLOWED"
+  }'
+```
+
+**预期响应：**
+```json
+{
+  "valid": false,
+  "error": "Paper Bot 配置预览不允许提交任何 API Key、Secret、Token 或私钥字段。检测到敏感字段: 'api_key'"
+}
+```
+
+### 8.7 前端功能
+
+在 `/hummingbot` 页面新增"创建 Hummingbot Paper Bot"配置区域：
+
+- ✅ Paper Bot 配置表单
+- ✅ 策略类型选择（grid / position_executor）
+- ✅ 交易对选择
+- ✅ 安全提示卡片
+- ✅ JSON 配置预览展示
+- ✅ 可复制 JSON
+- ❌ 不显示启动 Bot 按钮
+- ❌ 不显示 API Key 输入框
+
+### 8.8 下一步计划
+
+详见 [hummingbot-paper-bot-plan.md](./hummingbot-paper-bot-plan.md)
+
+- v1.2.1（当前）：Paper Bot 配置预览 ✅
+- v1.2.2：启动 Paper Bot（需确认 Hummingbot API 启动接口）
+- v1.2.3：查看 Paper Bot 状态、模拟订单、模拟持仓
+- v1.2.4：停止 Paper Bot
+
+---
+
+## 九、v1.2.2 Hummingbot Paper Bot 启动
+
+### 9.1 当前目标
+
+- ✅ 基于 v1.2.1 配置预览启动 Paper Bot
+- ✅ 使用虚拟资金模拟运行
+- ❌ 不支持 Testnet
+- ❌ 不支持 Live
+- ❌ 不执行真实交易
+
+### 9.2 新增接口
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/v1/hummingbot/paper-bots/start` | POST | 启动 Paper Bot |
+
+### 9.3 安全限制
+
+- ✅ mode 强制固定为 "paper"
+- ✅ live_trading 强制固定为 false
+- ✅ testnet 强制固定为 false
+- ✅ 不接 API Key
+- ✅ 不接 Secret
+- ✅ 不接真实账户
+- ✅ 启动前二次确认
+- ✅ 操作日志记录（不含敏感信息）
+
+### 9.4 Hummingbot API 版本说明
+
+启动接口以 http://localhost:8000/docs 为准。
+
+当前 Hummingbot API v1.0.1 支持的启动方式：
+
+1. `/bot-orchestration/deploy-v2-controllers` — 部署 V2 Controller（需要 credentials_profile）
+2. `/bot-orchestration/start-bot` — 启动已有 Bot（需要 script 或 conf）
+
+Paper Bot 启动需要 `credentials_profile` 为 paper 账户。如果当前 Hummingbot API 版本无可用启动接口，返回清晰错误，不伪造成功。
+
+### 9.5 启动前确认弹窗
+
+前端在用户点击"启动 Paper Bot"时弹出确认框：
+
+```
+确认启动 Hummingbot Paper Bot？
+
+当前仅启动 Paper Bot：
+- 使用虚拟资金
+- 不连接真实交易所账户
+- 不执行真实交易
+- 不需要 API Key
+- 不支持 Testnet
+- 不支持 Live
+
+[取消] [确认启动]
+```
+
+### 9.6 返回格式
+
+**启动成功：**
+```json
+{
+  "started": true,
+  "source": "hummingbot-api",
+  "mode": "paper",
+  "live_trading": false,
+  "testnet": false,
+  "data": {
+    "paper_bot_id": "paper_paper_grid_btc_001_a1b2c3d4",
+    "bot_name": "paper_grid_btc_001",
+    "strategy_type": "grid",
+    "trading_pair": "BTC-USDT",
+    "status": "starting",
+    "started_at": "2026-05-07T12:00:00Z",
+    "hummingbot_response": {...}
+  },
+  "error": null,
+  "timestamp": "..."
+}
+```
+
+**启动失败：**
+```json
+{
+  "started": false,
+  "source": "quantagent",
+  "mode": "paper",
+  "live_trading": false,
+  "testnet": false,
+  "data": null,
+  "error": "当前 Hummingbot API 版本未提供可用的 Paper Bot 启动接口",
+  "timestamp": "..."
+}
+```
+
+### 9.7 前端功能
+
+- ✅ 生成配置预览后显示"启动 Paper Bot"按钮
+- ✅ 无配置预览时不显示启动按钮
+- ✅ 启动前二次确认弹窗
+- ✅ 启动结果展示
+- ❌ 无 API Key 输入框
+- ❌ 无 Secret 输入框
+- ❌ 无 Live/Testnet 选择
+
+### 9.8 操作日志
+
+每次启动操作都会记录日志（不含敏感信息）：
+
+```json
+{
+  "operation": "start_paper_bot",
+  "bot_name": "paper_grid_btc_001",
+  "strategy_type": "grid",
+  "trading_pair": "BTC-USDT",
+  "mode": "paper",
+  "live_trading": false,
+  "success": true,
+  "timestamp": "2026-05-07T12:00:00Z"
+}
+```
+
+### 9.9 下一步计划
+
+详见 [hummingbot-paper-bot-plan.md](./hummingbot-paper-bot-plan.md)
+
+- v1.2.1 配置预览 ✅
+- v1.2.2 启动 Paper Bot ✅
+- v1.2.3 查看 Paper Bot 状态、模拟订单、模拟持仓
+- v1.2.4 停止 Paper Bot
+
+---
+
+## 十、相关文件
+
+| 文件 | 说明 |
+|------|------|
+| `backend/app/services/hummingbot_api_service.py` | Hummingbot API 服务层 |
+| `backend/app/api/v1/endpoints/hummingbot.py` | API 端点定义 |
+| `backend/app/services/hummingbot_paper_bot_service.py` | Paper Bot 配置预览 + 启动服务 |
+| `backend/app/schemas/hummingbot_paper_bot.py` | Paper Bot Schema 定义 |
+| `frontend/app/hummingbot/page.tsx` | 管理中心前端页面 |
+| `docs/hummingbot-paper-bot-plan.md` | Paper Bot 阶段计划 |
+
+---
+
+## 十一、快速测试
+
+### 测试 API 连接
+
+```bash
+# 检查状态
+curl http://localhost:3002/api/v1/hummingbot/status
+
+# 检查订单
+curl http://localhost:3002/api/v1/hummingbot/orders
+
+# 检查持仓
+curl http://localhost:3002/api/v1/hummingbot/positions
+```
+
+### 测试 Paper Bot 配置预览
+
+```bash
+# 正常请求
+curl -X POST http://localhost:8002/api/v1/hummingbot/paper-bots/preview \
+  -H "Content-Type: application/json" \
+  -d '{
+    "bot_name": "paper_grid_btc_001",
+    "strategy_type": "grid",
+    "trading_pair": "BTC-USDT",
+    "paper_initial_balance": 10000,
+    "order_amount": 100,
+    "grid_spacing_pct": 0.5,
+    "grid_levels": 20,
+    "stop_loss_pct": 3,
+    "take_profit_pct": 5,
+    "max_runtime_minutes": 120
+  }'
+
+# 非法字段测试
+curl -X POST http://localhost:8002/api/v1/hummingbot/paper-bots/preview \
+  -H "Content-Type: application/json" \
+  -d '{
+    "bot_name": "bad_live_bot",
+    "strategy_type": "grid",
+    "trading_pair": "BTC-USDT",
+    "paper_initial_balance": 10000,
+    "order_amount": 100,
+    "grid_spacing_pct": 0.5,
+    "max_runtime_minutes": 120,
+    "live_trading": true,
+    "api_key": "SHOULD_NOT_BE_ALLOWED"
+  }'
+```
+
+### 测试 Paper Bot 启动
+
+```bash
+# 正常启动
+curl -X POST http://localhost:8002/api/v1/hummingbot/paper-bots/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "bot_name": "paper_grid_btc_001",
+    "strategy_type": "grid",
+    "trading_pair": "BTC-USDT",
+    "paper_initial_balance": 10000,
+    "order_amount": 100,
+    "grid_spacing_pct": 0.5,
+    "grid_levels": 20,
+    "stop_loss_pct": 3,
+    "take_profit_pct": 5,
+    "max_runtime_minutes": 120
+  }'
+
+# 非法字段测试（应被拒绝）
+curl -X POST http://localhost:8002/api/v1/hummingbot/paper-bots/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "bot_name": "bad_live_bot",
+    "strategy_type": "grid",
+    "trading_pair": "BTC-USDT",
+    "paper_initial_balance": 10000,
+    "order_amount": 100,
+    "grid_spacing_pct": 0.5,
+    "max_runtime_minutes": 120,
+    "live_trading": true,
+    "api_key": "SHOULD_NOT_BE_ALLOWED"
+  }'
+```
+
+### 访问前端
+
+打开浏览器访问：http://localhost:3002/hummingbot
+
+> **端口说明**：QuantAgent 前端默认运行在 `localhost:3002`（开发环境）或 `localhost:3000`（生产环境）。请根据实际启动命令确认。
+
+---
+
+## 十二、v1.2.3 Hummingbot Paper Bot 运行监控
+
+### 12.1 当前目标
+
+- ✅ 展示 Paper Bot 列表
+- ✅ 展示 Paper Bot 详情
+- ✅ 展示 Paper Bot 模拟订单
+- ✅ 展示 Paper Bot 模拟持仓
+- ✅ 展示 Paper Bot 日志（只读）
+- ✅ 前端 10 秒自动轮询
+- ❌ 不下单
+- ❌ 不撤单
+- ❌ 不平仓
+- ❌ 不停止 Bot
+
+### 12.2 新增接口
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/v1/hummingbot/paper-bots` | GET | Paper Bot 列表 |
+| `/api/v1/hummingbot/paper-bots/{paper_bot_id}` | GET | Paper Bot 详情 |
+| `/api/v1/hummingbot/paper-bots/{paper_bot_id}/orders` | GET | Paper Bot 模拟订单 |
+| `/api/v1/hummingbot/paper-bots/{paper_bot_id}/positions` | GET | Paper Bot 模拟持仓 |
+| `/api/v1/hummingbot/paper-bots/{paper_bot_id}/portfolio` | GET | Paper Bot 模拟资产 |
+| `/api/v1/hummingbot/paper-bots/{paper_bot_id}/logs` | GET | Paper Bot 日志（只读） |
+
+### 12.3 数据来源说明
+
+- **Paper Bot 列表**：优先返回本地记录的 Paper Bot，同时尝试获取 Hummingbot API bots
+- **订单/持仓/Portfolio**：调用已有 `/trading/orders`、`/trading/positions`、`/portfolio/state` 接口
+- **注意**：当前 Hummingbot API 不支持按 bot_id 精确过滤，返回全局数据并在响应中提示
+- **日志**：如果 API 不支持，返回友好提示
+
+### 12.4 敏感字段过滤
+
+所有接口返回数据前都会经过 `sanitize_data()` 函数过滤敏感字段：
+
+```python
+SENSITIVE_KEYS = [
+    "api_key", "apiSecret", "secret", "password", "passphrase",
+    "token", "access_token", "private_key", "mnemonic", ...
+]
+```
+
+### 12.5 前端轮询机制
+
+- 页面加载时获取 Paper Bot 列表
+- 选中 Bot 后，每 10 秒自动刷新：详情、订单、持仓、Portfolio、日志
+- 页面卸载时清理 interval，避免内存泄漏
+- 请求失败不崩溃，只显示错误提示
+
+### 12.6 状态 Badge 规则
+
+| 状态 | 颜色 |
+|------|------|
+| running | 绿色 |
+| starting | 蓝色 |
+| stopped | 灰色 |
+| error | 红色 |
+| unknown | 黄色 |
+
+### 12.7 下一步计划
+
+详见 [hummingbot-paper-bot-plan.md](./hummingbot-paper-bot-plan.md)
+
+- v1.2.1 配置预览 ✅
+- v1.2.2 启动 Paper Bot ✅
+- v1.2.3 查看 Paper Bot 状态、模拟订单、模拟持仓、日志 ✅
+- v1.2.4 停止 Paper Bot（后续）
+
+---
+
+## 十三、快速测试
+
+### 测试 Paper Bot 列表
+
+```bash
+curl http://localhost:8002/api/v1/hummingbot/paper-bots
+```
+
+### 测试 Paper Bot 详情
+
+```bash
+curl http://localhost:8002/api/v1/hummingbot/paper-bots/{paper_bot_id}
+```
+
+### 测试 Paper Bot 订单
+
+```bash
+curl http://localhost:8002/api/v1/hummingbot/paper-bots/{paper_bot_id}/orders
+```
+
+### 测试 Paper Bot 持仓
+
+```bash
+curl http://localhost:8002/api/v1/hummingbot/paper-bots/{paper_bot_id}/positions
+```
+
+### 测试 Paper Bot 日志
+
+```bash
+curl http://localhost:8002/api/v1/hummingbot/paper-bots/{paper_bot_id}/logs
+```
+
+### 测试 Paper Bot 停止（v1.2.4）
+
+```bash
+# 正常停止
+curl -X POST http://localhost:8002/api/v1/hummingbot/paper-bots/{paper_bot_id}/stop \
+  -H "Content-Type: application/json" \
+  -d '{"confirm": true}'
+
+# 缺少 confirm 会被拒绝
+curl -X POST http://localhost:8002/api/v1/hummingbot/paper-bots/{paper_bot_id}/stop \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+# 包含敏感字段会被拒绝
+curl -X POST http://localhost:8002/api/v1/hummingbot/paper-bots/{paper_bot_id}/stop \
+  -H "Content-Type: application/json" \
+  -d '{"confirm": true, "api_key": "SECRET", "live_trading": true}'
+```
+
+---
+
+## 十四、v1.2.4 停止 Hummingbot Paper Bot
+
+### 14.1 功能目标
+
+- ✅ 只允许停止 Paper Bot
+- ❌ 不允许停止 Testnet Bot
+- ❌ 不允许停止 Live Bot
+- ❌ 不允许真实下单
+- ❌ 不允许撤单
+- ❌ 不允许平仓
+- ❌ 不允许修改 Bot 配置
+
+### 14.2 新增接口
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/v1/hummingbot/paper-bots/{paper_bot_id}/stop` | POST | 停止 Paper Bot |
+
+### 14.3 Hummingbot API 停止接口
+
+根据 Swagger（http://localhost:8000/docs），Hummingbot API 提供以下停止接口：
+
+| 路径 | 方法 | 说明 |
+|------|------|------|
+| `/bot-orchestration/stop-bot` | POST | 停止 Bot（主要接口） |
+| `/bot-orchestration/stop-and-archive-bot/{bot_name}` | POST | 停止并归档 Bot |
+| `/docker/stop-container/{container_name}` | POST | 停止容器 |
+| `/executors/{executor_id}/stop` | POST | 停止 Executor |
+
+QuantAgent 优先使用 `POST /bot-orchestration/stop-bot`，如果不可用则降级到 `POST /docker/stop-container`。
+
+### 14.4 安全机制
+
+1. **confirm 校验**：必须 `confirm=true` 才执行
+2. **mode 校验**：必须是 `paper` 才允许停止
+3. **live_trading 校验**：必须是 `false` 才允许停止
+4. **testnet 校验**：必须是 `false` 才允许停止
+5. **敏感字段校验**：请求体不能包含 `api_key`、`secret`、`password` 等
+6. **不撤单**：调用 `skip_order_cancellation=true`
+7. **操作日志**：记录所有停止操作（不含敏感信息）
+
+### 14.5 返回格式
+
+**停止成功**：
+```json
+{
+  "stopped": true,
+  "source": "hummingbot-api",
+  "mode": "paper",
+  "live_trading": false,
+  "testnet": false,
+  "data": {...},
+  "error": null,
+  "timestamp": "..."
+}
+```
+
+**Hummingbot API 无停止接口**：
+```json
+{
+  "stopped": false,
+  "source": "quantagent",
+  "mode": "paper",
+  "live_trading": false,
+  "testnet": false,
+  "data": null,
+  "error": "当前 Hummingbot API 版本未提供可用的 Paper Bot 停止接口...",
+  "timestamp": "..."
+}
+```
+
+**安全校验失败**：
+```json
+{
+  "stopped": false,
+  "error": "禁止停止 mode=live 的 Bot。只允许停止 Paper Bot。",
+  ...
+}
+```
+
+### 14.6 下一步计划
+
+详见 [hummingbot-paper-bot-plan.md](./hummingbot-paper-bot-plan.md)
+
+- v1.2.1 配置预览 ✅
+- v1.2.2 启动 Paper Bot ✅
+- v1.2.3 查看 Paper Bot 状态、模拟订单、模拟持仓、日志 ✅
+- v1.2.4 停止 Paper Bot ✅
+- v1.2.5 删除 Paper Bot（后续）
 
 ---
 
