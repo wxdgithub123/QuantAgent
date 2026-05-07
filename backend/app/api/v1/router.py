@@ -4,7 +4,7 @@ API V1 Router
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import market, trading, auth, strategy, analytics, risk, replay, profiles, composition, skill, dynamic_selection, walk_forward
+from app.api.v1.endpoints import market, trading, auth, strategy, analytics, risk, replay, profiles, composition, skill, dynamic_selection, walk_forward, hummingbot
 
 api_router = APIRouter()
 
@@ -20,3 +20,4 @@ api_router.include_router(composition.router, prefix="/strategy", tags=["Strateg
 api_router.include_router(skill.router, prefix="/skills", tags=["Skills"])
 api_router.include_router(dynamic_selection.router, prefix="/dynamic-selection", tags=["Dynamic Selection"])
 api_router.include_router(walk_forward.router, prefix="/walk-forward", tags=["Walk-Forward Optimization"])
+api_router.include_router(hummingbot.router, prefix="/hummingbot", tags=["Hummingbot"])

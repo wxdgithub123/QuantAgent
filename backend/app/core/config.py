@@ -99,6 +99,13 @@ class Settings(BaseSettings):
     # 禁用 Ollama 代理，确保直连本地服务
     OLLAMA_NO_PROXY: bool = False
 
+    # Hummingbot API Integration (Read-only)
+    # 注意：如果 QuantAgent 后端运行在 Docker 容器里，需要改成 http://host.docker.internal:8000
+    HUMMINGBOT_API_URL: str = "http://localhost:8000"
+    HUMMINGBOT_API_USERNAME: str = ""  # 可为空，DEBUG_MODE=true 时可能不需要认证
+    HUMMINGBOT_API_PASSWORD: str = ""   # 可为空
+    HUMMINGBOT_API_TIMEOUT: int = 10    # 请求超时秒数
+
     # OpenRouter
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_MODEL: str = "openrouter/auto"

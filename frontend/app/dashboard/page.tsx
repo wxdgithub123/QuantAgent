@@ -18,7 +18,7 @@ import {
   TrendingUp, TrendingDown, Activity, BarChart3, Settings,
   DollarSign, BarChart2, RefreshCw, WifiOff,
   ChevronDown, ChevronUp, Brain, Shield, Zap, X, Plus, Minus,
-  Wallet, History, BarChart
+  Wallet, History, BarChart, Server, CheckCircle
 } from "lucide-react";
 
 // ─── TypeScript Interfaces ─────────────────────────────────────────────────
@@ -265,6 +265,12 @@ export default function DashboardPage() {
   const [loadingComparison, setLoadingComparison] = useState(false);
   const [trendingCoins, setTrendingCoins] = useState<TrendingCoin[]>([]);
 
+  // Hummingbot status
+  const [hummingbotStatus, setHummingbotStatus] = useState<{ connected: boolean; apiUrl: string; version: string; timestamp: string } | null>(null);
+  const [hummingbotDocker, setHummingbotDocker] = useState<{ connected: boolean; containerCount: number } | null>(null);
+  const [hummingbotConnectors, setHummingbotConnectors] = useState<{ connected: boolean; count: number } | null>(null);
+  const [hummingbotBots, setHummingbotBots] = useState<{ connected: boolean; count: number; source: string } | null>(null);
+
   useEffect(() => {
     // Fetch trending coins
     fetch("/api/v1/market/coingecko/trending")
@@ -372,13 +378,78 @@ export default function DashboardPage() {
     } catch { /* ignore */ }
   }, []);
 
+  // ── Fetch Hummingbot Status ────────────────────────────────────────────
+  const fetchHummingbotStatus = useCallback(async () => {
+    try {
+      const [statusRes, dockerRes, connectorsRes, botsRes] = await Promise.allSettled([
+        fetch("/api/v1/hummingbot/status"),
+        fetch("/api/v1/hummingbot/docker"),
+        fetch("/api/v1/hummingbot/connectors"),
+        fetch("/api/v1/hummingbot/bots"),
+      ]);
+
+      // Status
+      if (statusRes.status === "fulfilled" && statusRes.value.ok) {
+        const data = await statusRes.value.json();
+        setHummingbotStatus({
+          connected: data.connected,
+          apiUrl: "http://localhost:8000",
+          version: data.data?.version || data.data?.hb_version || "—",
+          timestamp: data.timestamp || "",
+        });
+      } else {
+        setHummingbotStatus({ connected: false, apiUrl: "http://localhost:8000", version: "—", timestamp: "" });
+      }
+
+      // Docker
+      if (dockerRes.status === "fulfilled" && dockerRes.value.ok) {
+        const data = await dockerRes.value.json();
+        const containers = data.data?.active_containers;
+        const count = Array.isArray(containers) ? containers.length : 0;
+        setHummingbotDocker({ connected: data.connected, containerCount: count });
+      } else {
+        setHummingbotDocker({ connected: false, containerCount: 0 });
+      }
+
+      // Connectors
+      if (connectorsRes.status === "fulfilled" && connectorsRes.value.ok) {
+        const data = await connectorsRes.value.json();
+        const connectors = data.data;
+        const count = Array.isArray(connectors) ? connectors.length : (typeof connectors === "object" && connectors !== null ? Object.keys(connectors).length : 0);
+        setHummingbotConnectors({ connected: data.connected, count });
+      } else {
+        setHummingbotConnectors({ connected: false, count: 0 });
+      }
+
+      // Bots
+      if (botsRes.status === "fulfilled" && botsRes.value.ok) {
+        const data = await botsRes.value.json();
+        let count = 0;
+        if (data.data?.bots && typeof data.data.bots === "object") {
+          const bots = data.data.bots;
+          if (Array.isArray((bots as Record<string, unknown>).active_bots)) {
+            count = ((bots as { active_bots: unknown[] }).active_bots).length;
+          } else if (Array.isArray((bots as Record<string, unknown>).discovered_bots)) {
+            count = ((bots as { discovered_bots: unknown[] }).discovered_bots).length;
+          }
+        } else if (data.data?.containers_fallback?.containers) {
+          count = data.data.containers_fallback.containers.length;
+        }
+        setHummingbotBots({ connected: data.connected, count, source: data.data?.source || "—" });
+      } else {
+        setHummingbotBots({ connected: false, count: 0, source: "—" });
+      }
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     fetchBalance();
     fetchPositions();
     fetchRiskStatus();
-    const t = setInterval(() => { fetchBalance(); fetchPositions(); fetchRiskStatus(); }, 15000);
+    fetchHummingbotStatus();
+    const t = setInterval(() => { fetchBalance(); fetchPositions(); fetchRiskStatus(); fetchHummingbotStatus(); }, 30000);
     return () => clearInterval(t);
-  }, [fetchBalance, fetchPositions, fetchRiskStatus]);
+  }, [fetchBalance, fetchPositions, fetchRiskStatus, fetchHummingbotStatus]);
 
   // ── WebSocket ──────────────────────────────────────────────────────────────
   const connectWS = useCallback(() => {
@@ -729,6 +800,9 @@ export default function DashboardPage() {
               <Link href="/terminal" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
                 终端
               </Link>
+              <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
+                <Server className="w-4 h-4" /> Hummingbot
+              </Link>
             </nav>
 
             <div className="flex items-center gap-3">
@@ -890,6 +964,92 @@ export default function DashboardPage() {
              </div>
           </div>
         )}
+
+        {/* Hummingbot Status Card */}
+        <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-cyan-700/30 mb-6">
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-slate-100 flex items-center gap-2 text-base">
+                <div className="w-8 h-8 bg-cyan-500/10 rounded-lg flex items-center justify-center border border-cyan-500/20">
+                  <Server className="w-4 h-4 text-cyan-400" />
+                </div>
+                Hummingbot 状态
+              </CardTitle>
+              <div className="flex items-center gap-2">
+                <Badge
+                  variant="outline"
+                  className={hummingbotStatus?.connected ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-slate-500/10 text-slate-400 border-slate-500/20"}
+                >
+                  {hummingbotStatus?.connected ? (
+                    <><CheckCircle className="w-3 h-3 mr-1" /> 已连接</>
+                  ) : (
+                    <><WifiOff className="w-3 h-3 mr-1" /> 未连接</>
+                  )}
+                </Badge>
+                <Button variant="ghost" size="sm" className="h-7 text-xs text-slate-400 hover:text-slate-100" onClick={fetchHummingbotStatus}>
+                  <RefreshCw className="w-3 h-3 mr-1" /> 刷新
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {/* API Connection */}
+              <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                <p className="text-[10px] text-slate-500 uppercase mb-1">API 状态</p>
+                <p className={`text-sm font-semibold ${hummingbotStatus?.connected ? "text-green-400" : "text-slate-400"}`}>
+                  {hummingbotStatus?.connected ? "已连接" : "未连接"}
+                </p>
+                <p className="text-[10px] text-slate-500 mt-0.5 truncate" title="http://localhost:8000">
+                  {hummingbotStatus?.version || "—"}
+                </p>
+              </div>
+
+              {/* Docker Status */}
+              <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                <p className="text-[10px] text-slate-500 uppercase mb-1">Docker 容器</p>
+                <p className={`text-sm font-semibold ${hummingbotDocker?.connected ? "text-green-400" : "text-slate-400"}`}>
+                  {hummingbotDocker?.containerCount ?? "—"}
+                </p>
+                <p className="text-[10px] text-slate-500 mt-0.5">活跃容器</p>
+              </div>
+
+              {/* Connectors */}
+              <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                <p className="text-[10px] text-slate-500 uppercase mb-1">Connectors</p>
+                <p className={`text-sm font-semibold ${hummingbotConnectors?.connected ? "text-cyan-400" : "text-slate-400"}`}>
+                  {hummingbotConnectors?.connected ? hummingbotConnectors.count : "—"}
+                </p>
+                <p className="text-[10px] text-slate-500 mt-0.5">可用交易所</p>
+              </div>
+
+              {/* Bots */}
+              <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                <p className="text-[10px] text-slate-500 uppercase mb-1">Bots</p>
+                <p className={`text-sm font-semibold ${hummingbotBots?.count && hummingbotBots.count > 0 ? "text-green-400" : "text-slate-400"}`}>
+                  {hummingbotBots?.count ?? "—"}
+                </p>
+                <p className="text-[10px] text-slate-500 mt-0.5 truncate" title={hummingbotBots?.source || ""}>
+                  {hummingbotBots?.source && hummingbotBots.source !== "—" ? "MQTT" : "运行中"}
+                </p>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="mt-3 flex items-center justify-between pt-3 border-t border-slate-800/50">
+              <p className="text-[10px] text-slate-500">
+                {hummingbotStatus?.timestamp
+                  ? `最后更新: ${new Date(hummingbotStatus.timestamp).toLocaleTimeString()}`
+                  : "点击刷新获取状态"}
+              </p>
+              <Link href="/hummingbot">
+                <Button variant="ghost" size="sm" className="h-7 text-xs text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10">
+                  <Server className="w-3 h-3 mr-1" /> 进入 Hummingbot 管理中心
+                </Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Price Comparison */}
         <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50 mb-6">

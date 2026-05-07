@@ -239,6 +239,8 @@ QuantAgent/
 │   └── lib/          # 工具函数
 ├── gateway/          # Go 网关服务
 │   └── cmd/          # 应用入口
+├── docs/             # 项目文档
+│   └── hummingbot-integration.md  # Hummingbot API 集成说明
 ├── docker-compose.yml # Docker 编排配置
 └── .env.example      # 环境变量模板
 ```
@@ -247,6 +249,12 @@ QuantAgent/
 - **backend/**：处理业务逻辑、策略执行、数据管理、AI 智能体交互
 - **frontend/**：提供交易界面、图表展示、策略配置、实时监控
 - **gateway/**：负责与交易所通信、订单执行、行情数据推送
+
+### 🤖 Hummingbot 集成
+
+QuantAgent 支持与 Hummingbot API 的只读集成，可以查看 Hummingbot 的状态、Docker 容器、Connectors、Bots、Portfolio、订单和持仓信息。
+
+详细说明请参阅：[Hummingbot API 集成说明](docs/hummingbot-integration.md)
 
 ### 📝 注意事项
 

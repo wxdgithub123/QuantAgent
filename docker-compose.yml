@@ -128,6 +128,13 @@ services:
       - NO_PROXY=host.docker.internal,host-gateway,ollama,192.168.10.239,localhost,127.0.0.1
       # CORS 配置，允许前端访问 (逗号分隔)
       - CORS_ORIGINS=http://frontend:3000,http://localhost:3002
+      # Hummingbot API 集成（只读）
+      # 注意：如果 Hummingbot 也运行在 Docker 中，改为 http://host.docker.internal:8000
+      # 认证信息从 .env 文件读取，不要硬编码
+      - HUMMINGBOT_API_URL=${HUMMINGBOT_API_URL:-http://host.docker.internal:8000}
+      - HUMMINGBOT_API_USERNAME=${HUMMINGBOT_API_USERNAME}
+      - HUMMINGBOT_API_PASSWORD=${HUMMINGBOT_API_PASSWORD}
+      - HUMMINGBOT_API_TIMEOUT=${HUMMINGBOT_API_TIMEOUT:-10}
     volumes:
       - ./backend:/app
     depends_on:

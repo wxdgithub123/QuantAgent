@@ -14,7 +14,8 @@ from . import (
     composition,
     skill,
     dynamic_selection,
-    walk_forward
+    walk_forward,
+    hummingbot,
 )
 
 __all__ = [
@@ -29,5 +30,6 @@ __all__ = [
     "composition",
     "skill",
     "dynamic_selection",
-    "walk_forward"
+    "walk_forward",
+    "hummingbot",
 ]
