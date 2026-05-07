@@ -15,7 +15,8 @@
 | Hummingbot API | http://localhost:8000 | Hummingbot REST API 服务 |
 | Hummingbot Swagger | http://localhost:8000/docs | API 交互文档 |
 | EMQX Dashboard | http://localhost:18083 | MQTT 消息面板 |
-| PostgreSQL | localhost:5432 | QuantAgent 数据库 |
+| PostgreSQL (QuantAgent) | localhost:5432 | QuantAgent 业务数据库 |
+| PostgreSQL (Hummingbot) | localhost:5433 | Hummingbot 自身数据库（可选，用于 Bot 历史数据） |
 | MQTT Broker | localhost:1883 | 消息队列服务 |
 
 ### 环境变量配置
@@ -59,7 +60,9 @@ HUMMINGBOT_API_TIMEOUT=10
 | Docker 状态 | `GET /docker/running` | 运行中的容器 |
 | Connectors | `GET /connectors` | 支持的连接器列表 |
 | Portfolio | `POST /portfolio/state` | 资产状态 |
-| Bots | `GET /bot-orchestration/status` | Bot 编排状态 |
+| Bots | `GET /bot-orchestration/status` | Bot 编排状态（若不可用则降级为 Docker 容器列表） |
+
+> **注意**：不同版本的 Hummingbot API 端点路径可能不同（如 `/trading/orders/active` vs `/orders/active`）。系统已实现降级处理，当主接口不可用时会自动尝试备选接口。若 Hummingbot API 不可用，Dashboard 不会崩溃，仅显示"未连接"状态。
 
 ### 3.3 前端页面
 
@@ -213,18 +216,20 @@ HUMMINGBOT_API_TIMEOUT=10
 
 ```bash
 # 检查状态
-curl http://localhost:8002/api/v1/hummingbot/status
+curl http://localhost:3002/api/v1/hummingbot/status
 
 # 检查订单
-curl http://localhost:8002/api/v1/hummingbot/orders
+curl http://localhost:3002/api/v1/hummingbot/orders
 
 # 检查持仓
-curl http://localhost:8002/api/v1/hummingbot/positions
+curl http://localhost:3002/api/v1/hummingbot/positions
 ```
 
 ### 访问前端
 
-打开浏览器访问：http://localhost:3000/hummingbot
+打开浏览器访问：http://localhost:3002/hummingbot
+
+> **端口说明**：QuantAgent 前端默认运行在 `localhost:3002`（开发环境）或 `localhost:3000`（生产环境）。请根据实际启动命令确认。
 
 ---
 
