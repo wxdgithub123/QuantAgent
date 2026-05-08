@@ -87,7 +87,8 @@ interface PaperBotPreviewResponse {
 }
 
 interface PaperBotStartResponse {
-  submitted: boolean;
+  local_record_created: boolean;
+  remote_started: boolean;
   remote_confirmed: boolean;
   source: string;
   mode: string;
@@ -100,6 +101,8 @@ interface PaperBotStartResponse {
     trading_pair: string;
     local_status: string;
     remote_confirmed: boolean;
+    local_record_created: boolean;
+    remote_started: boolean;
     hummingbot_bot_id?: string;
     started_at: string;
     hummingbot_response?: Record<string, unknown>;
@@ -1879,28 +1882,34 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
       {/* Start Result */}
       {startResult && (
         <Card className={`bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50 ${
-          startResult.submitted ? "border-blue-500/30" : "border-red-500/30"
+          startResult.local_record_created ? "border-blue-500/30" : "border-red-500/30"
         }`}>
           <CardHeader className="pb-2">
             <CardTitle className="text-slate-100 text-base flex items-center gap-2">
-              <Play className={`w-4 h-4 ${startResult.submitted ? "text-blue-400" : "text-red-400"}`} />
+              <Play className={`w-4 h-4 ${startResult.local_record_created ? "text-blue-400" : "text-red-400"}`} />
               Paper Bot 启动结果
-              {startResult.submitted && !startResult.remote_confirmed && (
+              {startResult.local_record_created && startResult.remote_started && !startResult.remote_confirmed && (
                 <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20 ml-2">
                   <CheckCircle className="w-3 h-3 mr-1" />
                   已提交（待对账）
                 </Badge>
               )}
-              {startResult.submitted && startResult.remote_confirmed && (
+              {startResult.local_record_created && startResult.remote_started && startResult.remote_confirmed && (
                 <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20 ml-2">
                   <CheckCircle className="w-3 h-3 mr-1" />
                   已提交且远端已确认
                 </Badge>
               )}
-              {!startResult.submitted && (
+              {startResult.local_record_created && !startResult.remote_started && (
                 <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/20 ml-2">
                   <XCircle className="w-3 h-3 mr-1" />
-                  提交失败
+                  启动失败
+                </Badge>
+              )}
+              {!startResult.local_record_created && (
+                <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/20 ml-2">
+                  <XCircle className="w-3 h-3 mr-1" />
+                  本地记录未创建
                 </Badge>
               )}
             </CardTitle>
@@ -1946,6 +1955,8 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                     variant="outline"
                     className={
                       startResult.data.local_status === "submitted" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
+                      startResult.data.local_status === "start_failed" ? "bg-red-500/10 text-red-400 border-red-500/20" :
+                      startResult.data.local_status === "running" ? "bg-green-500/10 text-green-400 border-green-500/20" :
                       "bg-slate-500/10 text-slate-400 border-slate-500/20"
                     }
                   >
@@ -1954,33 +1965,61 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                   <Badge
                     variant="outline"
                     className={
-                      startResult.data.remote_confirmed ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                      startResult.data.local_record_created
+                        ? "bg-green-500/10 text-green-400 border-green-500/20"
+                        : "bg-red-500/10 text-red-400 border-red-500/20"
+                    }
+                  >
+                    本地记录: {startResult.data.local_record_created ? "已创建" : "未创建"}
+                  </Badge>
+                  <Badge
+                    variant="outline"
+                    className={
+                      startResult.data.remote_started
+                        ? "bg-blue-500/10 text-blue-400 border-blue-500/20"
+                        : "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                    }
+                  >
+                    远端请求: {startResult.data.remote_started ? "已处理" : "未处理"}
+                  </Badge>
+                  <Badge
+                    variant="outline"
+                    className={
+                      startResult.data.remote_confirmed
+                        ? "bg-green-500/10 text-green-400 border-green-500/20"
+                        : "bg-slate-500/10 text-slate-400 border-slate-500/20"
                     }
                   >
                     远端已确认: {String(startResult.data.remote_confirmed)}
                   </Badge>
-                  <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20">
-                    mode: {startResult.mode}
-                  </Badge>
-                  <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20">
-                    live_trading: {String(startResult.live_trading)}
-                  </Badge>
                 </div>
 
-                {/* Remote Confirmation Notice */}
-                {startResult.data.remote_confirmed ? (
-                  <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
-                    <p className="text-green-300 text-xs">
-                      <span className="font-semibold">Hummingbot 已确认启动 Paper Bot。</span>
-                      该 Bot 已在 Hummingbot 远端运行。
+                {/* 状态说明 */}
+                {startResult.data.local_status === "start_failed" && (
+                  <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
+                    <p className="text-red-300 text-xs">
+                      <span className="font-semibold">启动失败：</span>
+                      Hummingbot API 返回了错误，本地记录已创建但 Bot 未真正运行。
+                      请检查上方的错误信息，或刷新列表查看详情。
                     </p>
                   </div>
-                ) : (
+                )}
+
+                {startResult.data.local_status === "submitted" && (
                   <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
                     <p className="text-amber-300 text-xs">
-                      <span className="font-semibold">Paper Bot 本地记录已创建。</span>
-                      当前 Hummingbot API 尚未确认该 Bot 已真正运行（remote_confirmed=false）。
-                      请点击刷新按钮，通过对账检测远端状态。
+                      <span className="font-semibold">Paper Bot 本地记录已创建，Hummingbot API 已处理启动请求。</span>
+                      当前需通过对账检测远端是否真正运行（remote_confirmed）。
+                      请点击刷新按钮，或等待自动刷新（每10秒）。
+                    </p>
+                  </div>
+                )}
+
+                {startResult.data.remote_confirmed && (
+                  <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+                    <p className="text-green-300 text-xs">
+                      <span className="font-semibold">Hummingbot 已确认 Paper Bot 正在运行。</span>
+                      该 Bot 已在 Hummingbot 远端正常运行。
                     </p>
                   </div>
                 )}
@@ -2320,11 +2359,11 @@ function PaperBotMonitorSection({
                     </div>
                   </div>
 
-                  {/* 停止按钮 - 仅本地状态为 submitted/starting/running 时显示 */}
+                  {/* 停止按钮 - 仅远端状态为 running 时显示 */}
                   {(paperBotDetail as Record<string, unknown>)?.mode === "paper" &&
                    (paperBotDetail as Record<string, unknown>)?.live_trading === false &&
                    (paperBotDetail as Record<string, unknown>)?.testnet === false &&
-                   ["submitted", "starting", "running"].includes((paperBotDetail as Record<string, unknown>)?.local_status as string) && (
+                   (paperBotDetail as Record<string, unknown>)?.remote_status === "running" && (
                     <div className="mt-3">
                       <Button
                         size="sm"
@@ -2334,6 +2373,22 @@ function PaperBotMonitorSection({
                         <Activity className="w-3 h-3 mr-1" />
                         停止 Paper Bot
                       </Button>
+                    </div>
+                  )}
+
+                  {/* 不可停止提示 - 远端未检测到时 */}
+                  {(paperBotDetail as Record<string, unknown>)?.mode === "paper" &&
+                   (paperBotDetail as Record<string, unknown>)?.remote_status !== "running" && (
+                    <div className="mt-3 p-2 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                      <p className="text-slate-500 text-[10px]">
+                        当前 Hummingbot 远端未检测到该 Paper Bot 正在运行（remote_status={
+                          (paperBotDetail as Record<string, unknown>)?.remote_status || "unknown"
+                        }），因此无法停止。
+                        {((paperBotDetail as Record<string, unknown>)?.local_status === "start_failed" ||
+                          (paperBotDetail as Record<string, unknown>)?.last_error) && (
+                          <span className="text-amber-400"> 请检查启动失败原因。</span>
+                        )}
+                      </p>
                     </div>
                   )}
 

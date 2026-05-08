@@ -323,7 +323,20 @@ async def generate_paper_bot_preview(
         )
 
 
-# ── v1.2.2: 启动 Paper Bot（已修复：不伪造 started=true）───────────────────────
+# ── v1.2.2: 启动 Paper Bot ─────────────────────────────────────────────────
+
+async def _fetch_hummingbot_accounts() -> tuple[List[str], bool]:
+    """
+    从 Hummingbot API 获取可用账户列表。
+    返回 (accounts_list, api_available)
+    """
+    try:
+        result = await _call_hummingbot_api("GET", "/accounts/")
+        accounts = result if isinstance(result, list) else result.get("data", [])
+        return accounts, True
+    except Exception:
+        return [], False
+
 
 async def start_paper_bot(
     request: PaperBotPreviewRequest,
@@ -331,20 +344,30 @@ async def start_paper_bot(
 ) -> PaperBotStartResponse:
     """启动 Paper Bot
 
-    关键设计：
-    - submitted=True: 已提交到 Hummingbot API（但不一定成功）
-    - remote_confirmed=False: 需要通过 GET /paper-bots 对账后才会显示 remote_status=running
-    - local_status=submitted: 不是 running，只有对账后才能升级为 running
+    完整流程：
+    1. 安全校验
+    2. 检查 Hummingbot API 是否在线
+    3. 获取 Hummingbot 可用账户列表
+    4. 如果 paper_account 不在账户列表中，返回错误（不伪造）
+    5. 调用 deploy-v2-controllers
+    6. 4xx/5xx → local_status=start_failed
+    7. 2xx → local_status=submitted（等下次对账确认 remote_status）
     """
     try:
         if raw_request_data:
             sensitive_error = _check_sensitive_fields(raw_request_data)
             if sensitive_error:
-                return PaperBotStartResponse(submitted=False, remote_confirmed=False, error=sensitive_error)
+                return PaperBotStartResponse(
+                    local_record_created=False, remote_started=False, remote_confirmed=False,
+                    error=sensitive_error,
+                )
 
             mode_error = _check_dangerous_modes(raw_request_data)
             if mode_error:
-                return PaperBotStartResponse(submitted=False, remote_confirmed=False, error=mode_error)
+                return PaperBotStartResponse(
+                    local_record_created=False, remote_started=False, remote_confirmed=False,
+                    error=mode_error,
+                )
 
         _validate_strategy_params(request)
         _validate_order_amount(request)
@@ -353,87 +376,107 @@ async def start_paper_bot(
         paper_bot_id = f"paper_{request.bot_name}_{uuid.uuid4().hex[:8]}"
         now = datetime.utcnow().isoformat() + "Z"
 
-        # 先创建本地记录，状态为 submitted
-        record_paper_bot(
-            paper_bot_id=paper_bot_id,
-            bot_name=request.bot_name,
-            strategy_type=request.strategy_type.value,
-            trading_pair=request.trading_pair,
-            config=config_preview_dict,
-        )
-
-        # 尝试调用 Hummingbot API
-        hummingbot_response = None
-        api_submitted = False
-        api_confirmed = False
-        api_error: Optional[str] = None
-
+        # Step 1: 检测 API 是否在线
+        api_available = False
         try:
-            # 检测 API 是否可用
             await _call_hummingbot_api("GET", "/")
+            api_available = True
         except Exception as e:
-            api_error = f"Hummingbot API 不可用: {str(e)}"
-            logger.warning(f"Hummingbot API not available: {e}")
             return PaperBotStartResponse(
-                submitted=False,
+                local_record_created=False,
+                remote_started=False,
                 remote_confirmed=False,
-                error=(
-                    f"无法连接到 Hummingbot API。{api_error}。"
-                    " 请检查 Hummingbot API 是否启动。"
-                ),
+                error=f"无法连接到 Hummingbot API: {str(e)}。请检查 Hummingbot API 是否启动。",
             )
 
+        # Step 2: 获取账户列表，验证 paper_account 是否存在
+        accounts, _ = await _fetch_hummingbot_accounts()
+        if "paper_account" not in accounts:
+            # 不伪造 paper_account，返回清晰错误
+            err_msg = (
+                f"当前 Hummingbot 未配置 paper_account。"
+                f" 可用账户: {accounts}。"
+                f" 请在 Hummingbot 中创建 paper_account，或确认 credentials/paper_account 目录存在。"
+            )
+            _log_paper_bot_operation(
+                operation="start_paper_bot",
+                bot_name=request.bot_name,
+                strategy_type=request.strategy_type.value,
+                trading_pair=request.trading_pair,
+                success=False,
+                error_message=err_msg,
+                config=config_preview_dict,
+            )
+            return PaperBotStartResponse(
+                local_record_created=False,
+                remote_started=False,
+                remote_confirmed=False,
+                error=err_msg,
+            )
+
+        # Step 3: 调用 deploy-v2-controllers
+        start_payload = {
+            "instance_name": paper_bot_id,
+            "credentials_profile": "paper_account",
+            "controllers_config": [],
+            "headless": True,
+        }
+
+        hummingbot_response = None
+        api_called = False
+        deploy_success = False
+        deploy_error: Optional[str] = None
+
         try:
-            # 调用部署接口
-            start_payload = {
-                "instance_name": paper_bot_id,
-                "credentials_profile": "paper_account",
-                "controllers_config": [],
-                "headless": True,
-            }
             hummingbot_response = await _call_hummingbot_api(
                 "POST",
                 "/bot-orchestration/deploy-v2-controllers",
                 json_data=start_payload,
             )
-            api_submitted = True
-            # 即使 API 返回 200/201，也需要下次 GET 对账才能确认 remote_confirmed
-            # 因为 Bot 可能还在启动中
+            api_called = True
+            deploy_success = True
         except Exception as e:
-            api_submitted = False
-            api_confirmed = False
-            api_error = f"Hummingbot API 调用失败: {str(e)}"
-            logger.warning(f"Failed to start Paper Bot via Hummingbot API: {e}")
+            api_called = True
+            deploy_success = False
+            deploy_error = str(e)
+            # 4xx/5xx 错误处理
+            err_detail = ""
+            if "401" in deploy_error:
+                err_detail = "（认证失败，请检查 HUMMINGBOT_API_USERNAME/PASSWORD）"
+            elif "404" in deploy_error:
+                err_detail = "（/bot-orchestration/deploy-v2-controllers 接口不存在，当前 Hummingbot API 版本可能不支持 Paper Bot 启动）"
+            elif "500" in deploy_error or "Internal Server Error" in deploy_error:
+                err_detail = "（Hummingbot API 内部错误，可能缺少 paper_account 配置）"
+            deploy_error = f"Hummingbot API 启动请求失败: {deploy_error}{err_detail}"
 
-        # 更新本地记录
-        if api_submitted:
+        # Step 4: 创建本地记录
+        if deploy_success:
+            # API 返回 2xx，创建本地记录，状态为 submitted
+            record_paper_bot(
+                paper_bot_id=paper_bot_id,
+                bot_name=request.bot_name,
+                strategy_type=request.strategy_type.value,
+                trading_pair=request.trading_pair,
+                config=config_preview_dict,
+            )
             update_paper_bot_fields(
                 paper_bot_id,
-                local_status="submitted",
                 hummingbot_status_raw=sanitize_data(hummingbot_response),
-                last_error=None,
             )
-        else:
-            update_paper_bot_fields(
-                paper_bot_id,
+            start_data = PaperBotStartData(
+                paper_bot_id=paper_bot_id,
+                bot_name=request.bot_name,
+                strategy_type=request.strategy_type.value,
+                trading_pair=request.trading_pair,
                 local_status="submitted",
-                last_error=api_error,
+                remote_confirmed=False,
+                local_record_created=True,
+                remote_started=True,
+                hummingbot_bot_id=hummingbot_response.get("instance_id") if hummingbot_response else None,
+                started_at=now,
+                config=config_preview_dict,
+                hummingbot_response=sanitize_data(hummingbot_response),
             )
-
-        start_data = PaperBotStartData(
-            paper_bot_id=paper_bot_id,
-            bot_name=request.bot_name,
-            strategy_type=request.strategy_type.value,
-            trading_pair=request.trading_pair,
-            local_status="submitted",
-            remote_confirmed=False,
-            hummingbot_bot_id=hummingbot_response.get("instance_id") if hummingbot_response else None,
-            started_at=now,
-            config=config_preview_dict,
-            hummingbot_response=sanitize_data(hummingbot_response),
-        )
-
-        if api_submitted:
             _log_paper_bot_operation(
                 operation="start_paper_bot",
                 bot_name=request.bot_name,
@@ -443,32 +486,63 @@ async def start_paper_bot(
                 config=config_preview_dict,
             )
             return PaperBotStartResponse(
-                submitted=True,
+                local_record_created=True,
+                remote_started=True,
                 remote_confirmed=False,
                 data=start_data,
             )
         else:
+            # API 返回非 2xx，创建本地记录，状态为 start_failed
+            record_paper_bot(
+                paper_bot_id=paper_bot_id,
+                bot_name=request.bot_name,
+                strategy_type=request.strategy_type.value,
+                trading_pair=request.trading_pair,
+                config=config_preview_dict,
+            )
+            update_paper_bot_fields(
+                paper_bot_id,
+                local_status="start_failed",
+                last_error=deploy_error,
+            )
+            start_data = PaperBotStartData(
+                paper_bot_id=paper_bot_id,
+                bot_name=request.bot_name,
+                strategy_type=request.strategy_type.value,
+                trading_pair=request.trading_pair,
+                local_status="start_failed",
+                remote_confirmed=False,
+                local_record_created=True,
+                remote_started=False,
+                started_at=now,
+                config=config_preview_dict,
+                hummingbot_response=sanitize_data(hummingbot_response),
+            )
             _log_paper_bot_operation(
                 operation="start_paper_bot",
                 bot_name=request.bot_name,
                 strategy_type=request.strategy_type.value,
                 trading_pair=request.trading_pair,
                 success=False,
-                error_message=api_error,
+                error_message=deploy_error,
                 config=config_preview_dict,
             )
             return PaperBotStartResponse(
-                submitted=False,
+                local_record_created=True,
+                remote_started=False,
                 remote_confirmed=False,
-                error=api_error,
+                data=start_data,
+                error=deploy_error,
             )
 
     except HummingbotPaperBotValidationError as e:
-        return PaperBotStartResponse(submitted=False, remote_confirmed=False, error=e.message)
+        return PaperBotStartResponse(
+            local_record_created=False, remote_started=False, remote_confirmed=False,
+            error=e.message,
+        )
     except Exception as e:
         return PaperBotStartResponse(
-            submitted=False,
-            remote_confirmed=False,
+            local_record_created=False, remote_started=False, remote_confirmed=False,
             error=f"启动 Paper Bot 时发生未知错误: {str(e)}",
         )
 

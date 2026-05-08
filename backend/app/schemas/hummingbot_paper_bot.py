@@ -106,13 +106,16 @@ class PaperBotStartData(BaseModel):
     strategy_type: str
     trading_pair: str
     local_status: str = Field(
-        description=(
-            "本地状态: created=已创建本地记录, submitted=已提交到 Hummingbot API, "
-            "starting=正在启动, running=远端已确认运行, stopped=已停止, error=错误"
-        )
+        description="本地状态: submitted=已提交/待对账, start_failed=启动失败, running=远端已确认"
     )
     remote_confirmed: bool = Field(
-        description="Hummingbot API 是否已确认该 Bot 真正运行"
+        description="Hummingbot API 是否已确认该 Bot 真正在运行"
+    )
+    local_record_created: bool = Field(
+        description="QuantAgent 本地记录是否已创建"
+    )
+    remote_started: bool = Field(
+        description="Hummingbot API 是否已处理启动请求"
     )
     hummingbot_bot_id: Optional[str] = Field(
         None,
@@ -127,17 +130,15 @@ class PaperBotStartResponse(BaseModel):
     """
     Paper Bot 启动响应
 
-    关键设计：
-    - submitted: 是否已提交到 Hummingbot API（不等于 running）
-    - remote_confirmed: Hummingbot API 是否已确认 Bot 在运行
-    - 如果 remote_confirmed=False，说明只是本地记录，远端未确认
+    关键字段：
+    - local_record_created: QuantAgent 本地记录是否已创建
+    - remote_started: Hummingbot API 是否已处理启动请求（但不一定成功）
+    - remote_confirmed: Hummingbot API 是否确认 Bot 真正在运行（需对账）
+    - local_status: submitted=已提交/待对账, start_failed=启动失败
     """
-    submitted: bool = Field(
-        description="是否已提交到 Hummingbot API（但不一定成功运行）"
-    )
-    remote_confirmed: bool = Field(
-        description="Hummingbot API 是否确认该 Bot 已真正运行"
-    )
+    local_record_created: bool = Field(description="QuantAgent 本地记录是否已创建")
+    remote_started: bool = Field(description="Hummingbot API 是否已处理启动请求")
+    remote_confirmed: bool = Field(description="Hummingbot API 是否确认 Bot 真正在运行")
     source: str = "quantagent"
     mode: str = "paper"
     live_trading: bool = False
@@ -187,7 +188,10 @@ class PaperBotRecord(BaseModel):
     live_trading: bool = False
     testnet: bool = False
     # 状态字段
-    local_status: str = "created"
+    local_status: str = Field(
+        default="created",
+        description="QuantAgent 本地状态: created/submitted/start_failed/running/stopped/error"
+    )
     remote_status: str = "not_detected"
     # 对账信息
     matched_remote_bot: bool = False
