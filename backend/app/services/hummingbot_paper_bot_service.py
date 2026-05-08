@@ -437,11 +437,8 @@ async def _create_controller_config(
             "limit_price": _estimate_start_price(trading_pair),
             "leverage": 20,
             "position_mode": "HEDGE",
+            "side": 1,
         }
-        if request.stop_loss_pct:
-            config_payload["stop_loss_pct"] = request.stop_loss_pct
-        if request.take_profit_pct:
-            config_payload["take_profit_pct"] = request.take_profit_pct
 
     # position_executor 使用 pmm controller
     elif strategy == "position_executor":
