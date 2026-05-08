@@ -87,7 +87,8 @@ interface PaperBotPreviewResponse {
 }
 
 interface PaperBotStartResponse {
-  started: boolean;
+  submitted: boolean;
+  remote_confirmed: boolean;
   source: string;
   mode: string;
   live_trading: boolean;
@@ -97,7 +98,9 @@ interface PaperBotStartResponse {
     bot_name: string;
     strategy_type: string;
     trading_pair: string;
-    status: string;
+    local_status: string;
+    remote_confirmed: boolean;
+    hummingbot_bot_id?: string;
     started_at: string;
     hummingbot_response?: Record<string, unknown>;
     config?: Record<string, unknown>;
@@ -128,12 +131,15 @@ interface PaperBot {
   mode: string;
   live_trading: boolean;
   testnet: boolean;
-  status: string;
+  local_status: string;
+  remote_status: string;
+  matched_remote_bot: boolean;
+  matched_by: string;
+  hummingbot_bot_id?: string;
   started_at: string;
   runtime_seconds: number;
-  source: string;
-  config?: Record<string, unknown>;
   last_error?: string;
+  config?: Record<string, unknown>;
   hummingbot_status_raw?: Record<string, unknown>;
 }
 
@@ -371,6 +377,49 @@ export default function HummingbotPage() {
     }
   }, []);
 
+  const handleStopBot = useCallback(async () => {
+    if (!selectedPaperBot) return;
+
+    setStopping(true);
+    setStopResult(null);
+
+    try {
+      const response = await fetch(`/api/v1/hummingbot/paper-bots/${selectedPaperBot.paper_bot_id}/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+
+      const result = await response.json();
+      setStopResult(result);
+
+      if (result.stopped) {
+        await fetchPaperBots();
+        if (selectedPaperBot) {
+          await fetchPaperBotDetail(selectedPaperBot.paper_bot_id);
+          await fetchPaperBotOrders(selectedPaperBot.paper_bot_id);
+          await fetchPaperBotPositions(selectedPaperBot.paper_bot_id);
+          await fetchPaperBotPortfolio(selectedPaperBot.paper_bot_id);
+          await fetchPaperBotLogs(selectedPaperBot.paper_bot_id);
+        }
+      }
+    } catch (err) {
+      setStopResult({
+        stopped: false,
+        source: "quantagent",
+        mode: "paper",
+        live_trading: false,
+        testnet: false,
+        data: null,
+        error: `请求失败: ${err instanceof Error ? err.message : "网络错误"}`,
+        timestamp: new Date().toISOString(),
+      });
+    } finally {
+      setStopping(false);
+      setShowStopDialog(false);
+    }
+  }, [selectedPaperBot, fetchPaperBots, fetchPaperBotDetail, fetchPaperBotOrders, fetchPaperBotPositions, fetchPaperBotPortfolio, fetchPaperBotLogs]);
+
   // 初始加载 Paper Bots
   useEffect(() => {
     fetchPaperBots();
@@ -440,46 +489,47 @@ export default function HummingbotPage() {
     return [];
   };
 
-  // 辅助函数：获取 bots 数量（兼容新格式）
+  // 辅助函数：获取真实 Bot 数量（只统计 active_bots + disconnected_bots）
   const getBotsCount = (data: unknown): number => {
     if (!data) return 0;
-
-    // 兼容新格式：{ source, bots, containers_fallback }
     const d = data as Record<string, unknown>;
 
-    // 如果有 containers_fallback，返回其中的容器数量
+    // 优先使用 containers_fallback（Docker 容器降级方案）
     if (d.containers_fallback) {
       const cf = d.containers_fallback as Record<string, unknown>;
       if (cf.total !== undefined) return cf.total as number;
       if (Array.isArray(cf.containers)) return cf.containers.length;
     }
 
-    // 如果有 bots 数据
+    // 尝试从 bots 对象中提取 active_bots 和 disconnected_bots
     if (d.bots) {
       const bots = d.bots;
+
+      // 如果直接是数组（旧格式兼容），直接返回长度
       if (Array.isArray(bots)) return bots.length;
+
+      // 如果是对象，检查是否有 active_bots 或 disconnected_bots
       if (typeof bots === "object") {
-        const keys = Object.keys(bots);
-        if (keys.length > 0) {
-          const firstValue = (bots as Record<string, unknown>)[keys[0]];
-          if (Array.isArray(firstValue)) return firstValue.length;
-          return keys.length;
-        }
+        const botsObj = bots as Record<string, unknown>;
+
+        // 统计 active_bots 和 disconnected_bots 的长度
+        let count = 0;
+        const activeBots = botsObj.active_bots;
+        const disconnectedBots = botsObj.disconnected_bots;
+
+        if (Array.isArray(activeBots)) count += activeBots.length;
+        if (Array.isArray(disconnectedBots)) count += disconnectedBots.length;
+
+        if (count > 0) return count;
+
+        // 如果既没有 active_bots 也没有 disconnected_bots，说明不是 Bot 数据
+        // 不再把 broker_host、client_state 等元数字段算作 Bot 数量
+        // 这种情况返回 0，让卡片正确显示"暂无运行中的 Bot"
       }
     }
 
-    // 兼容旧格式（直接是数组）
+    // 旧格式兼容：直接是数组
     if (Array.isArray(data)) return data.length;
-
-    // 兼容旧格式（是对象但没有 containers_fallback）
-    if (typeof data === "object") {
-      const keys = Object.keys(data);
-      if (keys.length > 0) {
-        const firstValue = (data as Record<string, unknown>)[keys[0]];
-        if (Array.isArray(firstValue)) return firstValue.length;
-        return keys.length;
-      }
-    }
 
     return 0;
   };
@@ -566,15 +616,15 @@ export default function HummingbotPage() {
         <div className="mb-6 p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
           <div className="text-sm text-amber-300">
-            <p className="font-semibold">当前页面为 Hummingbot API 只读集成测试页，不执行实盘交易操作。</p>
+            <p className="font-semibold">当前页面为 Hummingbot Paper Bot 模拟交易页面，使用虚拟资金，不执行实盘交易。</p>
             <p className="text-amber-400/70 mt-1 text-xs">
-              本模块仅用于查看连接状态和只读数据，不支持下单、撤单、启动/停止 bot 等操作。
+              仅支持 Paper Bot 启动/停止，不支持下单、撤单（模拟 Bot 由前端记录，真实 Bot 由 Hummingbot 管理）。
             </p>
           </div>
         </div>
 
         {/* Paper Bot Configuration Section */}
-        <PaperBotSection />
+        <PaperBotSection onStartSuccess={fetchPaperBots} />
 
         {/* Paper Bot Monitor Section */}
         <PaperBotMonitorSection
@@ -1284,7 +1334,11 @@ export default function HummingbotPage() {
 
 // ── Paper Bot Section Component ──────────────────────────────────────────────────
 
-function PaperBotSection() {
+interface PaperBotSectionProps {
+  onStartSuccess?: () => void;
+}
+
+function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
   const [formData, setFormData] = useState<PaperBotFormData>({
     bot_name: "",
     strategy_type: "grid",
@@ -1381,51 +1435,6 @@ function PaperBotSection() {
     }
   };
 
-  const handleStopBot = async () => {
-    if (!selectedPaperBot) return;
-
-    setStopping(true);
-    setStopResult(null);
-
-    try {
-      const response = await fetch(`/api/v1/hummingbot/paper-bots/${selectedPaperBot.paper_bot_id}/stop`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirm: true }),
-      });
-
-      const result = await response.json();
-      setStopResult(result);
-
-      // 如果停止成功，刷新 Paper Bot 列表和详情
-      if (result.stopped) {
-        // 刷新 Paper Bot 列表
-        await fetchPaperBots();
-
-        // 重新获取详情
-        await fetchPaperBotDetail(selectedPaperBot.paper_bot_id);
-        await fetchPaperBotOrders(selectedPaperBot.paper_bot_id);
-        await fetchPaperBotPositions(selectedPaperBot.paper_bot_id);
-        await fetchPaperBotPortfolio(selectedPaperBot.paper_bot_id);
-        await fetchPaperBotLogs(selectedPaperBot.paper_bot_id);
-      }
-    } catch (err) {
-      setStopResult({
-        stopped: false,
-        source: "quantagent",
-        mode: "paper",
-        live_trading: false,
-        testnet: false,
-        data: null,
-        error: `请求失败: ${err instanceof Error ? err.message : "网络错误"}`,
-        timestamp: new Date().toISOString(),
-      });
-    } finally {
-      setStopping(false);
-      setShowStopDialog(false);
-    }
-  };
-
   const handleStartBot = async () => {
     setStarting(true);
     setStartResult(null);
@@ -1439,6 +1448,11 @@ function PaperBotSection() {
 
       const result = await response.json();
       setStartResult(result);
+
+      // 启动成功后通知父组件刷新 Paper Bot 列表
+      if (result.started && onStartSuccess) {
+        onStartSuccess();
+      }
     } catch (err) {
       setStartResult({
         started: false,
@@ -1467,7 +1481,7 @@ function PaperBotSection() {
           创建 Hummingbot Paper Bot
         </h2>
         <p className="text-slate-400 text-xs mt-1 ml-10">
-          当前仅支持 Paper Bot 配置预览，使用虚拟资金模拟运行，不会启动 Bot，不会执行真实交易。
+          生成配置预览后可启动 Paper Bot，使用虚拟资金模拟运行，不执行真实交易。
         </p>
       </div>
 
@@ -1478,7 +1492,7 @@ function PaperBotSection() {
           <div className="text-sm text-green-300">
             <p className="font-semibold">安全提示</p>
             <ul className="mt-2 space-y-1 text-green-400/70 text-xs">
-              <li>• 不启动 Bot</li>
+              <li>• 使用虚拟资金模拟运行</li>
               <li>• 不执行真实下单</li>
               <li>• 不连接真实交易所账户</li>
               <li>• 不需要 API Key</li>
@@ -1865,21 +1879,28 @@ function PaperBotSection() {
       {/* Start Result */}
       {startResult && (
         <Card className={`bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50 ${
-          startResult.started ? "border-green-500/30" : "border-red-500/30"
+          startResult.submitted ? "border-blue-500/30" : "border-red-500/30"
         }`}>
           <CardHeader className="pb-2">
             <CardTitle className="text-slate-100 text-base flex items-center gap-2">
-              <Play className={`w-4 h-4 ${startResult.started ? "text-green-400" : "text-red-400"}`} />
+              <Play className={`w-4 h-4 ${startResult.submitted ? "text-blue-400" : "text-red-400"}`} />
               Paper Bot 启动结果
-              {startResult.started ? (
+              {startResult.submitted && !startResult.remote_confirmed && (
+                <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20 ml-2">
+                  <CheckCircle className="w-3 h-3 mr-1" />
+                  已提交（待对账）
+                </Badge>
+              )}
+              {startResult.submitted && startResult.remote_confirmed && (
                 <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20 ml-2">
                   <CheckCircle className="w-3 h-3 mr-1" />
-                  启动成功
+                  已提交且远端已确认
                 </Badge>
-              ) : (
+              )}
+              {!startResult.submitted && (
                 <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/20 ml-2">
                   <XCircle className="w-3 h-3 mr-1" />
-                  启动失败
+                  提交失败
                 </Badge>
               )}
             </CardTitle>
@@ -1919,11 +1940,24 @@ function PaperBotSection() {
                   </div>
                 </div>
 
-                {/* Status */}
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20">
-                    <Activity className="w-3 h-3 mr-1" />
-                    status: {startResult.data.status}
+                {/* Status Badges */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge
+                    variant="outline"
+                    className={
+                      startResult.data.local_status === "submitted" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
+                      "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                    }
+                  >
+                    本地状态: {startResult.data.local_status}
+                  </Badge>
+                  <Badge
+                    variant="outline"
+                    className={
+                      startResult.data.remote_confirmed ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                    }
+                  >
+                    远端已确认: {String(startResult.data.remote_confirmed)}
                   </Badge>
                   <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20">
                     mode: {startResult.mode}
@@ -1933,18 +1967,29 @@ function PaperBotSection() {
                   </Badge>
                 </div>
 
+                {/* Remote Confirmation Notice */}
+                {startResult.data.remote_confirmed ? (
+                  <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+                    <p className="text-green-300 text-xs">
+                      <span className="font-semibold">Hummingbot 已确认启动 Paper Bot。</span>
+                      该 Bot 已在 Hummingbot 远端运行。
+                    </p>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                    <p className="text-amber-300 text-xs">
+                      <span className="font-semibold">Paper Bot 本地记录已创建。</span>
+                      当前 Hummingbot API 尚未确认该 Bot 已真正运行（remote_confirmed=false）。
+                      请点击刷新按钮，通过对账检测远端状态。
+                    </p>
+                  </div>
+                )}
+
                 {/* Started At */}
                 <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                  <p className="text-slate-400 text-xs">启动时间</p>
+                  <p className="text-slate-400 text-xs">创建时间</p>
                   <p className="text-slate-100 text-xs mt-1">
                     {new Date(startResult.data.started_at).toLocaleString()}
-                  </p>
-                </div>
-
-                {/* Notice */}
-                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-                  <p className="text-amber-300 text-xs">
-                    Paper Bot 启动请求已提交。请刷新 Bots 列表查看运行状态，或检查 Hummingbot 日志。
                   </p>
                 </div>
               </div>
@@ -2082,8 +2127,8 @@ function PaperBotMonitorSection({
           ) : !paperBots?.bots || paperBots.bots.length === 0 ? (
             <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
               <Bot className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-              <p className="text-slate-400 text-sm">暂无 Hummingbot Paper Bot。</p>
-              <p className="text-slate-500 text-xs mt-1">请先在上方创建并启动 Paper Bot。</p>
+              <p className="text-slate-400 text-sm">当前还没有真正运行的 Hummingbot Paper Bot。</p>
+              <p className="text-slate-500 text-xs mt-1">请先生成配置预览，并在下一步启动 Paper Bot。</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -2093,8 +2138,8 @@ function PaperBotMonitorSection({
                     <th className="text-left py-2 px-3 text-slate-400">Bot 名称</th>
                     <th className="text-left py-2 px-3 text-slate-400">策略类型</th>
                     <th className="text-left py-2 px-3 text-slate-400">交易对</th>
-                    <th className="text-left py-2 px-3 text-slate-400">模式</th>
-                    <th className="text-left py-2 px-3 text-slate-400">状态</th>
+                    <th className="text-left py-2 px-3 text-slate-400">本地状态</th>
+                    <th className="text-left py-2 px-3 text-slate-400">远端状态</th>
                     <th className="text-left py-2 px-3 text-slate-400">运行时长</th>
                     <th className="text-left py-2 px-3 text-slate-400">启动时间</th>
                     <th className="text-left py-2 px-3 text-slate-400">操作</th>
@@ -2113,22 +2158,35 @@ function PaperBotMonitorSection({
                       <td className="py-2 px-3 text-slate-300">{bot.strategy_type}</td>
                       <td className="py-2 px-3 text-slate-300">{bot.trading_pair}</td>
                       <td className="py-2 px-3">
-                        <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20">
-                          {bot.mode}
+                        <Badge
+                          variant="outline"
+                          className={
+                            bot.local_status === "running" ? "bg-green-500/10 text-green-400 border-green-500/20" :
+                            bot.local_status === "starting" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
+                            bot.local_status === "submitted" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
+                            bot.local_status === "stopped" ? "bg-slate-500/10 text-slate-400 border-slate-500/20" :
+                            bot.local_status === "error" ? "bg-red-500/10 text-red-400 border-red-500/20" :
+                            "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                          }
+                        >
+                          {bot.local_status}
                         </Badge>
                       </td>
                       <td className="py-2 px-3">
                         <Badge
                           variant="outline"
                           className={
-                            bot.status === "running" ? "bg-green-500/10 text-green-400 border-green-500/20" :
-                            bot.status === "starting" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
-                            bot.status === "stopped" ? "bg-slate-500/10 text-slate-400 border-slate-500/20" :
-                            bot.status === "error" ? "bg-red-500/10 text-red-400 border-red-500/20" :
+                            bot.remote_status === "running" ? "bg-green-500/10 text-green-400 border-green-500/20" :
+                            bot.remote_status === "not_detected" ? "bg-slate-500/10 text-slate-400 border-slate-500/20" :
                             "bg-amber-500/10 text-amber-400 border-amber-500/20"
                           }
                         >
-                          {bot.status}
+                          {bot.remote_status === "running" ? "已检测到" :
+                           bot.remote_status === "not_detected" ? "未检测到" :
+                           bot.remote_status}
+                          {bot.matched_by && bot.matched_by !== "none" && (
+                            <span className="text-slate-400 ml-1">via {bot.matched_by}</span>
+                          )}
                         </Badge>
                       </td>
                       <td className="py-2 px-3 text-slate-300">
@@ -2213,21 +2271,60 @@ function PaperBotMonitorSection({
                     <Badge
                       variant="outline"
                       className={
-                        (paperBotDetail as Record<string, unknown>)?.status === "running" ? "bg-green-500/10 text-green-400 border-green-500/20" :
-                        (paperBotDetail as Record<string, unknown>)?.status === "starting" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
+                        (paperBotDetail as Record<string, unknown>)?.local_status === "running" ? "bg-green-500/10 text-green-400 border-green-500/20" :
+                        (paperBotDetail as Record<string, unknown>)?.local_status === "starting" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
+                        (paperBotDetail as Record<string, unknown>)?.local_status === "submitted" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
+                        (paperBotDetail as Record<string, unknown>)?.local_status === "stopped" ? "bg-slate-500/10 text-slate-400 border-slate-500/20" :
+                        "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                      }
+                    >
+                      本地状态: {(paperBotDetail as Record<string, unknown>)?.local_status as string || "-"}
+                    </Badge>
+                    <Badge
+                      variant="outline"
+                      className={
+                        (paperBotDetail as Record<string, unknown>)?.remote_status === "running" ? "bg-green-500/10 text-green-400 border-green-500/20" :
                         "bg-slate-500/10 text-slate-400 border-slate-500/20"
                       }
                     >
-                      status: {(paperBotDetail as Record<string, unknown>)?.status as string || "-"}
+                      远端状态: {(paperBotDetail as Record<string, unknown>)?.remote_status as string || "-"}
                     </Badge>
                   </div>
 
-                  {/* 停止按钮 - 仅 Paper Bot 且 running/starting 时显示 */}
+                  {/* 对账信息 */}
+                  <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                    <p className="text-slate-400 text-xs mb-2 font-semibold">对账信息</p>
+                    <div className="grid grid-cols-2 gap-2 text-[10px]">
+                      <div>
+                        <span className="text-slate-500">matched_remote_bot: </span>
+                        <span className={(paperBotDetail as Record<string, unknown>)?.matched_remote_bot ? "text-green-400" : "text-slate-400"}>
+                          {String((paperBotDetail as Record<string, unknown>)?.matched_remote_bot ?? false)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">matched_by: </span>
+                        <span className="text-slate-300">{(paperBotDetail as Record<string, unknown>)?.matched_by as string || "-"}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">hummingbot_bot_id: </span>
+                        <span className="text-slate-300">{(paperBotDetail as Record<string, unknown>)?.hummingbot_bot_id as string || "-"}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">last_remote_check: </span>
+                        <span className="text-slate-300">
+                          {(paperBotDetail as Record<string, unknown>)?.last_remote_check_at
+                            ? new Date((paperBotDetail as Record<string, unknown>)?.last_remote_check_at as string).toLocaleTimeString()
+                            : "-"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 停止按钮 - 仅本地状态为 submitted/starting/running 时显示 */}
                   {(paperBotDetail as Record<string, unknown>)?.mode === "paper" &&
                    (paperBotDetail as Record<string, unknown>)?.live_trading === false &&
                    (paperBotDetail as Record<string, unknown>)?.testnet === false &&
-                   ((paperBotDetail as Record<string, unknown>)?.status === "running" ||
-                    (paperBotDetail as Record<string, unknown>)?.status === "starting") && (
+                   ["submitted", "starting", "running"].includes((paperBotDetail as Record<string, unknown>)?.local_status as string) && (
                     <div className="mt-3">
                       <Button
                         size="sm"
@@ -2302,7 +2399,11 @@ function PaperBotMonitorSection({
               {!paperBotOrders?.data?.orders || paperBotOrders.data.orders.length === 0 ? (
                 <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
                   <ShoppingCart className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                  <p className="text-slate-400 text-sm">暂无 Paper Bot 模拟订单。</p>
+                  <p className="text-slate-400 text-sm">
+                    {paperBotOrders?.data?.filter_note
+                      ? paperBotOrders.data.filter_note
+                      : "当前 Paper Bot 尚未被 Hummingbot 远端确认运行，因此暂无模拟订单。"}
+                  </p>
                 </div>
               ) : (
                 <div className="overflow-x-auto max-h-60">
@@ -2358,7 +2459,11 @@ function PaperBotMonitorSection({
               {!paperBotPositions?.data?.positions || paperBotPositions.data.positions.length === 0 ? (
                 <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
                   <Wallet className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                  <p className="text-slate-400 text-sm">暂无 Paper Bot 模拟持仓。</p>
+                  <p className="text-slate-400 text-sm">
+                    {paperBotPositions?.data?.filter_note
+                      ? paperBotPositions.data.filter_note
+                      : "当前 Paper Bot 尚未被 Hummingbot 远端确认运行，因此暂无模拟持仓。"}
+                  </p>
                 </div>
               ) : (
                 <div className="overflow-x-auto max-h-60">

@@ -523,7 +523,8 @@ async def start_paper_bot_endpoint(
 
     except Exception as e:
         return PaperBotStartResponse(
-            started=False,
+            submitted=False,
+            remote_confirmed=False,
             error=f"启动 Paper Bot 时发生错误: {str(e)}",
         )
 
