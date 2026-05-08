@@ -618,9 +618,19 @@ async def _verify_bot_in_active_list(
     bot_name: str,
 ) -> tuple[bool, Optional[Dict[str, Any]]]:
     """
-    验证 Bot 是否在 Hummingbot active_bots 列表中。
+    验证 Bot 是否在 Hummingbot 活跃列表中。
+
+    检查两个端点：
+    1. /bot-orchestration/status — Docker 容器级别的运行状态
+    2. /bot-orchestration/bot-runs — Bot 部署记录（包含 DEPLOYED 状态）
+
     返回 (found, matching_bot_data)
+    只有当 Bot 在 bot-runs 中存在（deployment_status=DEPLOYED）时才认为真正启动成功。
     """
+    inst_lower = instance_name.lower()
+    bot_lower = bot_name.lower()
+
+    # ── Step 1: 查 /bot-orchestration/status（Docker 容器级别）────────────────
     try:
         status_resp = await _call_hummingbot_api("GET", "/bot-orchestration/status", timeout=10.0)
         data = status_resp.get("data", {})
@@ -633,15 +643,11 @@ async def _verify_bot_in_active_list(
             all_bots = list(active) + list(disconnected)
             for bot in all_bots:
                 name = str(bot.get("name") or bot.get("instance_name") or "").lower()
-                inst_lower = instance_name.lower()
-                bot_lower = bot_name.lower()
                 if inst_lower in name or bot_lower in name or name in inst_lower:
                     matched_bot = sanitize_data(bot)
 
         # 新格式: data 是 dict，key 是 instance_name
         if not matched_bot and isinstance(data, dict):
-            inst_lower = instance_name.lower()
-            bot_lower = bot_name.lower()
             for key, bot_info in data.items():
                 key_lower = key.lower()
                 if inst_lower in key_lower or bot_lower in key_lower or key_lower in inst_lower:
@@ -649,10 +655,36 @@ async def _verify_bot_in_active_list(
 
         if matched_bot:
             return True, matched_bot
-        return False, None
 
     except Exception:
-        return False, None
+        pass
+
+    # ── Step 2: 查 /bot-orchestration/bot-runs（Bot 部署记录）───────────────
+    # bot-runs 返回 Bot 的部署历史，包含 deployment_status=DEPLOYED
+    # 这才是真正验证 Bot 部署成功的关键
+    try:
+        runs_resp = await _call_hummingbot_api("GET", "/bot-orchestration/bot-runs", timeout=10.0)
+        runs_data = runs_resp.get("data", [])
+        if not isinstance(runs_data, list):
+            runs_data = runs_resp.get("data", {}).get("data", [])
+
+        for run in runs_data:
+            run_instance = str(run.get("instance_name") or run.get("bot_name") or "").lower()
+            run_name = str(run.get("bot_name") or "").lower()
+            deployment_status = str(run.get("deployment_status") or "").upper()
+            run_status = str(run.get("run_status") or "").upper()
+
+            # 匹配：instance_name 或 bot_name 包含我们的 ID
+            if (inst_lower in run_instance or bot_lower in run_name
+                    or run_instance in inst_lower or run_name in bot_lower):
+                # Bot 已部署（DEPLOYED）才算真正启动成功
+                if deployment_status == "DEPLOYED":
+                    return True, sanitize_data(run)
+
+    except Exception:
+        pass
+
+    return False, None
 
 
 async def start_paper_bot(
@@ -978,7 +1010,31 @@ async def start_paper_bot(
 # ── v1.2.3: 查询 Paper Bot 列表（对账）────────────────────────────────────────
 
 async def _fetch_hummingbot_active_bots() -> tuple[List[Dict], str]:
-    """从 Hummingbot API 获取 active bots（兼容旧/新格式）"""
+    """
+    从 Hummingbot API 获取活跃 bots（兼容旧/新格式 + bot-runs）。
+
+    优先级：
+    1. /bot-orchestration/bot-runs — 返回 DEPLOYED 状态的 Bot
+    2. /bot-orchestration/status — Docker 容器级别状态
+    """
+    # 优先：查 bot-runs（包含 DEPLOYED 状态）
+    try:
+        result = await _call_hummingbot_api("GET", "/bot-orchestration/bot-runs")
+        runs_data = result.get("data", [])
+        if not isinstance(runs_data, list):
+            runs_data = result.get("data", {}).get("data", [])
+        if isinstance(runs_data, list) and len(runs_data) > 0:
+            # 只取 DEPLOYED 状态的
+            deployed = [
+                r for r in runs_data
+                if str(r.get("deployment_status", "")).upper() == "DEPLOYED"
+            ]
+            if deployed:
+                return sanitize_data(deployed), "bot_runs"
+    except Exception as e:
+        logger.warning(f"Failed to fetch bot-runs: {e}")
+
+    # 备选：查 /bot-orchestration/status
     try:
         result = await _call_hummingbot_api("GET", "/bot-orchestration/status")
         bots = result.get("data", {}) or {}
@@ -1004,6 +1060,7 @@ async def _fetch_hummingbot_active_bots() -> tuple[List[Dict], str]:
             return sanitize_data(bots), "bot_api"
     except Exception as e:
         logger.warning(f"Failed to fetch active bots: {e}")
+
     return [], "none"
 
 
@@ -1015,18 +1072,46 @@ async def get_paper_bots_list() -> Dict[str, Any]:
 
     remote_bot_map: Dict[str, Dict] = {}
     for bot in remote_bots:
-        name = str(bot.get("name") or bot.get("instance_name") or "").lower()
-        if name:
-            remote_bot_map[name] = bot
+        # bot-runs 返回 instance_name 和 bot_name
+        instance_name = str(bot.get("instance_name") or bot.get("bot_name") or "").lower()
+        if instance_name:
+            remote_bot_map[instance_name] = bot
+
+    # 构建一个宽松的匹配 map（包含匹配，用于 bot_name 匹配）
+    remote_bot_by_name: Dict[str, Dict] = {}
+    for bot in remote_bots:
+        name = str(bot.get("bot_name") or "").lower()
+        if name and name not in remote_bot_by_name:
+            remote_bot_by_name[name] = bot
 
     bots = []
     for paper_bot_id, record in local_records.items():
         bot_name = record.get("bot_name", "").lower()
-        matched = paper_bot_id.lower() in remote_bot_map or bot_name in remote_bot_map
-        if matched:
-            matched_hb_bot = remote_bot_map.get(paper_bot_id.lower()) or remote_bot_map.get(bot_name)
+
+        # 宽松匹配：remote instance_name 包含 paper_bot_id
+        matched_hb_bot: Optional[Dict[str, Any]] = None
+        matched_key: Optional[str] = None
+
+        paper_id_lower = paper_bot_id.lower()
+        for remote_name, bot_info in remote_bot_map.items():
+            if paper_id_lower in remote_name or remote_name in paper_id_lower:
+                matched_hb_bot = bot_info
+                matched_key = remote_name
+                break
+
+        # 如果没匹配，尝试用 bot_name 匹配
+        if not matched_hb_bot:
+            for name, bot_info in remote_bot_by_name.items():
+                if bot_name in name or name in bot_name:
+                    matched_hb_bot = bot_info
+                    matched_key = name
+                    break
+
+        if matched_hb_bot:
             hummingbot_bot_id = (
-                matched_hb_bot.get("name") or matched_hb_bot.get("instance_name") or None
+                matched_hb_bot.get("instance_name")
+                or matched_hb_bot.get("bot_name")
+                or matched_key
             )
             update_paper_bot_fields(
                 paper_bot_id,
