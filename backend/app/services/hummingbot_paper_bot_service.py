@@ -422,6 +422,7 @@ async def _create_controller_config(
         # BTC-USDT → BTC-USDT (binance_perpetual needs uppercase)
         connector_name = _get_connector_for_pair(trading_pair)
         config_payload: Dict[str, Any] = {
+            "id": config_name,
             "controller_type": controller_type,
             "controller_name": controller_name,
             "connector_name": connector_name,
@@ -448,6 +449,7 @@ async def _create_controller_config(
         controller_name = "pmm"
         connector_name = _get_connector_for_pair(trading_pair)
         config_payload = {
+            "id": config_name,
             "controller_type": controller_type,
             "controller_name": controller_name,
             "connector_name": connector_name,
@@ -517,22 +519,33 @@ async def _verify_bot_in_active_list(
     try:
         status_resp = await _call_hummingbot_api("GET", "/bot-orchestration/status", timeout=10.0)
         data = status_resp.get("data", {})
-        if isinstance(data, dict):
+        matched_bot: Optional[Dict[str, Any]] = None
+
+        # 旧格式: active_bots / disconnected_bots 是 list
+        if isinstance(data, dict) and ("active_bots" in data or "disconnected_bots" in data):
             active = data.get("active_bots", []) or []
             disconnected = data.get("disconnected_bots", []) or []
-        elif isinstance(data, list):
-            active = data
-        else:
-            active = []
+            all_bots = list(active) + list(disconnected)
+            for bot in all_bots:
+                name = str(bot.get("name") or bot.get("instance_name") or "").lower()
+                inst_lower = instance_name.lower()
+                bot_lower = bot_name.lower()
+                if inst_lower in name or bot_lower in name or name in inst_lower:
+                    matched_bot = sanitize_data(bot)
 
-        instance_name_lower = instance_name.lower()
-        bot_name_lower = bot_name.lower()
+        # 新格式: data 是 dict，key 是 instance_name
+        if not matched_bot and isinstance(data, dict):
+            inst_lower = instance_name.lower()
+            bot_lower = bot_name.lower()
+            for key, bot_info in data.items():
+                key_lower = key.lower()
+                if inst_lower in key_lower or bot_lower in key_lower or key_lower in inst_lower:
+                    matched_bot = sanitize_data(bot_info)
 
-        for bot in active:
-            name = str(bot.get("name") or bot.get("instance_name") or "").lower()
-            if instance_name_lower in name or bot_name_lower in name or name in instance_name_lower:
-                return True, sanitize_data(bot)
+        if matched_bot:
+            return True, matched_bot
         return False, None
+
     except Exception:
         return False, None
 
@@ -805,14 +818,28 @@ async def start_paper_bot(
 # ── v1.2.3: 查询 Paper Bot 列表（对账）────────────────────────────────────────
 
 async def _fetch_hummingbot_active_bots() -> tuple[List[Dict], str]:
-    """从 Hummingbot API 获取 active bots"""
+    """从 Hummingbot API 获取 active bots（兼容旧/新格式）"""
     try:
         result = await _call_hummingbot_api("GET", "/bot-orchestration/status")
         bots = result.get("data", {}) or {}
-        if isinstance(bots, dict):
+
+        # 旧格式: active_bots / disconnected_bots 是 list
+        if isinstance(bots, dict) and ("active_bots" in bots or "disconnected_bots" in bots):
             active = bots.get("active_bots", []) or []
             disconnected = bots.get("disconnected_bots", []) or []
-            bots = list(active) + list(disconnected)
+            bots_list = list(active) + list(disconnected)
+            return sanitize_data(bots_list), "bot_api"
+
+        # 新格式: data 是 dict，key 是 instance_name
+        if isinstance(bots, dict):
+            bots_list = [
+                {"instance_name": k, **sanitize_data(v)}
+                for k, v in bots.items()
+                if isinstance(v, dict)
+            ]
+            if bots_list:
+                return bots_list, "bot_api_dict_keys"
+
         if isinstance(bots, list):
             return sanitize_data(bots), "bot_api"
     except Exception as e:
