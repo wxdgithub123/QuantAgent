@@ -114,16 +114,18 @@ interface PaperBotStartResponse {
 
 interface PaperBotFormData {
   bot_name: string;
+  connector: string;
   strategy_type: string;
+  signal_type: string;
+  timeframe: string;
   trading_pair: string;
   paper_initial_balance: number;
   order_amount: number;
-  max_runtime_minutes: number;
-  spread_pct: number;
-  grid_spacing_pct: number;
-  grid_levels: number;
   stop_loss_pct: number;
   take_profit_pct: number;
+  cooldown_minutes: number;
+  max_trades_per_day: number;
+  max_runtime_minutes: number;
 }
 
 interface PaperBot {
@@ -1342,18 +1344,28 @@ interface PaperBotSectionProps {
 }
 
 function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
+  // Paper Connector 状态
+  const [paperConnectors, setPaperConnectors] = useState<{
+    paper_connectors: string[];
+    available: boolean;
+    message?: string;
+  } | null>(null);
+  const [paperConnectorsLoading, setPaperConnectorsLoading] = useState(false);
+
   const [formData, setFormData] = useState<PaperBotFormData>({
     bot_name: "",
-    strategy_type: "grid",
+    connector: "binance",
+    strategy_type: "low_frequency_signal",
+    signal_type: "bollinger",
+    timeframe: "1h",
     trading_pair: "BTC-USDT",
     paper_initial_balance: 10000,
     order_amount: 100,
+    stop_loss_pct: 5.0,
+    take_profit_pct: 10.0,
+    cooldown_minutes: 60,
+    max_trades_per_day: 3,
     max_runtime_minutes: 120,
-    spread_pct: 0.5,
-    grid_spacing_pct: 0.5,
-    grid_levels: 20,
-    stop_loss_pct: 3,
-    take_profit_pct: 5,
   });
 
   const [previewResult, setPreviewResult] = useState<PaperBotPreviewResponse | null>(null);
@@ -1363,6 +1375,26 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [copied, setCopied] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  // 获取 Paper Connector 可用列表
+  const fetchPaperConnectors = useCallback(async () => {
+    setPaperConnectorsLoading(true);
+    try {
+      const response = await fetch("/api/v1/hummingbot/paper-connectors");
+      if (response.ok) {
+        const data = await response.json();
+        setPaperConnectors(data.data || { paper_connectors: [], available: false, message: data.data?.message });
+      }
+    } catch {
+      setPaperConnectors({ paper_connectors: [], available: false, message: "获取失败" });
+    } finally {
+      setPaperConnectorsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchPaperConnectors();
+  }, [fetchPaperConnectors]);
 
   const updateField = (field: keyof PaperBotFormData, value: string | number) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -1385,14 +1417,12 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
       newErrors.bot_name = "只能包含字母、数字、下划线和中划线";
     }
 
-    if (formData.order_amount > formData.paper_initial_balance) {
-      newErrors.order_amount = "单笔订单金额不能大于初始资金";
+    if (!formData.connector) {
+      newErrors.connector = "请选择 connector";
     }
 
-    if (formData.strategy_type === "grid") {
-      if (!formData.grid_spacing_pct || formData.grid_spacing_pct <= 0) {
-        newErrors.grid_spacing_pct = "网格间距必须大于 0";
-      }
+    if (formData.order_amount > formData.paper_initial_balance) {
+      newErrors.order_amount = "单笔订单金额不能大于初始资金";
     }
 
     setErrors(newErrors);
@@ -1481,10 +1511,10 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
           <div className="w-8 h-8 bg-green-500/10 rounded-lg flex items-center justify-center border border-green-500/20">
             <Play className="w-4 h-4 text-green-400" />
           </div>
-          创建 Hummingbot Paper Bot
+          低频 Paper Bot 策略验证
         </h2>
         <p className="text-slate-400 text-xs mt-1 ml-10">
-          生成配置预览后可启动 Paper Bot，使用虚拟资金模拟运行，不执行真实交易。
+          用于验证低频交易策略的有效性，使用虚拟资金模拟运行，不执行真实交易。
         </p>
       </div>
 
@@ -1493,14 +1523,15 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
         <div className="flex items-start gap-3">
           <ShieldCheck className="w-5 h-5 text-green-400 shrink-0 mt-0.5" />
           <div className="text-sm text-green-300">
-            <p className="font-semibold">安全提示</p>
+            <p className="font-semibold">安全边界</p>
             <ul className="mt-2 space-y-1 text-green-400/70 text-xs">
               <li>• 使用虚拟资金模拟运行</li>
               <li>• 不执行真实下单</li>
               <li>• 不连接真实交易所账户</li>
               <li>• 不需要 API Key</li>
-              <li>• 不支持 Testnet</li>
-              <li>• 不支持 Live</li>
+              <li>• 不支持 Testnet / Live</li>
+              <li>• 不支持永续合约（Perpetual Connector）</li>
+              <li>• 不进行高频挂单、撤单或做市操作</li>
             </ul>
           </div>
         </div>
@@ -1520,7 +1551,7 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
               </Label>
               <Input
                 id="bot_name"
-                placeholder="paper_grid_btc_001"
+                placeholder="paper_signal_btc_001"
                 value={formData.bot_name}
                 onChange={e => updateField("bot_name", e.target.value)}
                 className={`bg-slate-800 border-slate-700 text-slate-100 text-sm ${
@@ -1529,6 +1560,37 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
               />
               {errors.bot_name && (
                 <p className="text-red-400 text-[10px]">{errors.bot_name}</p>
+              )}
+            </div>
+
+            {/* Paper Connector - NEW */}
+            <div className="space-y-1">
+              <Label htmlFor="connector" className="text-slate-300 text-xs">
+                Connector <span className="text-red-400">*</span>
+              </Label>
+              {paperConnectorsLoading ? (
+                <div className="h-9 bg-slate-800 border border-slate-700 rounded-md flex items-center">
+                  <RefreshCw className="w-4 h-4 animate-spin text-slate-500 ml-3" />
+                </div>
+              ) : paperConnectors && !paperConnectors.available ? (
+                <div className="h-9 px-3 bg-red-500/10 border border-red-500/30 rounded-md flex items-center text-red-400 text-xs">
+                  <AlertTriangle className="w-3 h-3 mr-1 shrink-0" />
+                  {paperConnectors.message || "无可用 connector"}
+                </div>
+              ) : (
+                <select
+                  id="connector"
+                  value={formData.connector}
+                  onChange={e => updateField("connector", e.target.value)}
+                  className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                >
+                  {(paperConnectors?.paper_connectors || ["binance"]).map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              )}
+              {!paperConnectors?.available && (
+                <p className="text-orange-400 text-[10px]">无可用 paper connector</p>
               )}
             </div>
 
@@ -1543,8 +1605,41 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                 onChange={e => updateField("strategy_type", e.target.value)}
                 className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
               >
-                <option value="grid">Grid (网格交易)</option>
-                <option value="position_executor">Position Executor (仓位执行)</option>
+                <option value="low_frequency_signal">低频信号策略</option>
+                <option value="position_executor">仓位执行器</option>
+              </select>
+            </div>
+
+            {/* Signal Type */}
+            <div className="space-y-1">
+              <Label htmlFor="signal_type" className="text-slate-300 text-xs">
+                信号类型 <span className="text-red-400">*</span>
+              </Label>
+              <select
+                id="signal_type"
+                value={formData.signal_type}
+                onChange={e => updateField("signal_type", e.target.value)}
+                className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              >
+                <option value="bollinger">Bollinger Bands</option>
+                <option value="supertrend">SuperTrend</option>
+                <option value="ma_cross">MA Cross</option>
+              </select>
+            </div>
+
+            {/* Timeframe */}
+            <div className="space-y-1">
+              <Label htmlFor="timeframe" className="text-slate-300 text-xs">
+                K线周期 <span className="text-red-400">*</span>
+              </Label>
+              <select
+                id="timeframe"
+                value={formData.timeframe}
+                onChange={e => updateField("timeframe", e.target.value)}
+                className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              >
+                <option value="15m">15 分钟</option>
+                <option value="1h">1 小时</option>
               </select>
             </div>
 
@@ -1562,15 +1657,13 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                 <option value="BTC-USDT">BTC-USDT</option>
                 <option value="ETH-USDT">ETH-USDT</option>
                 <option value="SOL-USDT">SOL-USDT</option>
-                <option value="BNBUSDT">BNB-USDT</option>
-                <option value="DOGEUSDT">DOGE-USDT</option>
               </select>
             </div>
 
             {/* Paper Initial Balance */}
             <div className="space-y-1">
               <Label htmlFor="paper_initial_balance" className="text-slate-300 text-xs">
-                Paper 初始资金 <span className="text-red-400">*</span>
+                Paper 初始资金 (USDT) <span className="text-red-400">*</span>
               </Label>
               <Input
                 id="paper_initial_balance"
@@ -1581,13 +1674,12 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                 onChange={e => updateField("paper_initial_balance", Number(e.target.value))}
                 className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
               />
-              <p className="text-slate-500 text-[10px]">建议不超过 1,000,000</p>
             </div>
 
             {/* Order Amount */}
             <div className="space-y-1">
               <Label htmlFor="order_amount" className="text-slate-300 text-xs">
-                单笔订单金额 <span className="text-red-400">*</span>
+                每笔订单金额 (USDT) <span className="text-red-400">*</span>
               </Label>
               <Input
                 id="order_amount"
@@ -1602,13 +1694,79 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
               {errors.order_amount && (
                 <p className="text-red-400 text-[10px]">{errors.order_amount}</p>
               )}
-              <p className="text-slate-500 text-[10px]">建议不超过初始资金的 50%</p>
+            </div>
+
+            {/* Stop Loss */}
+            <div className="space-y-1">
+              <Label htmlFor="stop_loss_pct" className="text-slate-300 text-xs">
+                止损百分比 (%)
+              </Label>
+              <Input
+                id="stop_loss_pct"
+                type="number"
+                min={0}
+                max={50}
+                step={0.5}
+                value={formData.stop_loss_pct}
+                onChange={e => updateField("stop_loss_pct", Number(e.target.value))}
+                className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+              />
+            </div>
+
+            {/* Take Profit */}
+            <div className="space-y-1">
+              <Label htmlFor="take_profit_pct" className="text-slate-300 text-xs">
+                止盈百分比 (%)
+              </Label>
+              <Input
+                id="take_profit_pct"
+                type="number"
+                min={0}
+                max={100}
+                step={0.5}
+                value={formData.take_profit_pct}
+                onChange={e => updateField("take_profit_pct", Number(e.target.value))}
+                className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+              />
+            </div>
+
+            {/* Cooldown Minutes */}
+            <div className="space-y-1">
+              <Label htmlFor="cooldown_minutes" className="text-slate-300 text-xs">
+                最小交易间隔 (分钟)
+              </Label>
+              <Input
+                id="cooldown_minutes"
+                type="number"
+                min={5}
+                max={1440}
+                value={formData.cooldown_minutes}
+                onChange={e => updateField("cooldown_minutes", Number(e.target.value))}
+                className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+              />
+              <p className="text-slate-500 text-[10px]">默认 60 分钟，禁止高频交易</p>
+            </div>
+
+            {/* Max Trades Per Day */}
+            <div className="space-y-1">
+              <Label htmlFor="max_trades_per_day" className="text-slate-300 text-xs">
+                每日最大交易次数
+              </Label>
+              <Input
+                id="max_trades_per_day"
+                type="number"
+                min={1}
+                max={24}
+                value={formData.max_trades_per_day}
+                onChange={e => updateField("max_trades_per_day", Number(e.target.value))}
+                className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+              />
             </div>
 
             {/* Max Runtime */}
             <div className="space-y-1">
               <Label htmlFor="max_runtime_minutes" className="text-slate-300 text-xs">
-                最大运行时间 (分钟)
+                最大运行时间 (分钟) <span className="text-red-400">*</span>
               </Label>
               <Input
                 id="max_runtime_minutes"
@@ -1619,111 +1777,7 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                 onChange={e => updateField("max_runtime_minutes", Number(e.target.value))}
                 className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
               />
-              <p className="text-slate-500 text-[10px]">最大 10080 分钟 (7天)</p>
             </div>
-
-            {/* Stop Loss */}
-            <div className="space-y-1">
-              <Label htmlFor="stop_loss_pct" className="text-slate-300 text-xs">
-                止损比例 stop_loss_pct
-              </Label>
-              <Input
-                id="stop_loss_pct"
-                type="number"
-                min={0}
-                max={50}
-                step={0.1}
-                value={formData.stop_loss_pct}
-                onChange={e => updateField("stop_loss_pct", Number(e.target.value))}
-                className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
-              />
-              <p className="text-slate-500 text-[10px]">0 表示不启用止损</p>
-            </div>
-
-            {/* Take Profit */}
-            <div className="space-y-1">
-              <Label htmlFor="take_profit_pct" className="text-slate-300 text-xs">
-                止盈比例 take_profit_pct
-              </Label>
-              <Input
-                id="take_profit_pct"
-                type="number"
-                min={0}
-                max={100}
-                step={0.1}
-                value={formData.take_profit_pct}
-                onChange={e => updateField("take_profit_pct", Number(e.target.value))}
-                className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
-              />
-              <p className="text-slate-500 text-[10px]">0 表示不启用止盈</p>
-            </div>
-
-            {/* Strategy-specific fields */}
-            {formData.strategy_type === "position_executor" && (
-              <>
-                {/* Spread */}
-                <div className="space-y-1">
-                  <Label htmlFor="spread_pct" className="text-slate-300 text-xs">
-                    价差 spread_pct
-                  </Label>
-                  <Input
-                    id="spread_pct"
-                    type="number"
-                    min={0}
-                    max={20}
-                    step={0.1}
-                    value={formData.spread_pct}
-                    onChange={e => updateField("spread_pct", Number(e.target.value))}
-                    className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
-                  />
-                  <p className="text-slate-500 text-[10px]">0-20%，仅 position_executor 使用</p>
-                </div>
-              </>
-            )}
-
-            {formData.strategy_type === "grid" && (
-              <>
-                {/* Grid Spacing */}
-                <div className="space-y-1">
-                  <Label htmlFor="grid_spacing_pct" className="text-slate-300 text-xs">
-                    网格间距 grid_spacing_pct <span className="text-red-400">*</span>
-                  </Label>
-                  <Input
-                    id="grid_spacing_pct"
-                    type="number"
-                    min={0.01}
-                    max={20}
-                    step={0.01}
-                    value={formData.grid_spacing_pct}
-                    onChange={e => updateField("grid_spacing_pct", Number(e.target.value))}
-                    className={`bg-slate-800 border-slate-700 text-slate-100 text-sm ${
-                      errors.grid_spacing_pct ? "border-red-500" : ""
-                    }`}
-                  />
-                  {errors.grid_spacing_pct && (
-                    <p className="text-red-400 text-[10px]">{errors.grid_spacing_pct}</p>
-                  )}
-                  <p className="text-slate-500 text-[10px]">0.01-20%，仅 grid 使用</p>
-                </div>
-
-                {/* Grid Levels */}
-                <div className="space-y-1">
-                  <Label htmlFor="grid_levels" className="text-slate-300 text-xs">
-                    网格层数 grid_levels
-                  </Label>
-                  <Input
-                    id="grid_levels"
-                    type="number"
-                    min={2}
-                    max={200}
-                    value={formData.grid_levels}
-                    onChange={e => updateField("grid_levels", Number(e.target.value))}
-                    className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
-                  />
-                  <p className="text-slate-500 text-[10px]">2-200，默认 20</p>
-                </div>
-              </>
-            )}
           </div>
 
           {/* Submit Button */}

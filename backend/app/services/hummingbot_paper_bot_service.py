@@ -1,14 +1,14 @@
 """
 Hummingbot Paper Bot Service
 
-v1.2.x: 本地状态与远端状态分离，完整 preflight 检查
+v1.2.x: 低频现货 Paper Bot（Branch A）
 
 核心设计：
-1. start_paper_bot 在调用 API 前进行 preflight 检查
-2. 动态创建 controller config（通过 /controllers/configs/ API）
-3. 调用 deploy-v2-controllers 后立即验证 active_bots
-4. 只有 active_bots 包含该 Bot 才设置 remote_started=true
-5. API 返回 200 但 active_bots 为空 → start_failed（Docker 可能不可用）
+1. 只支持现货 connector（binance / kucoin / gate_io / kraken）
+2. 禁止所有 perpetual / testnet / live connector
+3. 低频 signal-based 策略
+4. 完整 preflight 检查 + 策略映射层
+5. 不伪造启动成功，只有远端确认才设置 running
 """
 
 import json
@@ -22,12 +22,27 @@ import httpx
 
 from app.core.config import settings
 from app.schemas.hummingbot_paper_bot import (
+    FORBIDDEN_CONNECTOR_PATTERNS,
+    PAPER_CONNECTOR_WHITELIST,
     PaperBotPreviewRequest,
     PaperBotPreviewResponse,
     PaperBotPreviewData,
-    ConfigPreview,
+    PaperBotStartRequest,
     PaperBotStartResponse,
     PaperBotStartData,
+    PaperBotRecord,
+    PaperConnectorResponse,
+    ConfigPreview,
+    PaperBotReconciliationInfo,
+    RiskConfig,
+    StrategyParams,
+)
+from app.services.hummingbot_config_mapper import (
+    build_controller_config_payload,
+    check_paper_connectors_available,
+    check_connector,
+    map_strategy,
+    run_preflight_check,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,55 +113,109 @@ def _check_dangerous_modes(request_data: Dict[str, Any]) -> Optional[str]:
 
 
 def _validate_strategy_params(request: PaperBotPreviewRequest) -> None:
-    if request.strategy_type.value == "grid":
-        if not request.grid_spacing_pct or request.grid_spacing_pct <= 0:
-            raise HummingbotPaperBotValidationError("grid 策略必须提供有效的 grid_spacing_pct（> 0）")
-        if request.grid_levels < 2 or request.grid_levels > 200:
-            raise HummingbotPaperBotValidationError("grid_levels 必须在 2-200 之间")
+    pass  # 已移除，验证在 schema 层 + _validate_connector_for_paper 中完成
 
 
 def _validate_order_amount(request: PaperBotPreviewRequest) -> None:
+    pass  # 已移除
+
+
+def _validate_connector_for_paper(connector: str) -> None:
+    """验证 connector 是否可用于 Paper Bot。"""
+    from app.schemas.hummingbot_paper_bot import (
+        FORBIDDEN_CONNECTOR_PATTERNS,
+        PAPER_CONNECTOR_WHITELIST,
+    )
+    c_lower = connector.lower()
+    for pattern in FORBIDDEN_CONNECTOR_PATTERNS:
+        if pattern.lower() in c_lower:
+            raise HummingbotPaperBotValidationError(
+                f"connector '{connector}' 包含禁止关键词 '{pattern}'。"
+                " 永续合约 / Testnet / Live connector 不允许用于 Paper Bot。"
+                " 永续合约模拟属于 Testnet Bot 阶段（v1.3），不属于当前 Paper Bot 范围。"
+            )
+    if c_lower not in {c.lower() for c in PAPER_CONNECTOR_WHITELIST}:
+        raise HummingbotPaperBotValidationError(
+            f"connector '{connector}' 不在 Paper Bot 允许列表中。"
+            f" 当前仅支持现货 connector：{', '.join(sorted(PAPER_CONNECTOR_WHITELIST))}。"
+        )
+
+
+def _validate_low_freq_params(request: PaperBotPreviewRequest) -> None:
+    """验证低频策略参数。"""
     if request.order_amount > request.paper_initial_balance:
         raise HummingbotPaperBotValidationError(
             f"单笔订单金额 ({request.order_amount}) 不能大于初始资金 ({request.paper_initial_balance})"
         )
 
 
-def _build_config_preview(request: PaperBotPreviewRequest) -> Dict[str, Any]:
-    risk_config = {
-        "stop_loss_pct": request.stop_loss_pct or 0,
-        "take_profit_pct": request.take_profit_pct or 0,
-        "max_runtime_minutes": request.max_runtime_minutes,
-    }
-    strategy_params: Dict[str, Any] = {}
-    if request.strategy_type.value == "position_executor":
-        if request.spread_pct is not None:
-            strategy_params["spread_pct"] = request.spread_pct
-    elif request.strategy_type.value == "grid":
-        strategy_params["grid_spacing_pct"] = request.grid_spacing_pct
-        strategy_params["grid_levels"] = request.grid_levels or 20
+def _build_config_preview(request: PaperBotPreviewRequest) -> ConfigPreview:
+    from app.schemas.hummingbot_paper_bot import RiskConfig as RC, StrategyParams as SP
 
-    return {
-        "bot_name": request.bot_name,
-        "mode": "paper",
-        "live_trading": False,
-        "testnet": False,
-        "uses_real_exchange_account": False,
-        "requires_api_key": False,
-        "strategy_type": request.strategy_type.value,
-        "trading_pair": request.trading_pair,
-        "paper_initial_balance": request.paper_initial_balance,
-        "order_amount": request.order_amount,
-        "risk": risk_config,
-        "strategy_params": strategy_params,
-        "notes": [
-            "当前配置仅用于 Paper Bot 预览。",
-            "不会执行真实交易。",
-            "不会使用真实交易所 API Key。",
-            f"策略类型: {request.strategy_type.value}",
-            f"交易对: {request.trading_pair}",
-        ],
-    }
+    strategy_type_val = request.strategy_type.value
+    signal_type_val = (
+        getattr(request, "signal_type", None).value
+        if hasattr(getattr(request, "signal_type", None), "value")
+        else "bollinger"
+    )
+    timeframe_val = (
+        getattr(request, "timeframe", None).value
+        if hasattr(getattr(request, "timeframe", None), "value")
+        else "1h"
+    )
+    connector = getattr(request, "connector", "binance")
+
+    strategy_mapping = map_strategy(
+        strategy_type=strategy_type_val,
+        signal_type=signal_type_val,
+    )
+
+    risk_config = RC(
+        stop_loss_pct=getattr(request, "stop_loss_pct", 5.0),
+        take_profit_pct=getattr(request, "take_profit_pct", 10.0),
+        max_runtime_minutes=getattr(request, "max_runtime_minutes", 60),
+        cooldown_minutes=getattr(request, "cooldown_minutes", 60),
+        max_trades_per_day=getattr(request, "max_trades_per_day", 3),
+        max_open_positions=1,
+    )
+
+    strategy_params = SP(
+        timeframe=timeframe_val,
+        signal_type=signal_type_val,
+        connector=connector,
+        trading_pair=getattr(request, "trading_pair", "BTC-USDT"),
+        paper_initial_balance=getattr(request, "paper_initial_balance", 10000),
+        order_amount=getattr(request, "order_amount", 100),
+        risk=risk_config,
+    )
+
+    notes = [
+        "当前配置仅用于 Paper Bot 预览。",
+        "不会执行真实交易。",
+        "不会使用真实交易所 API Key。",
+        f"Connector: {connector}（现货）",
+        f"策略: {strategy_type_val} / {signal_type_val}",
+        f"周期: {timeframe_val}",
+        f"交易对: {getattr(request, 'trading_pair', 'BTC-USDT')}",
+        "本 Paper Bot 仅用于低频策略自动化验证，不进行高频挂单、撤单或做市操作。",
+    ]
+
+    return ConfigPreview(
+        bot_name=getattr(request, "bot_name", "unknown"),
+        mode="paper",
+        live_trading=False,
+        testnet=False,
+        uses_real_exchange_account=False,
+        requires_api_key=False,
+        connector=connector,
+        strategy_type=strategy_type_val,
+        trading_pair=getattr(request, "trading_pair", "BTC-USDT"),
+        paper_initial_balance=getattr(request, "paper_initial_balance", 10000),
+        order_amount=getattr(request, "order_amount", 100),
+        risk=risk_config,
+        strategy_params=strategy_params,
+        notes=notes,
+    )
 
 
 def sanitize_data(data: Any, depth: int = 0) -> Any:
@@ -248,12 +317,14 @@ def record_paper_bot(
     strategy_type: str,
     trading_pair: str,
     config: Dict[str, Any],
+    connector: str = "binance",
 ) -> None:
     """创建本地记录，初始状态为 submitted"""
     now = datetime.utcnow().isoformat() + "Z"
     _paper_bot_records[paper_bot_id] = {
         "paper_bot_id": paper_bot_id,
         "bot_name": bot_name,
+        "connector": connector,
         "strategy_type": strategy_type,
         "trading_pair": trading_pair,
         "mode": "paper",
@@ -286,24 +357,61 @@ def get_paper_bot_record(paper_bot_id: str) -> Optional[Dict[str, Any]]:
     return _paper_bot_records.get(paper_bot_id)
 
 
+async def get_paper_connectors() -> PaperConnectorResponse:
+    """
+    获取当前 Hummingbot 可用的 Paper Bot connector 列表。
+    从 Hummingbot API 获取可用 connectors，与 PAPER_CONNECTOR_WHITELIST 交叉验证。
+    """
+    return await check_paper_connectors_available(
+        base_url=settings.HUMMINGBOT_API_URL,
+        username=settings.HUMMINGBOT_API_USERNAME,
+        password=settings.HUMMINGBOT_API_PASSWORD,
+    )
+
+
 # ── v1.2.1: 配置预览 ──────────────────────────────────────────────────────────
 
 async def generate_paper_bot_preview(
     request: PaperBotPreviewRequest,
     raw_request_data: Optional[Dict[str, Any]] = None,
 ) -> PaperBotPreviewResponse:
+    """生成 Paper Bot 配置预览。"""
     try:
         if raw_request_data:
             if err := _check_sensitive_fields(raw_request_data):
                 return PaperBotPreviewResponse(valid=False, error=err)
             if err := _check_dangerous_modes(raw_request_data):
                 return PaperBotPreviewResponse(valid=False, error=err)
-        _validate_strategy_params(request)
-        _validate_order_amount(request)
-        config_preview_dict = _build_config_preview(request)
+
+        # Schema 层已验证 connector（在 Pydantic validator 中）
+        # 这里只需检查额外的不允许情况
+        connector = getattr(request, "connector", "binance")
+        _validate_connector_for_paper(connector)
+        _validate_low_freq_params(request)
+
+        config_preview = _build_config_preview(request)
+
+        # 策略映射
+        strategy_mapping = map_strategy(
+            strategy_type=request.strategy_type.value,
+            signal_type=getattr(request, "signal_type", None).value
+                if hasattr(getattr(request, "signal_type", None), "value") else "bollinger",
+        )
+
+        warnings = [
+            "当前仅生成配置预览，尚未调用 Hummingbot API 启动 Bot。",
+            "本 Paper Bot 仅用于低频策略自动化验证，不进行高频挂单、撤单或做市操作。",
+        ]
+        if strategy_mapping and not strategy_mapping.supported:
+            warnings.append(
+                f"策略 '{request.strategy_type.value}/{getattr(request, 'signal_type', '')}' "
+                f"当前暂未完全支持，将生成配置预览但可能无法立即启动。"
+            )
+
         preview_data = PaperBotPreviewData(
-            config_preview=ConfigPreview(**config_preview_dict),
-            warnings=["当前仅生成配置预览，尚未调用 Hummingbot API 启动 Bot。"],
+            config_preview=config_preview,
+            strategy_mapping=strategy_mapping,
+            warnings=warnings,
         )
         return PaperBotPreviewResponse(valid=True, data=preview_data)
     except HummingbotPaperBotValidationError as e:
@@ -552,17 +660,15 @@ async def start_paper_bot(
     raw_request_data: Optional[Dict[str, Any]] = None,
 ) -> PaperBotStartResponse:
     """
-    启动 Paper Bot（完整实现）
+    启动 Paper Bot（v1.2.x 低频现货版）
 
     完整流程：
-    1. 安全校验（敏感字段、危险模式）
-    2. Preflight 检查（API 在线、credentials、controller configs、deploy 接口）
-    3. 如果 preflight 失败 → start_failed，清晰错误
-    4. 动态创建 controller config
-    5. 调用 deploy-v2-controllers
-    6. 立即验证 active_bots
-    7. 只有 active_bots 包含该 Bot → remote_started=true
-    8. API 返回 200 但 active_bots 为空 → remote_started=false，Docker 可能不可用
+    1. 安全校验（敏感字段、危险模式、connector 验证）
+    2. Preflight 检查（API 在线、connector 白名单、策略映射）
+    3. Preflight 失败 → start_failed，不调用 Hummingbot API
+    4. 策略 unsupported → 生成预览但不伪造启动成功
+    5. Preflight 通过 → 调用 Hummingbot API 创建 controller config + deploy
+    6. 验证 active_bots → 只有真正在运行才设置 running
     """
     try:
         # ── Step 1: 安全校验 ──────────────────────────────────────────────────
@@ -578,26 +684,49 @@ async def start_paper_bot(
                     error=err,
                 )
 
-        _validate_strategy_params(request)
-        _validate_order_amount(request)
+        connector = getattr(request, "connector", "binance")
+        _validate_connector_for_paper(connector)
+        _validate_low_freq_params(request)
 
-        config_preview_dict = _build_config_preview(request)
+        config_preview = _build_config_preview(request)
         paper_bot_id = f"paper_{request.bot_name}_{uuid.uuid4().hex[:8]}"
         now = datetime.utcnow().isoformat() + "Z"
 
-        # ── Step 2: Preflight 检查 ────────────────────────────────────────
-        preflight = await _run_preflight_checks()
+        strategy_type_val = (
+            request.strategy_type.value
+            if hasattr(request.strategy_type, "value")
+            else str(request.strategy_type)
+        )
+        signal_type_val = (
+            getattr(request, "signal_type", None).value
+            if hasattr(getattr(request, "signal_type", None), "value")
+            else "bollinger"
+        )
+        trading_pair = getattr(request, "trading_pair", "BTC-USDT")
 
-        if not preflight.preflight_passed:
-            err_summary = preflight.error_summary()
+        # ── Step 2: Preflight 检查 ────────────────────────────────────────────
+        preflight = await run_preflight_check(
+            base_url=settings.HUMMINGBOT_API_URL,
+            username=settings.HUMMINGBOT_API_USERNAME,
+            password=settings.HUMMINGBOT_API_PASSWORD,
+            connector=connector,
+            strategy_type=strategy_type_val,
+            signal_type=signal_type_val,
+        )
+
+        if not preflight.passed:
+            err_lines = [f"Preflight 检查失败（共 {len(preflight.errors)} 项）："]
+            for i, err in enumerate(preflight.errors, 1):
+                err_lines.append(f"  {i}. {err}")
+            err_summary = "\n".join(err_lines)
             _log_paper_bot_operation(
                 operation="start_paper_bot",
                 bot_name=request.bot_name,
-                strategy_type=request.strategy_type.value,
-                trading_pair=request.trading_pair,
+                strategy_type=strategy_type_val,
+                trading_pair=trading_pair,
                 success=False,
                 error_message=err_summary,
-                config=config_preview_dict,
+                config=config_preview.model_dump(),
             )
             return PaperBotStartResponse(
                 local_record_created=False,
@@ -606,23 +735,23 @@ async def start_paper_bot(
                 error=err_summary,
             )
 
-        # ── Step 3: 创建 controller config ──────────────────────────────────
-        controller_config_name = f"paper_{request.bot_name}_{uuid.uuid4().hex[:8]}"
-        config_ok, config_err, _ = await _create_controller_config(
-            config_name=controller_config_name,
-            request=request,
-        )
+        # ── Step 3: 策略映射检查 ─────────────────────────────────────────────
+        strategy_mapping = map_strategy(strategy_type=strategy_type_val, signal_type=signal_type_val)
 
-        if not config_ok:
-            err_msg = f"无法创建 controller config: {config_err}"
+        if not strategy_mapping.supported:
+            err_msg = (
+                f"当前策略 '{strategy_type_val}/{signal_type_val}' 尚未映射为 Hummingbot 可运行配置。"
+                f" 原因：{strategy_mapping.unsupported_reason or '未知'}"
+                " 请联系管理员或等待下一版本支持。"
+            )
             _log_paper_bot_operation(
                 operation="start_paper_bot",
                 bot_name=request.bot_name,
-                strategy_type=request.strategy_type.value,
-                trading_pair=request.trading_pair,
+                strategy_type=strategy_type_val,
+                trading_pair=trading_pair,
                 success=False,
                 error_message=err_msg,
-                config=config_preview_dict,
+                config=config_preview.model_dump(),
             )
             return PaperBotStartResponse(
                 local_record_created=False,
@@ -631,11 +760,87 @@ async def start_paper_bot(
                 error=err_msg,
             )
 
-        # ── Step 4: 调用 deploy-v2-controllers ────────────────────────────
+        # ── Step 4: 创建本地记录 ─────────────────────────────────────────────
+        record_paper_bot(
+            paper_bot_id=paper_bot_id,
+            bot_name=request.bot_name,
+            strategy_type=strategy_type_val,
+            trading_pair=trading_pair,
+            config=config_preview.model_dump(),
+            connector=connector,
+        )
+
+        # ── Step 5: 创建 controller config ────────────────────────────────────
+        controller_config_id = f"paper_{request.bot_name.replace('-', '_')}_{uuid.uuid4().hex[:8]}"
+        timeframe_val = (
+            getattr(request, "timeframe", None).value
+            if hasattr(getattr(request, "timeframe", None), "value")
+            else "1h"
+        )
+        stop_loss = getattr(request, "stop_loss_pct", 5.0)
+        take_profit = getattr(request, "take_profit_pct", 10.0)
+        cooldown = getattr(request, "cooldown_minutes", 60)
+        max_trades = getattr(request, "max_trades_per_day", 3)
+        init_balance = getattr(request, "paper_initial_balance", 10000)
+        order_amt = getattr(request, "order_amount", 100)
+
+        config_payload = build_controller_config_payload(
+            config_id=controller_config_id,
+            controller_type=strategy_mapping.controller_type,
+            controller_name=strategy_mapping.controller_name,
+            connector=connector,
+            trading_pair=trading_pair,
+            signal_type=signal_type_val,
+            timeframe=timeframe_val,
+            paper_initial_balance=init_balance,
+            order_amount=order_amt,
+            stop_loss_pct=stop_loss,
+            take_profit_pct=take_profit,
+            cooldown_minutes=cooldown,
+            max_trades_per_day=max_trades,
+            max_open_positions=1,
+        )
+
+        try:
+            await _call_hummingbot_api(
+                "POST",
+                f"/controllers/configs/{controller_config_id}",
+                json_data=config_payload,
+                timeout=20.0,
+            )
+        except Exception as e:
+            err_msg = f"创建 controller config 失败: {str(e)}"
+            update_paper_bot_fields(paper_bot_id, local_status="start_failed", last_error=err_msg)
+            _log_paper_bot_operation(
+                operation="start_paper_bot", bot_name=request.bot_name,
+                strategy_type=strategy_type_val, trading_pair=trading_pair,
+                success=False, error_message=err_msg, config=config_preview.model_dump(),
+            )
+            return PaperBotStartResponse(
+                local_record_created=True,
+                remote_started=False,
+                remote_confirmed=False,
+                data=PaperBotStartData(
+                    paper_bot_id=paper_bot_id,
+                    bot_name=request.bot_name,
+                    connector=connector,
+                    strategy_type=strategy_type_val,
+                    trading_pair=trading_pair,
+                    local_status="start_failed",
+                    remote_confirmed=False,
+                    local_record_created=True,
+                    remote_started=False,
+                    started_at=now,
+                    config=config_preview.model_dump(),
+                ),
+                error=err_msg,
+            )
+
+        # ── Step 6: 调用 deploy-v2-controllers ──────────────────────────────
         deploy_payload = {
             "instance_name": paper_bot_id,
             "credentials_profile": "paper_account",
-            "controllers_config": [controller_config_name],
+            "controllers_config": [controller_config_id],
             "headless": True,
         }
 
@@ -652,32 +857,16 @@ async def start_paper_bot(
             )
             deploy_call_ok = True
         except Exception as e:
-            deploy_call_ok = False
             deploy_call_err = str(e)
             logger.warning(f"deploy-v2-controllers 调用失败: {e}")
 
         if not deploy_call_ok:
-            # 创建本地记录，状态为 start_failed
-            record_paper_bot(
-                paper_bot_id=paper_bot_id,
-                bot_name=request.bot_name,
-                strategy_type=request.strategy_type.value,
-                trading_pair=request.trading_pair,
-                config=config_preview_dict,
-            )
-            update_paper_bot_fields(
-                paper_bot_id,
-                local_status="start_failed",
-                last_error=deploy_call_err,
-            )
+            err_msg = f"调用 deploy-v2-controllers 失败: {deploy_call_err}"
+            update_paper_bot_fields(paper_bot_id, local_status="start_failed", last_error=err_msg)
             _log_paper_bot_operation(
-                operation="start_paper_bot",
-                bot_name=request.bot_name,
-                strategy_type=request.strategy_type.value,
-                trading_pair=request.trading_pair,
-                success=False,
-                error_message=f"deploy-v2-controllers 调用失败: {deploy_call_err}",
-                config=config_preview_dict,
+                operation="start_paper_bot", bot_name=request.bot_name,
+                strategy_type=strategy_type_val, trading_pair=trading_pair,
+                success=False, error_message=err_msg, config=config_preview.model_dump(),
             )
             return PaperBotStartResponse(
                 local_record_created=True,
@@ -686,32 +875,24 @@ async def start_paper_bot(
                 data=PaperBotStartData(
                     paper_bot_id=paper_bot_id,
                     bot_name=request.bot_name,
-                    strategy_type=request.strategy_type.value,
-                    trading_pair=request.trading_pair,
+                    connector=connector,
+                    strategy_type=strategy_type_val,
+                    trading_pair=trading_pair,
                     local_status="start_failed",
                     remote_confirmed=False,
                     local_record_created=True,
                     remote_started=False,
                     started_at=now,
-                    config=config_preview_dict,
+                    config=config_preview.model_dump(),
                     hummingbot_response=sanitize_data(deploy_resp),
                 ),
-                error=f"调用 deploy-v2-controllers 失败: {deploy_call_err}",
+                error=err_msg,
             )
 
-        # ── Step 5: 验证 active_bots ─────────────────────────────────────
-        # deploy 返回 200，但必须验证 Bot 是否真正在 active 列表中
+        # ── Step 7: 验证 active_bots ──────────────────────────────────────
         found, matched_bot = await _verify_bot_in_active_list(paper_bot_id, request.bot_name)
 
         if found and matched_bot:
-            # Bot 真正在运行
-            record_paper_bot(
-                paper_bot_id=paper_bot_id,
-                bot_name=request.bot_name,
-                strategy_type=request.strategy_type.value,
-                trading_pair=request.trading_pair,
-                config=config_preview_dict,
-            )
             update_paper_bot_fields(
                 paper_bot_id,
                 local_status="submitted",
@@ -723,12 +904,9 @@ async def start_paper_bot(
                 last_error=None,
             )
             _log_paper_bot_operation(
-                operation="start_paper_bot",
-                bot_name=request.bot_name,
-                strategy_type=request.strategy_type.value,
-                trading_pair=request.trading_pair,
-                success=True,
-                config=config_preview_dict,
+                operation="start_paper_bot", bot_name=request.bot_name,
+                strategy_type=strategy_type_val, trading_pair=trading_pair,
+                success=True, config=config_preview.model_dump(),
             )
             return PaperBotStartResponse(
                 local_record_created=True,
@@ -737,21 +915,20 @@ async def start_paper_bot(
                 data=PaperBotStartData(
                     paper_bot_id=paper_bot_id,
                     bot_name=request.bot_name,
-                    strategy_type=request.strategy_type.value,
-                    trading_pair=request.trading_pair,
+                    connector=connector,
+                    strategy_type=strategy_type_val,
+                    trading_pair=trading_pair,
                     local_status="submitted",
                     remote_confirmed=True,
                     local_record_created=True,
                     remote_started=True,
                     hummingbot_bot_id=matched_bot.get("name") or matched_bot.get("instance_name"),
                     started_at=now,
-                    config=config_preview_dict,
+                    config=config_preview.model_dump(),
                     hummingbot_response=sanitize_data(deploy_resp),
                 ),
             )
         else:
-            # deploy 返回 200 但 Bot 不在 active 列表中
-            # 可能原因：Hummingbot API 容器内没有 Docker CLI，无法真正创建容器
             docker_limitation_msg = (
                 "Hummingbot API deploy 接口返回成功（HTTP 200），但该 Bot 未出现在 active_bots 列表中。"
                 " 这通常是因为 Hummingbot API 容器内没有 Docker CLI，无法真正创建 Bot 容器。"
@@ -759,26 +936,11 @@ async def start_paper_bot(
                 " 2) docker logs hummingbot-api（查看容器日志）。"
                 " QuantAgent 本地记录已创建（local_record_created=true），但 remote_started=false。"
             )
-            record_paper_bot(
-                paper_bot_id=paper_bot_id,
-                bot_name=request.bot_name,
-                strategy_type=request.strategy_type.value,
-                trading_pair=request.trading_pair,
-                config=config_preview_dict,
-            )
-            update_paper_bot_fields(
-                paper_bot_id,
-                local_status="start_failed",
-                last_error=docker_limitation_msg,
-            )
+            update_paper_bot_fields(paper_bot_id, local_status="start_failed", last_error=docker_limitation_msg)
             _log_paper_bot_operation(
-                operation="start_paper_bot",
-                bot_name=request.bot_name,
-                strategy_type=request.strategy_type.value,
-                trading_pair=request.trading_pair,
-                success=False,
-                error_message=docker_limitation_msg,
-                config=config_preview_dict,
+                operation="start_paper_bot", bot_name=request.bot_name,
+                strategy_type=strategy_type_val, trading_pair=trading_pair,
+                success=False, error_message=docker_limitation_msg, config=config_preview.model_dump(),
             )
             return PaperBotStartResponse(
                 local_record_created=True,
@@ -787,14 +949,15 @@ async def start_paper_bot(
                 data=PaperBotStartData(
                     paper_bot_id=paper_bot_id,
                     bot_name=request.bot_name,
-                    strategy_type=request.strategy_type.value,
-                    trading_pair=request.trading_pair,
+                    connector=connector,
+                    strategy_type=strategy_type_val,
+                    trading_pair=trading_pair,
                     local_status="start_failed",
                     remote_confirmed=False,
                     local_record_created=True,
                     remote_started=False,
                     started_at=now,
-                    config=config_preview_dict,
+                    config=config_preview.model_dump(),
                     hummingbot_response=sanitize_data(deploy_resp),
                 ),
                 error=docker_limitation_msg,

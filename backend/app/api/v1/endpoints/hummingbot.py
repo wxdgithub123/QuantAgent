@@ -37,6 +37,7 @@ from app.services.hummingbot_api_service import (
 from app.services.hummingbot_paper_bot_service import (
     generate_paper_bot_preview,
     start_paper_bot,
+    get_paper_connectors,
     get_paper_bots_list,
     get_paper_bot_detail,
     get_paper_bot_orders as svc_get_paper_bot_orders,
@@ -49,6 +50,7 @@ from app.schemas.hummingbot_paper_bot import (
     PaperBotPreviewRequest,
     PaperBotPreviewResponse,
     PaperBotStartResponse,
+    PaperConnectorResponse,
 )
 
 
@@ -146,6 +148,51 @@ async def get_connectors():
         return make_response(connected=False, error=e.message)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gateway error: {str(e)}")
+
+
+@router.get("/paper-connectors", response_model=PaperConnectorResponse)
+async def get_paper_connectors_endpoint():
+    """
+    获取当前 Hummingbot 可用的 Paper Bot connector 列表。
+
+    功能：
+    1. 调用 Hummingbot /connectors 接口
+    2. 过滤出 Paper Bot 允许的现货 connector
+    3. 返回可用 connector 列表
+
+    返回示例（有可用 connector）：
+    {
+        "connected": true,
+        "data": {
+            "paper_connectors": ["binance"],
+            "available": true,
+            "message": null
+        }
+    }
+
+    返回示例（无可用 connector）：
+    {
+        "connected": true,
+        "data": {
+            "paper_connectors": [],
+            "available": false,
+            "message": "当前 Hummingbot 未检测到可用 paper connector。"
+        }
+    }
+    """
+    try:
+        result = await get_paper_connectors()
+        return result
+    except Exception as e:
+        return PaperConnectorResponse(
+            connected=False,
+            data={
+                "paper_connectors": [],
+                "available": False,
+                "message": f"获取 Paper Connector 时发生错误: {str(e)}",
+            },
+            error=str(e),
+        )
 
 
 @router.get("/portfolio", response_model=HummingbotResponse)
