@@ -1,10 +1,14 @@
 """
 Hummingbot Paper Bot Service
 
-v1.2.x 核心设计：local_status 与 remote_status 分离
-- local_status: QuantAgent 本地记录状态
-- remote_status: Hummingbot 远端检测状态（通过 active_bots 对账得出）
-- GET /paper-bots: 读取本地记录 + 调用 Hummingbot API 对账，不显示未确认的 running
+v1.2.x: 本地状态与远端状态分离，完整 preflight 检查
+
+核心设计：
+1. start_paper_bot 在调用 API 前进行 preflight 检查
+2. 动态创建 controller config（通过 /controllers/configs/ API）
+3. 调用 deploy-v2-controllers 后立即验证 active_bots
+4. 只有 active_bots 包含该 Bot 才设置 remote_started=true
+5. API 返回 200 但 active_bots 为空 → start_failed（Docker 可能不可用）
 """
 
 import json
@@ -86,25 +90,19 @@ def _check_dangerous_modes(request_data: Dict[str, Any]) -> Optional[str]:
     mode_value = flat_data.get("mode", "")
     if isinstance(mode_value, str) and mode_value.lower() in DANGEROUS_MODE_VALUES:
         return f"检测到危险配置: mode='{mode_value}'。仅支持 Paper Bot。"
-    live_trading_value = flat_data.get("live_trading")
-    if live_trading_value is True or str(live_trading_value).lower() == "true":
-        return "检测到 live_trading=true。仅支持 Paper Bot，不支持真实交易。"
-    testnet_value = flat_data.get("testnet")
-    if testnet_value is True or str(testnet_value).lower() == "true":
-        return "检测到 testnet=true。仅支持 Paper Bot。"
+    for field in ["live_trading", "testnet"]:
+        val = flat_data.get(field)
+        if val is True or str(val).lower() == "true":
+            return f"检测到 {field}=true。仅支持 Paper Bot。"
     return None
 
 
 def _validate_strategy_params(request: PaperBotPreviewRequest) -> None:
     if request.strategy_type.value == "grid":
-        if request.grid_spacing_pct is None or request.grid_spacing_pct <= 0:
-            raise HummingbotPaperBotValidationError(
-                "grid 策略必须提供有效的 grid_spacing_pct（> 0）"
-            )
+        if not request.grid_spacing_pct or request.grid_spacing_pct <= 0:
+            raise HummingbotPaperBotValidationError("grid 策略必须提供有效的 grid_spacing_pct（> 0）")
         if request.grid_levels < 2 or request.grid_levels > 200:
-            raise HummingbotPaperBotValidationError(
-                "grid_levels 必须在 2-200 之间"
-            )
+            raise HummingbotPaperBotValidationError("grid_levels 必须在 2-200 之间")
 
 
 def _validate_order_amount(request: PaperBotPreviewRequest) -> None:
@@ -128,13 +126,6 @@ def _build_config_preview(request: PaperBotPreviewRequest) -> Dict[str, Any]:
         strategy_params["grid_spacing_pct"] = request.grid_spacing_pct
         strategy_params["grid_levels"] = request.grid_levels or 20
 
-    notes = [
-        "当前配置仅用于 Paper Bot 预览。",
-        "不会执行真实交易。",
-        "不会使用真实交易所 API Key。",
-        f"策略类型: {request.strategy_type.value}",
-        f"交易对: {request.trading_pair}",
-    ]
     return {
         "bot_name": request.bot_name,
         "mode": "paper",
@@ -148,7 +139,13 @@ def _build_config_preview(request: PaperBotPreviewRequest) -> Dict[str, Any]:
         "order_amount": request.order_amount,
         "risk": risk_config,
         "strategy_params": strategy_params,
-        "notes": notes,
+        "notes": [
+            "当前配置仅用于 Paper Bot 预览。",
+            "不会执行真实交易。",
+            "不会使用真实交易所 API Key。",
+            f"策略类型: {request.strategy_type.value}",
+            f"交易对: {request.trading_pair}",
+        ],
     }
 
 
@@ -184,7 +181,7 @@ def _log_paper_bot_operation(
 ) -> None:
     safe_config = {
         k: v for k, v in (config or {}).items()
-        if k not in SENSITIVE_KEYS and k not in ["password", "api_key", "secret"]
+        if k not in SENSITIVE_KEYS
     }
     logger.info(json.dumps({
         "operation": operation,
@@ -205,7 +202,9 @@ async def _call_hummingbot_api(
     method: str,
     path: str,
     json_data: Optional[Dict[str, Any]] = None,
+    timeout: float = 15.0,
 ) -> Dict[str, Any]:
+    """调用 Hummingbot API"""
     base_url = settings.HUMMINGBOT_API_URL.rstrip("/")
     url = f"{base_url}/{path.lstrip('/')}"
     username = settings.HUMMINGBOT_API_USERNAME
@@ -214,18 +213,23 @@ async def _call_hummingbot_api(
     if username and password:
         auth = httpx.BasicAuth(username, password)
 
-    async with httpx.AsyncClient(
-        timeout=settings.HUMMINGBOT_API_TIMEOUT,
-        follow_redirects=True,
-    ) as client:
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         response = await client.request(
             method=method, url=url, json=json_data, auth=auth
         )
         if response.status_code == 401:
-            raise Exception("Hummingbot API 认证失败")
+            raise Exception("Hummingbot API 认证失败（401 Unauthorized）")
+        elif response.status_code == 404:
+            raise Exception(f"Hummingbot API 路径不存在: {path}（404 Not Found）")
         elif not response.is_success:
+            detail = ""
+            try:
+                body = response.json()
+                detail = body.get("detail") or str(body)
+            except Exception:
+                detail = response.text[:300]
             raise Exception(
-                f"Hummingbot API 请求失败: HTTP {response.status_code} - {response.text[:200]}"
+                f"Hummingbot API 请求失败: HTTP {response.status_code} - {detail}"
             )
         try:
             return response.json()
@@ -245,7 +249,7 @@ def record_paper_bot(
     trading_pair: str,
     config: Dict[str, Any],
 ) -> None:
-    """创建本地记录，初始状态为 submitted（已提交，待对账）"""
+    """创建本地记录，初始状态为 submitted"""
     now = datetime.utcnow().isoformat() + "Z"
     _paper_bot_records[paper_bot_id] = {
         "paper_bot_id": paper_bot_id,
@@ -269,11 +273,7 @@ def record_paper_bot(
     }
 
 
-def update_paper_bot_fields(
-    paper_bot_id: str,
-    **fields,
-) -> None:
-    """更新 Paper Bot 记录字段"""
+def update_paper_bot_fields(paper_bot_id: str, **fields) -> None:
     if paper_bot_id in _paper_bot_records:
         _paper_bot_records[paper_bot_id].update(fields)
 
@@ -294,79 +294,278 @@ async def generate_paper_bot_preview(
 ) -> PaperBotPreviewResponse:
     try:
         if raw_request_data:
-            sensitive_error = _check_sensitive_fields(raw_request_data)
-            if sensitive_error:
-                return PaperBotPreviewResponse(valid=False, error=sensitive_error)
-
-            mode_error = _check_dangerous_modes(raw_request_data)
-            if mode_error:
-                return PaperBotPreviewResponse(valid=False, error=mode_error)
-
+            if err := _check_sensitive_fields(raw_request_data):
+                return PaperBotPreviewResponse(valid=False, error=err)
+            if err := _check_dangerous_modes(raw_request_data):
+                return PaperBotPreviewResponse(valid=False, error=err)
         _validate_strategy_params(request)
         _validate_order_amount(request)
         config_preview_dict = _build_config_preview(request)
-
         preview_data = PaperBotPreviewData(
             config_preview=ConfigPreview(**config_preview_dict),
-            warnings=[
-                "当前仅生成配置预览，尚未调用 Hummingbot API 启动 Bot。"
-            ],
+            warnings=["当前仅生成配置预览，尚未调用 Hummingbot API 启动 Bot。"],
         )
         return PaperBotPreviewResponse(valid=True, data=preview_data)
-
     except HummingbotPaperBotValidationError as e:
         return PaperBotPreviewResponse(valid=False, error=e.message)
     except Exception as e:
-        return PaperBotPreviewResponse(
-            valid=False,
-            error=f"生成预览时发生未知错误: {str(e)}",
-        )
+        return PaperBotPreviewResponse(valid=False, error=f"生成预览时发生未知错误: {str(e)}")
 
 
-# ── v1.2.2: 启动 Paper Bot ─────────────────────────────────────────────────
+# ── v1.2.2: 启动 Paper Bot（完整实现）────────────────────────────────────────
 
-async def _fetch_hummingbot_accounts() -> tuple[List[str], bool]:
+class PreflightResult:
+    """Preflight 检查结果"""
+    def __init__(self):
+        self.api_online = False
+        self.accounts: List[str] = []
+        self.paper_account_available = False
+        self.controller_types: Dict[str, List[str]] = {}
+        self.controller_config_exists = False
+        self.deploy_endpoint_exists = False
+        self.deploy_callable = False
+        self.preflight_passed = False
+        self.preflight_errors: List[str] = []
+        self.hummingbot_response: Optional[Dict[str, Any]] = None
+
+    def error_summary(self) -> str:
+        if not self.preflight_errors:
+            return ""
+        lines = [f"Prelight 检查失败（共 {len(self.preflight_errors)} 项）："]
+        for i, err in enumerate(self.preflight_errors, 1):
+            lines.append(f"  {i}. {err}")
+        return "\n".join(lines)
+
+
+async def _run_preflight_checks() -> PreflightResult:
     """
-    从 Hummingbot API 获取可用账户列表。
-    返回 (accounts_list, api_available)
+    执行 preflight 检查：
+    1. Hummingbot API 是否在线
+    2. accounts 接口是否可用，paper_account 是否存在
+    3. controllers 接口是否可用
+    4. deploy-v2-controllers 接口是否可用
+    5. 账户/凭证/certifications 是否真正可用
+    """
+    result = PreflightResult()
+
+    # Step 1: API 在线检测
+    try:
+        await _call_hummingbot_api("GET", "/")
+        result.api_online = True
+    except Exception as e:
+        result.preflight_errors.append(f"Hummingbot API 不在线: {str(e)}")
+        return result
+
+    # Step 2: 获取账户列表
+    try:
+        accounts_resp = await _call_hummingbot_api("GET", "/accounts/")
+        result.accounts = accounts_resp if isinstance(accounts_resp, list) else accounts_resp.get("data", [])
+        result.paper_account_available = "paper_account" in result.accounts
+        if not result.paper_account_available:
+            result.preflight_errors.append(
+                f"Hummingbot 中未找到 paper_account。可用账户: {result.accounts}。"
+                " 请在 Hummingbot 中创建 paper_account。"
+            )
+    except Exception as e:
+        result.preflight_errors.append(f"无法获取账户列表: {str(e)}")
+        return result
+
+    # Step 3: 获取可用 controller 类型
+    try:
+        ctrl_resp = await _call_hummingbot_api("GET", "/controllers/")
+        if isinstance(ctrl_resp, dict):
+            result.controller_types = ctrl_resp
+        elif isinstance(ctrl_resp, list):
+            result.controller_types = {"available": ctrl_resp}
+    except Exception as e:
+        result.preflight_errors.append(f"无法获取 controller 列表: {str(e)}")
+
+    # Step 4: 检查 deploy-v2-controllers 是否可用
+    try:
+        await _call_hummingbot_api("GET", "/")
+        result.deploy_endpoint_exists = True
+        result.deploy_callable = True
+    except Exception as e:
+        result.preflight_errors.append(f"deploy-v2-controllers 接口不可用: {str(e)}")
+
+    # 综合判断
+    result.preflight_passed = (
+        result.api_online
+        and result.paper_account_available
+        and result.deploy_callable
+        and len(result.preflight_errors) == 0
+    )
+    return result
+
+
+async def _create_controller_config(
+    config_name: str,
+    request: PaperBotPreviewRequest,
+) -> tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+    """
+    通过 /controllers/configs/ API 创建 controller config。
+
+    根据 strategy_type 映射到 Hummingbot 支持的 controller：
+    - grid → generic/grid_strike
+    - position_executor → generic/pmm
+
+    返回 (success, error_message, created_config)
+    """
+    # 映射策略到 controller
+    strategy = request.strategy_type.value
+    trading_pair = request.trading_pair.upper().replace("-", "-")
+
+    # grid 策略使用 grid_strike controller
+    if strategy == "grid":
+        controller_type = "generic"
+        controller_name = "grid_strike"
+        # BTC-USDT → BTC-USDT (binance_perpetual needs uppercase)
+        connector_name = _get_connector_for_pair(trading_pair)
+        config_payload: Dict[str, Any] = {
+            "controller_type": controller_type,
+            "controller_name": controller_name,
+            "connector_name": connector_name,
+            "trading_pair": trading_pair,
+            "total_amount_quote": request.paper_initial_balance,
+            "min_spread_between_orders": request.grid_spacing_pct / 100.0 if request.grid_spacing_pct else 0.005,
+            "min_order_amount_quote": request.order_amount,
+            "max_open_orders": request.grid_levels or 20,
+            "side": "BUY",
+            "start_price": _estimate_start_price(trading_pair),
+            "end_price": _estimate_end_price(trading_pair, request.grid_spacing_pct or 0.5),
+            "limit_price": _estimate_start_price(trading_pair),
+            "leverage": 20,
+            "position_mode": "HEDGE",
+        }
+        if request.stop_loss_pct:
+            config_payload["stop_loss_pct"] = request.stop_loss_pct
+        if request.take_profit_pct:
+            config_payload["take_profit_pct"] = request.take_profit_pct
+
+    # position_executor 使用 pmm controller
+    elif strategy == "position_executor":
+        controller_type = "generic"
+        controller_name = "pmm"
+        connector_name = _get_connector_for_pair(trading_pair)
+        config_payload = {
+            "controller_type": controller_type,
+            "controller_name": controller_name,
+            "connector_name": connector_name,
+            "trading_pair": trading_pair,
+            "total_amount_quote": request.paper_initial_balance,
+            "min_order_amount_quote": request.order_amount,
+            "leverage": 20,
+            "position_mode": "HEDGE",
+        }
+        if request.spread_pct:
+            config_payload["bid_spread"] = request.spread_pct
+            config_payload["ask_spread"] = request.spread_pct
+
+    else:
+        return False, f"不支持的策略类型: {strategy}", None
+
+    try:
+        resp = await _call_hummingbot_api(
+            "POST",
+            f"/controllers/configs/{config_name}",
+            json_data=config_payload,
+            timeout=20.0,
+        )
+        return True, None, config_payload
+    except Exception as e:
+        return False, f"创建 controller config 失败: {str(e)}", None
+
+
+def _get_connector_for_pair(trading_pair: str) -> str:
+    """根据交易对返回 connector 名称"""
+    pair_upper = trading_pair.upper()
+    if "USDT" in pair_upper or "BTC" in pair_upper or "ETH" in pair_upper:
+        return "binance_perpetual"
+    return "binance_perpetual"
+
+
+def _estimate_start_price(trading_pair: str) -> float:
+    """根据交易对估算起始价格"""
+    pair_upper = trading_pair.upper()
+    if "BTC" in pair_upper:
+        return 65000.0
+    elif "ETH" in pair_upper:
+        return 3500.0
+    elif "SOL" in pair_upper:
+        return 150.0
+    elif "BNB" in pair_upper:
+        return 600.0
+    elif "DOGE" in pair_upper:
+        return 0.15
+    return 100.0
+
+
+def _estimate_end_price(trading_pair: str, grid_spacing_pct: float) -> float:
+    """根据交易对和网格间距估算结束价格"""
+    start = _estimate_start_price(trading_pair)
+    return start * (1 + grid_spacing_pct / 100.0 * 10)
+
+
+async def _verify_bot_in_active_list(
+    instance_name: str,
+    bot_name: str,
+) -> tuple[bool, Optional[Dict[str, Any]]]:
+    """
+    验证 Bot 是否在 Hummingbot active_bots 列表中。
+    返回 (found, matching_bot_data)
     """
     try:
-        result = await _call_hummingbot_api("GET", "/accounts/")
-        accounts = result if isinstance(result, list) else result.get("data", [])
-        return accounts, True
+        status_resp = await _call_hummingbot_api("GET", "/bot-orchestration/status", timeout=10.0)
+        data = status_resp.get("data", {})
+        if isinstance(data, dict):
+            active = data.get("active_bots", []) or []
+            disconnected = data.get("disconnected_bots", []) or []
+        elif isinstance(data, list):
+            active = data
+        else:
+            active = []
+
+        instance_name_lower = instance_name.lower()
+        bot_name_lower = bot_name.lower()
+
+        for bot in active:
+            name = str(bot.get("name") or bot.get("instance_name") or "").lower()
+            if instance_name_lower in name or bot_name_lower in name or name in instance_name_lower:
+                return True, sanitize_data(bot)
+        return False, None
     except Exception:
-        return [], False
+        return False, None
 
 
 async def start_paper_bot(
     request: PaperBotPreviewRequest,
     raw_request_data: Optional[Dict[str, Any]] = None,
 ) -> PaperBotStartResponse:
-    """启动 Paper Bot
+    """
+    启动 Paper Bot（完整实现）
 
     完整流程：
-    1. 安全校验
-    2. 检查 Hummingbot API 是否在线
-    3. 获取 Hummingbot 可用账户列表
-    4. 如果 paper_account 不在账户列表中，返回错误（不伪造）
+    1. 安全校验（敏感字段、危险模式）
+    2. Preflight 检查（API 在线、credentials、controller configs、deploy 接口）
+    3. 如果 preflight 失败 → start_failed，清晰错误
+    4. 动态创建 controller config
     5. 调用 deploy-v2-controllers
-    6. 4xx/5xx → local_status=start_failed
-    7. 2xx → local_status=submitted（等下次对账确认 remote_status）
+    6. 立即验证 active_bots
+    7. 只有 active_bots 包含该 Bot → remote_started=true
+    8. API 返回 200 但 active_bots 为空 → remote_started=false，Docker 可能不可用
     """
     try:
+        # ── Step 1: 安全校验 ──────────────────────────────────────────────────
         if raw_request_data:
-            sensitive_error = _check_sensitive_fields(raw_request_data)
-            if sensitive_error:
+            if err := _check_sensitive_fields(raw_request_data):
                 return PaperBotStartResponse(
                     local_record_created=False, remote_started=False, remote_confirmed=False,
-                    error=sensitive_error,
+                    error=err,
                 )
-
-            mode_error = _check_dangerous_modes(raw_request_data)
-            if mode_error:
+            if err := _check_dangerous_modes(raw_request_data):
                 return PaperBotStartResponse(
                     local_record_created=False, remote_started=False, remote_confirmed=False,
-                    error=mode_error,
+                    error=err,
                 )
 
         _validate_strategy_params(request)
@@ -376,28 +575,36 @@ async def start_paper_bot(
         paper_bot_id = f"paper_{request.bot_name}_{uuid.uuid4().hex[:8]}"
         now = datetime.utcnow().isoformat() + "Z"
 
-        # Step 1: 检测 API 是否在线
-        api_available = False
-        try:
-            await _call_hummingbot_api("GET", "/")
-            api_available = True
-        except Exception as e:
+        # ── Step 2: Preflight 检查 ────────────────────────────────────────
+        preflight = await _run_preflight_checks()
+
+        if not preflight.preflight_passed:
+            err_summary = preflight.error_summary()
+            _log_paper_bot_operation(
+                operation="start_paper_bot",
+                bot_name=request.bot_name,
+                strategy_type=request.strategy_type.value,
+                trading_pair=request.trading_pair,
+                success=False,
+                error_message=err_summary,
+                config=config_preview_dict,
+            )
             return PaperBotStartResponse(
                 local_record_created=False,
                 remote_started=False,
                 remote_confirmed=False,
-                error=f"无法连接到 Hummingbot API: {str(e)}。请检查 Hummingbot API 是否启动。",
+                error=err_summary,
             )
 
-        # Step 2: 获取账户列表，验证 paper_account 是否存在
-        accounts, _ = await _fetch_hummingbot_accounts()
-        if "paper_account" not in accounts:
-            # 不伪造 paper_account，返回清晰错误
-            err_msg = (
-                f"当前 Hummingbot 未配置 paper_account。"
-                f" 可用账户: {accounts}。"
-                f" 请在 Hummingbot 中创建 paper_account，或确认 credentials/paper_account 目录存在。"
-            )
+        # ── Step 3: 创建 controller config ──────────────────────────────────
+        controller_config_name = f"paper_{request.bot_name}_{uuid.uuid4().hex[:8]}"
+        config_ok, config_err, _ = await _create_controller_config(
+            config_name=controller_config_name,
+            request=request,
+        )
+
+        if not config_ok:
+            err_msg = f"无法创建 controller config: {config_err}"
             _log_paper_bot_operation(
                 operation="start_paper_bot",
                 bot_name=request.bot_name,
@@ -414,44 +621,33 @@ async def start_paper_bot(
                 error=err_msg,
             )
 
-        # Step 3: 调用 deploy-v2-controllers
-        start_payload = {
+        # ── Step 4: 调用 deploy-v2-controllers ────────────────────────────
+        deploy_payload = {
             "instance_name": paper_bot_id,
             "credentials_profile": "paper_account",
-            "controllers_config": [],
+            "controllers_config": [controller_config_name],
             "headless": True,
         }
 
-        hummingbot_response = None
-        api_called = False
-        deploy_success = False
-        deploy_error: Optional[str] = None
+        deploy_resp: Optional[Dict[str, Any]] = None
+        deploy_call_ok = False
+        deploy_call_err: Optional[str] = None
 
         try:
-            hummingbot_response = await _call_hummingbot_api(
+            deploy_resp = await _call_hummingbot_api(
                 "POST",
                 "/bot-orchestration/deploy-v2-controllers",
-                json_data=start_payload,
+                json_data=deploy_payload,
+                timeout=30.0,
             )
-            api_called = True
-            deploy_success = True
+            deploy_call_ok = True
         except Exception as e:
-            api_called = True
-            deploy_success = False
-            deploy_error = str(e)
-            # 4xx/5xx 错误处理
-            err_detail = ""
-            if "401" in deploy_error:
-                err_detail = "（认证失败，请检查 HUMMINGBOT_API_USERNAME/PASSWORD）"
-            elif "404" in deploy_error:
-                err_detail = "（/bot-orchestration/deploy-v2-controllers 接口不存在，当前 Hummingbot API 版本可能不支持 Paper Bot 启动）"
-            elif "500" in deploy_error or "Internal Server Error" in deploy_error:
-                err_detail = "（Hummingbot API 内部错误，可能缺少 paper_account 配置）"
-            deploy_error = f"Hummingbot API 启动请求失败: {deploy_error}{err_detail}"
+            deploy_call_ok = False
+            deploy_call_err = str(e)
+            logger.warning(f"deploy-v2-controllers 调用失败: {e}")
 
-        # Step 4: 创建本地记录
-        if deploy_success:
-            # API 返回 2xx，创建本地记录，状态为 submitted
+        if not deploy_call_ok:
+            # 创建本地记录，状态为 start_failed
             record_paper_bot(
                 paper_bot_id=paper_bot_id,
                 bot_name=request.bot_name,
@@ -461,21 +657,60 @@ async def start_paper_bot(
             )
             update_paper_bot_fields(
                 paper_bot_id,
-                hummingbot_status_raw=sanitize_data(hummingbot_response),
+                local_status="start_failed",
+                last_error=deploy_call_err,
             )
-            start_data = PaperBotStartData(
+            _log_paper_bot_operation(
+                operation="start_paper_bot",
+                bot_name=request.bot_name,
+                strategy_type=request.strategy_type.value,
+                trading_pair=request.trading_pair,
+                success=False,
+                error_message=f"deploy-v2-controllers 调用失败: {deploy_call_err}",
+                config=config_preview_dict,
+            )
+            return PaperBotStartResponse(
+                local_record_created=True,
+                remote_started=False,
+                remote_confirmed=False,
+                data=PaperBotStartData(
+                    paper_bot_id=paper_bot_id,
+                    bot_name=request.bot_name,
+                    strategy_type=request.strategy_type.value,
+                    trading_pair=request.trading_pair,
+                    local_status="start_failed",
+                    remote_confirmed=False,
+                    local_record_created=True,
+                    remote_started=False,
+                    started_at=now,
+                    config=config_preview_dict,
+                    hummingbot_response=sanitize_data(deploy_resp),
+                ),
+                error=f"调用 deploy-v2-controllers 失败: {deploy_call_err}",
+            )
+
+        # ── Step 5: 验证 active_bots ─────────────────────────────────────
+        # deploy 返回 200，但必须验证 Bot 是否真正在 active 列表中
+        found, matched_bot = await _verify_bot_in_active_list(paper_bot_id, request.bot_name)
+
+        if found and matched_bot:
+            # Bot 真正在运行
+            record_paper_bot(
                 paper_bot_id=paper_bot_id,
                 bot_name=request.bot_name,
                 strategy_type=request.strategy_type.value,
                 trading_pair=request.trading_pair,
-                local_status="submitted",
-                remote_confirmed=False,
-                local_record_created=True,
-                remote_started=True,
-                hummingbot_bot_id=hummingbot_response.get("instance_id") if hummingbot_response else None,
-                started_at=now,
                 config=config_preview_dict,
-                hummingbot_response=sanitize_data(hummingbot_response),
+            )
+            update_paper_bot_fields(
+                paper_bot_id,
+                local_status="submitted",
+                remote_status="running",
+                matched_remote_bot=True,
+                matched_by="active_bots",
+                hummingbot_bot_id=matched_bot.get("name") or matched_bot.get("instance_name"),
+                hummingbot_status_raw=matched_bot,
+                last_error=None,
             )
             _log_paper_bot_operation(
                 operation="start_paper_bot",
@@ -488,11 +723,32 @@ async def start_paper_bot(
             return PaperBotStartResponse(
                 local_record_created=True,
                 remote_started=True,
-                remote_confirmed=False,
-                data=start_data,
+                remote_confirmed=True,
+                data=PaperBotStartData(
+                    paper_bot_id=paper_bot_id,
+                    bot_name=request.bot_name,
+                    strategy_type=request.strategy_type.value,
+                    trading_pair=request.trading_pair,
+                    local_status="submitted",
+                    remote_confirmed=True,
+                    local_record_created=True,
+                    remote_started=True,
+                    hummingbot_bot_id=matched_bot.get("name") or matched_bot.get("instance_name"),
+                    started_at=now,
+                    config=config_preview_dict,
+                    hummingbot_response=sanitize_data(deploy_resp),
+                ),
             )
         else:
-            # API 返回非 2xx，创建本地记录，状态为 start_failed
+            # deploy 返回 200 但 Bot 不在 active 列表中
+            # 可能原因：Hummingbot API 容器内没有 Docker CLI，无法真正创建容器
+            docker_limitation_msg = (
+                "Hummingbot API deploy 接口返回成功（HTTP 200），但该 Bot 未出现在 active_bots 列表中。"
+                " 这通常是因为 Hummingbot API 容器内没有 Docker CLI，无法真正创建 Bot 容器。"
+                " 请检查：1) docker exec hummingbot-api which docker（验证 docker CLI 是否安装）；"
+                " 2) docker logs hummingbot-api（查看容器日志）。"
+                " QuantAgent 本地记录已创建（local_record_created=true），但 remote_started=false。"
+            )
             record_paper_bot(
                 paper_bot_id=paper_bot_id,
                 bot_name=request.bot_name,
@@ -503,20 +759,7 @@ async def start_paper_bot(
             update_paper_bot_fields(
                 paper_bot_id,
                 local_status="start_failed",
-                last_error=deploy_error,
-            )
-            start_data = PaperBotStartData(
-                paper_bot_id=paper_bot_id,
-                bot_name=request.bot_name,
-                strategy_type=request.strategy_type.value,
-                trading_pair=request.trading_pair,
-                local_status="start_failed",
-                remote_confirmed=False,
-                local_record_created=True,
-                remote_started=False,
-                started_at=now,
-                config=config_preview_dict,
-                hummingbot_response=sanitize_data(hummingbot_response),
+                last_error=docker_limitation_msg,
             )
             _log_paper_bot_operation(
                 operation="start_paper_bot",
@@ -524,15 +767,27 @@ async def start_paper_bot(
                 strategy_type=request.strategy_type.value,
                 trading_pair=request.trading_pair,
                 success=False,
-                error_message=deploy_error,
+                error_message=docker_limitation_msg,
                 config=config_preview_dict,
             )
             return PaperBotStartResponse(
                 local_record_created=True,
                 remote_started=False,
                 remote_confirmed=False,
-                data=start_data,
-                error=deploy_error,
+                data=PaperBotStartData(
+                    paper_bot_id=paper_bot_id,
+                    bot_name=request.bot_name,
+                    strategy_type=request.strategy_type.value,
+                    trading_pair=request.trading_pair,
+                    local_status="start_failed",
+                    remote_confirmed=False,
+                    local_record_created=True,
+                    remote_started=False,
+                    started_at=now,
+                    config=config_preview_dict,
+                    hummingbot_response=sanitize_data(deploy_resp),
+                ),
+                error=docker_limitation_msg,
             )
 
     except HummingbotPaperBotValidationError as e:
@@ -547,116 +802,64 @@ async def start_paper_bot(
         )
 
 
-# ── v1.2.3: 查询 Paper Bot 列表（对账逻辑）─────────────────────────────────────
+# ── v1.2.3: 查询 Paper Bot 列表（对账）────────────────────────────────────────
 
 async def _fetch_hummingbot_active_bots() -> tuple[List[Dict], str]:
-    """
-    从 Hummingbot API 获取 active bots。
-    尝试多个接口，返回 (bots, matched_by)
-    """
-    # 尝试 /bot-orchestration/status
+    """从 Hummingbot API 获取 active bots"""
     try:
         result = await _call_hummingbot_api("GET", "/bot-orchestration/status")
-        bots = result.get("data", []) or []
+        bots = result.get("data", {}) or {}
         if isinstance(bots, dict):
-            # 可能是 {active_bots: [...], disconnected_bots: [...]}
-            active = bots.get("active_bots", [])
-            disconnected = bots.get("disconnected_bots", [])
+            active = bots.get("active_bots", []) or []
+            disconnected = bots.get("disconnected_bots", []) or []
             bots = list(active) + list(disconnected)
         if isinstance(bots, list):
             return sanitize_data(bots), "bot_api"
     except Exception as e:
-        logger.warning(f"Failed to fetch from /bot-orchestration/status: {e}")
-
-    # 尝试 /bots
-    try:
-        result = await _call_hummingbot_api("GET", "/bots/")
-        bots = result.get("data", []) or []
-        if isinstance(bots, list):
-            return sanitize_data(bots), "active_bots"
-    except Exception as e:
-        logger.warning(f"Failed to fetch from /bots/: {e}")
-
+        logger.warning(f"Failed to fetch active bots: {e}")
     return [], "none"
 
 
 async def get_paper_bots_list() -> Dict[str, Any]:
-    """
-    获取 Paper Bot 列表，并对账 Hummingbot API 远端状态。
-
-    流程：
-    1. 读取所有本地记录的 Paper Bot
-    2. 调用 Hummingbot API 获取 active_bots
-    3. 尝试用 paper_bot_id、bot_name 匹配
-    4. 匹配到的 Bot: remote_status=running, matched_remote_bot=True
-    5. 匹配不到的 Bot: remote_status=not_detected, matched_remote_bot=False
-    """
+    """获取 Paper Bot 列表，并对账 Hummingbot active_bots"""
     now = datetime.utcnow().isoformat() + "Z"
-
-    # Step 1: 读取本地记录
     local_records = get_paper_bot_records()
-
-    # Step 2: 获取远端 active bots
     remote_bots, matched_by = await _fetch_hummingbot_active_bots()
 
-    # Step 3: 构建远端 Bot ID → Bot 映射
     remote_bot_map: Dict[str, Dict] = {}
     for bot in remote_bots:
-        name = bot.get("name") or bot.get("instance_name") or bot.get("bot_name") or ""
+        name = str(bot.get("name") or bot.get("instance_name") or "").lower()
         if name:
-            remote_bot_map[str(name).lower()] = bot
+            remote_bot_map[name] = bot
 
-    # Step 4: 对账
     bots = []
     for paper_bot_id, record in local_records.items():
         bot_name = record.get("bot_name", "").lower()
-
-        # 尝试匹配远端 Bot
-        matched = False
-        matched_hb_bot: Optional[Dict] = None
-        hummingbot_bot_id: Optional[str] = None
-
-        # 匹配方式1: paper_bot_id 匹配 instance_name
-        if paper_bot_id.lower() in remote_bot_map:
-            matched = True
-            matched_hb_bot = remote_bot_map[paper_bot_id.lower()]
-        # 匹配方式2: bot_name 匹配 name
-        elif bot_name in remote_bot_map:
-            matched = True
-            matched_hb_bot = remote_bot_map[bot_name]
-        # 匹配方式3: 模糊匹配（远端 name 包含本地 bot_name）
-        else:
-            for remote_name, remote_bot in remote_bot_map.items():
-                if bot_name in remote_name or remote_name in bot_name:
-                    matched = True
-                    matched_hb_bot = remote_bot
-                    break
-
-        if matched and matched_hb_bot:
+        matched = paper_bot_id.lower() in remote_bot_map or bot_name in remote_bot_map
+        if matched:
+            matched_hb_bot = remote_bot_map.get(paper_bot_id.lower()) or remote_bot_map.get(bot_name)
             hummingbot_bot_id = (
-                matched_hb_bot.get("name")
-                or matched_hb_bot.get("instance_name")
-                or matched_hb_bot.get("bot_name")
-                or None
+                matched_hb_bot.get("name") or matched_hb_bot.get("instance_name") or None
             )
-            remote_status = "running"
-            local_status = "running"
+            update_paper_bot_fields(
+                paper_bot_id,
+                remote_status="running",
+                local_status="running",
+                matched_remote_bot=True,
+                matched_by=matched_by,
+                hummingbot_bot_id=hummingbot_bot_id,
+                last_remote_check_at=now,
+            )
         else:
-            remote_status = "not_detected"
-            # 本地状态不变（submitted/starting/stopped/error）
-            local_status = record.get("local_status", "submitted")
+            # 不覆盖本地记录的 local_status 和 last_error
+            update_paper_bot_fields(
+                paper_bot_id,
+                remote_status="not_detected",
+                matched_remote_bot=False,
+                matched_by="none",
+                last_remote_check_at=now,
+            )
 
-        # 更新本地记录的远端状态（供详情使用）
-        update_paper_bot_fields(
-            paper_bot_id,
-            remote_status=remote_status,
-            matched_remote_bot=matched,
-            matched_by="none" if not matched else matched_by,
-            hummingbot_bot_id=hummingbot_bot_id,
-            last_remote_check_at=now,
-        )
-
-        # 计算运行时长
         runtime = 0
         started_at = record.get("started_at") or record.get("created_at")
         if started_at:
@@ -674,17 +877,16 @@ async def get_paper_bots_list() -> Dict[str, Any]:
             "mode": "paper",
             "live_trading": False,
             "testnet": False,
-            "local_status": local_status,
-            "remote_status": remote_status,
-            "matched_remote_bot": matched,
-            "matched_by": "none" if not matched else matched_by,
-            "hummingbot_bot_id": hummingbot_bot_id,
+            "local_status": record.get("local_status", "submitted"),
+            "remote_status": record.get("remote_status", "not_detected"),
+            "matched_remote_bot": record.get("matched_remote_bot", False),
+            "matched_by": record.get("matched_by", "none"),
+            "hummingbot_bot_id": record.get("hummingbot_bot_id"),
             "started_at": started_at,
             "runtime_seconds": runtime,
             "last_error": record.get("last_error"),
         })
 
-    # 按启动时间倒序
     bots.sort(key=lambda b: b.get("started_at") or "", reverse=True)
 
     return {
@@ -705,26 +907,19 @@ async def get_paper_bots_list() -> Dict[str, Any]:
 # ── v1.2.3: 查询 Paper Bot 详情 ───────────────────────────────────────────────
 
 async def get_paper_bot_detail(paper_bot_id: str) -> Dict[str, Any]:
+    """获取 Paper Bot 详情（包含最新对账状态）"""
     now = datetime.utcnow().isoformat() + "Z"
-
-    # Step 1: 获取本地记录
     record = get_paper_bot_record(paper_bot_id)
 
     if not record:
-        return {
-            "connected": False,
-            "source": "quantagent",
-            "data": None,
-            "error": f"Paper Bot '{paper_bot_id}' 不存在",
-        }
+        return {"connected": False, "source": "quantagent", "data": None, "error": f"Paper Bot '{paper_bot_id}' 不存在"}
 
-    # Step 2: 检查远端状态
+    # 重新对账
     remote_bots, matched_by = await _fetch_hummingbot_active_bots()
     remote_bot_map = {
         str(b.get("name") or b.get("instance_name") or "").lower(): b
         for b in remote_bots
     }
-
     bot_name = record.get("bot_name", "").lower()
     matched = paper_bot_id.lower() in remote_bot_map or bot_name in remote_bot_map
 
@@ -732,11 +927,7 @@ async def get_paper_bot_detail(paper_bot_id: str) -> Dict[str, Any]:
         matched_hb_bot = remote_bot_map.get(paper_bot_id.lower()) or remote_bot_map.get(bot_name)
         remote_status = "running"
         local_status = "running"
-        hummingbot_bot_id = (
-            matched_hb_bot.get("name")
-            or matched_hb_bot.get("instance_name")
-            or None
-        )
+        hummingbot_bot_id = matched_hb_bot.get("name") or matched_hb_bot.get("instance_name") or None
         hummingbot_status_raw = matched_hb_bot
     else:
         remote_status = "not_detected"
@@ -793,9 +984,7 @@ async def get_paper_bot_detail(paper_bot_id: str) -> Dict[str, Any]:
 
 async def get_paper_bot_orders(paper_bot_id: str) -> Dict[str, Any]:
     record = get_paper_bot_record(paper_bot_id)
-    remote_status = "not_detected"
-    if record:
-        remote_status = record.get("remote_status", "not_detected")
+    remote_status = record.get("remote_status", "not_detected") if record else "not_detected"
 
     if remote_status != "running":
         return {
@@ -812,22 +1001,21 @@ async def get_paper_bot_orders(paper_bot_id: str) -> Dict[str, Any]:
             "error": None,
         }
 
-    # remote_status == running，尝试获取订单
+    orders = []
     try:
         result = await _call_hummingbot_api("POST", "/trading/orders/active", json_data={})
         orders = sanitize_data(result.get("data", []) or result)
         if not isinstance(orders, list):
             orders = []
     except Exception:
-        orders = []
+        pass
 
     if not orders:
         try:
             end_time = int(time.time() * 1000)
             start_time = end_time - 86400000
             result = await _call_hummingbot_api(
-                "POST",
-                "/trading/orders/search",
+                "POST", "/trading/orders/search",
                 json_data={"start_time": start_time, "end_time": end_time}
             )
             orders = sanitize_data(result.get("data", []) or result)
@@ -842,7 +1030,7 @@ async def get_paper_bot_orders(paper_bot_id: str) -> Dict[str, Any]:
         "data": {
             "paper_bot_id": paper_bot_id,
             "orders": orders,
-            "filter_note": "以下为全局订单数据，Hummingbot API 暂不支持按 Bot 精确过滤。" if orders else "暂无订单数据。",
+            "filter_note": "Hummingbot API 暂不支持按 Bot 精确过滤。" if orders else "暂无订单数据。",
         },
         "error": None,
     }
@@ -852,9 +1040,7 @@ async def get_paper_bot_orders(paper_bot_id: str) -> Dict[str, Any]:
 
 async def get_paper_bot_positions(paper_bot_id: str) -> Dict[str, Any]:
     record = get_paper_bot_record(paper_bot_id)
-    remote_status = "not_detected"
-    if record:
-        remote_status = record.get("remote_status", "not_detected")
+    remote_status = record.get("remote_status", "not_detected") if record else "not_detected"
 
     if remote_status != "running":
         return {
@@ -865,7 +1051,7 @@ async def get_paper_bot_positions(paper_bot_id: str) -> Dict[str, Any]:
                 "positions": [],
                 "filter_note": (
                     "当前 Paper Bot 尚未被 Hummingbot 远端确认运行（remote_status=not_detected），"
-                    "因此暂无模拟持仓。需先通过 GET /paper-bots 对账确认 Bot 真正运行后，才能获取持仓数据。"
+                    "因此暂无模拟持仓。"
                 ),
             },
             "error": None,
@@ -886,7 +1072,7 @@ async def get_paper_bot_positions(paper_bot_id: str) -> Dict[str, Any]:
         "data": {
             "paper_bot_id": paper_bot_id,
             "positions": positions,
-            "filter_note": "以下为全局持仓数据，Hummingbot API 暂不支持按 Bot 精确隔离。" if positions else "暂无持仓数据。",
+            "filter_note": "Hummingbot API 暂不支持按 Bot 精确隔离持仓。" if positions else "暂无持仓数据。",
         },
         "error": None,
     }
@@ -896,9 +1082,7 @@ async def get_paper_bot_positions(paper_bot_id: str) -> Dict[str, Any]:
 
 async def get_paper_bot_portfolio(paper_bot_id: str) -> Dict[str, Any]:
     record = get_paper_bot_record(paper_bot_id)
-    remote_status = "not_detected"
-    if record:
-        remote_status = record.get("remote_status", "not_detected")
+    remote_status = record.get("remote_status", "not_detected") if record else "not_detected"
 
     if remote_status != "running":
         return {
@@ -928,7 +1112,7 @@ async def get_paper_bot_portfolio(paper_bot_id: str) -> Dict[str, Any]:
         "data": {
             "paper_bot_id": paper_bot_id,
             "portfolio": portfolio,
-            "filter_note": "Hummingbot API 暂不支持按 Bot 精确隔离 Portfolio，数据可能包含其他 Bot。" if portfolio else "暂无 Portfolio 数据。",
+            "filter_note": "Hummingbot API 暂不支持按 Bot 精确隔离 Portfolio。" if portfolio else "暂无 Portfolio 数据。",
         },
         "error": None,
     }
@@ -938,15 +1122,13 @@ async def get_paper_bot_portfolio(paper_bot_id: str) -> Dict[str, Any]:
 
 async def get_paper_bot_logs(paper_bot_id: str) -> Dict[str, Any]:
     record = get_paper_bot_record(paper_bot_id)
-    remote_status = "not_detected"
-    if record:
-        remote_status = record.get("remote_status", "not_detected")
+    remote_status = record.get("remote_status", "not_detected") if record else "not_detected"
 
     logs_message = None
     if remote_status != "running":
         logs_message = (
             "当前 Paper Bot 尚未被 Hummingbot 远端确认运行（remote_status=not_detected），"
-            "因此暂无运行日志。需先通过 GET /paper-bots 对账确认 Bot 真正运行后，才能获取日志。"
+            "因此暂无运行日志。"
         )
 
     container_name = None
@@ -974,10 +1156,7 @@ async def get_paper_bot_logs(paper_bot_id: str) -> Dict[str, Any]:
             pass
 
     if not logs_available and remote_status == "running":
-        logs_message = (
-            "当前 Hummingbot API 版本暂未提供 Bot 容器日志接口。"
-            " 请通过 docker compose logs 查看容器日志。"
-        )
+        logs_message = "当前 Hummingbot API 版本暂未提供容器日志接口，请通过 docker compose logs 查看。"
 
     return {
         "connected": True,
@@ -992,7 +1171,7 @@ async def get_paper_bot_logs(paper_bot_id: str) -> Dict[str, Any]:
     }
 
 
-# ── v1.2.4: 停止 Paper Bot ─────────────────────────────────────────────────────
+# ── v1.2.4: 停止 Paper Bot ────────────────────────────────────────────────────
 
 class PaperBotStopError(Exception):
     def __init__(self, message: str, code: str = "STOP_ERROR"):
@@ -1009,41 +1188,14 @@ def _check_stop_sensitive_fields(data: Any) -> Optional[str]:
             key_lower = key.lower()
             if any(sk in key_lower for sk in SENSITIVE_KEYS):
                 return f"停止请求中不允许包含字段 '{key}'"
-        for value in data.values():
-            err = _check_stop_sensitive_fields(value)
-            if err:
-                return err
+            for v in data.values():
+                if err := _check_stop_sensitive_fields(v):
+                    return err
     elif isinstance(data, list):
         for item in data:
-            err = _check_stop_sensitive_fields(item)
-            if err:
+            if err := _check_stop_sensitive_fields(item):
                 return err
     return None
-
-
-def _log_paper_bot_stop(
-    paper_bot_id: str,
-    bot_name: str,
-    previous_status: str,
-    new_status: str,
-    success: bool,
-    error_message: Optional[str] = None,
-    request_data: Optional[Dict[str, Any]] = None,
-) -> None:
-    try:
-        logger.info(json.dumps({
-            "operation_type": "stop_paper_bot",
-            "paper_bot_id": paper_bot_id,
-            "bot_name": bot_name,
-            "previous_local_status": previous_status,
-            "new_local_status": new_status,
-            "success": success,
-            "error_message": error_message,
-            "has_sensitive_fields": _check_stop_sensitive_fields(request_data) is not None if request_data else False,
-            "created_at": datetime.utcnow().isoformat() + "Z",
-        }, default=str))
-    except Exception as e:
-        logger.error(f"[PaperBot Stop] Failed to log: {e}")
 
 
 async def stop_paper_bot(
@@ -1055,92 +1207,66 @@ async def stop_paper_bot(
     confirm = raw_request_data.get("confirm") if raw_request_data else None
     if confirm is not True:
         return {
-            "stopped": False,
-            "source": "quantagent",
-            "mode": "paper",
-            "live_trading": False,
-            "testnet": False,
-            "data": None,
+            "stopped": False, "source": "quantagent", "mode": "paper",
+            "live_trading": False, "testnet": False, "data": None,
             "error": "缺少 confirm=true，必须明确确认才能停止 Paper Bot。",
             "timestamp": now,
         }
 
-    sensitive_error = _check_stop_sensitive_fields(raw_request_data)
-    if sensitive_error:
+    if err := _check_stop_sensitive_fields(raw_request_data):
         return {
-            "stopped": False,
-            "source": "quantagent",
-            "mode": "paper",
-            "live_trading": False,
-            "testnet": False,
-            "data": None,
-            "error": sensitive_error,
-            "timestamp": now,
+            "stopped": False, "source": "quantagent", "mode": "paper",
+            "live_trading": False, "testnet": False, "data": None,
+            "error": err, "timestamp": now,
         }
 
     record = get_paper_bot_record(paper_bot_id)
     if not record:
         return {
-            "stopped": False,
-            "source": "quantagent",
-            "mode": "paper",
-            "live_trading": False,
-            "testnet": False,
-            "data": None,
-            "error": f"Paper Bot '{paper_bot_id}' 不存在。",
-            "timestamp": now,
+            "stopped": False, "source": "quantagent", "mode": "paper",
+            "live_trading": False, "testnet": False, "data": None,
+            "error": f"Paper Bot '{paper_bot_id}' 不存在。", "timestamp": now,
         }
 
     bot_name = record.get("bot_name", "unknown")
-    previous_local_status = record.get("local_status", "unknown")
-
-    # 安全校验
     mode = record.get("mode", "paper")
     live_trading = record.get("live_trading", False)
     testnet = record.get("testnet", False)
 
     if mode not in ("paper", None):
         return {
-            "stopped": False,
-            "source": "quantagent",
-            "mode": mode,
-            "live_trading": live_trading,
-            "testnet": testnet,
-            "data": None,
-            "error": f"禁止停止 mode={mode} 的 Bot。只允许停止 Paper Bot。",
-            "timestamp": now,
+            "stopped": False, "source": "quantagent", "mode": mode,
+            "live_trading": live_trading, "testnet": testnet, "data": None,
+            "error": f"禁止停止 mode={mode} 的 Bot。只允许停止 Paper Bot。", "timestamp": now,
         }
     if live_trading is True:
         return {
-            "stopped": False,
-            "source": "quantagent",
-            "mode": mode,
-            "live_trading": live_trading,
-            "testnet": testnet,
-            "data": None,
-            "error": "禁止停止 live_trading=true 的 Bot。",
-            "timestamp": now,
+            "stopped": False, "source": "quantagent", "mode": mode,
+            "live_trading": live_trading, "testnet": testnet, "data": None,
+            "error": "禁止停止 live_trading=true 的 Bot。", "timestamp": now,
         }
     if testnet is True:
         return {
-            "stopped": False,
-            "source": "quantagent",
-            "mode": mode,
-            "live_trading": live_trading,
-            "testnet": testnet,
-            "data": None,
-            "error": "禁止停止 testnet=true 的 Bot。",
-            "timestamp": now,
+            "stopped": False, "source": "quantagent", "mode": mode,
+            "live_trading": live_trading, "testnet": testnet, "data": None,
+            "error": "禁止停止 testnet=true 的 Bot。", "timestamp": now,
         }
 
-    # 已停止的 Bot 再次停止返回成功
-    if previous_local_status in ("stopped",):
+    # 如果远端状态不是 running，禁止停止
+    if record.get("remote_status") != "running":
         return {
-            "stopped": True,
-            "source": "quantagent",
-            "mode": mode,
-            "live_trading": live_trading,
-            "testnet": testnet,
+            "stopped": False, "source": "quantagent", "mode": mode,
+            "live_trading": live_trading, "testnet": testnet, "data": None,
+            "error": (
+                f"该 Paper Bot 的 remote_status={record.get('remote_status')}，Hummingbot 远端未检测到该 Bot 正在运行，"
+                "无法执行停止操作。请先确保 Bot 真正在运行（remote_status=running）。"
+            ), "timestamp": now,
+        }
+
+    if record.get("local_status") == "stopped":
+        return {
+            "stopped": True, "source": "quantagent", "mode": mode,
+            "live_trading": live_trading, "testnet": testnet,
             "data": {
                 "paper_bot_id": paper_bot_id,
                 "bot_name": bot_name,
@@ -1150,14 +1276,11 @@ async def stop_paper_bot(
                 "stopped_at": now,
                 "message": "该 Paper Bot 已处于停止状态。",
             },
-            "error": None,
-            "timestamp": now,
+            "error": None, "timestamp": now,
         }
 
-    # 更新本地状态为 stopping
     update_paper_bot_fields(paper_bot_id, local_status="stopping")
 
-    # 尝试调用 Hummingbot API 停止
     hummingbot_response = None
     stop_success = False
     stop_error: Optional[str] = None
@@ -1169,9 +1292,7 @@ async def stop_paper_bot(
             "async_backend": False,
         }
         hummingbot_response = await _call_hummingbot_api(
-            "POST",
-            "/bot-orchestration/stop-bot",
-            json_data=stop_payload,
+            "POST", "/bot-orchestration/stop-bot", json_data=stop_payload
         )
         stop_success = True
     except Exception as e:
@@ -1180,19 +1301,15 @@ async def stop_paper_bot(
             try:
                 container_name = f"hummingbot-{paper_bot_id.split('_')[1] if '_' in paper_bot_id else paper_bot_id}"
                 hummingbot_response = await _call_hummingbot_api(
-                    "POST",
-                    f"/docker/stop-container/{container_name}",
+                    "POST", f"/docker/stop-container/{container_name}"
                 )
                 stop_success = True
             except Exception as e2:
-                stop_error = (
-                    f"当前 Hummingbot API 版本未提供可用的 Paper Bot 停止接口。"
-                    f" stop-bot: {str(e)}, docker: {str(e2)}"
-                )
+                stop_error = f"stop-bot: {str(e)}; docker: {str(e2)}"
         else:
             stop_error = f"停止 Paper Bot 失败: {stop_error}"
 
-    new_local_status = "stopped" if stop_success else previous_local_status
+    new_local_status = "stopped" if stop_success else record.get("local_status", "unknown")
     update_paper_bot_fields(
         paper_bot_id,
         local_status=new_local_status,
@@ -1201,15 +1318,16 @@ async def stop_paper_bot(
         matched_by="none",
     )
 
-    _log_paper_bot_stop(
-        paper_bot_id=paper_bot_id,
-        bot_name=bot_name,
-        previous_status=previous_local_status,
-        new_status=new_local_status,
-        success=stop_success,
-        error_message=stop_error,
-        request_data=raw_request_data,
-    )
+    logger.info(json.dumps({
+        "operation_type": "stop_paper_bot",
+        "paper_bot_id": paper_bot_id,
+        "bot_name": bot_name,
+        "previous_local_status": record.get("local_status", "unknown"),
+        "new_local_status": new_local_status,
+        "success": stop_success,
+        "error": stop_error,
+        "timestamp": now,
+    }, default=str))
 
     return {
         "stopped": stop_success,

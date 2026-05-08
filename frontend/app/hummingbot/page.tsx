@@ -1994,14 +1994,24 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                   </Badge>
                 </div>
 
-                {/* 状态说明 */}
+                {/* 状态说明 + 错误详情 */}
                 {startResult.data.local_status === "start_failed" && (
-                  <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
-                    <p className="text-red-300 text-xs">
-                      <span className="font-semibold">启动失败：</span>
-                      Hummingbot API 返回了错误，本地记录已创建但 Bot 未真正运行。
-                      请检查上方的错误信息，或刷新列表查看详情。
-                    </p>
+                  <div className="space-y-2">
+                    <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
+                      <p className="text-red-300 text-xs">
+                        <span className="font-semibold">启动失败：</span>
+                        Hummingbot API 返回了错误，本地记录已创建但 Bot 未真正运行。
+                        请检查下方错误详情。
+                      </p>
+                    </div>
+                    {startResult.error && (
+                      <div className="p-3 bg-red-500/5 border border-red-500/30 rounded-lg">
+                        <p className="text-red-400 text-xs mb-1 font-semibold">错误详情：</p>
+                        <pre className="text-red-300 text-xs whitespace-pre-wrap break-words max-h-48 overflow-y-auto font-mono leading-relaxed">
+                          {startResult.error}
+                        </pre>
+                      </div>
+                    )}
                   </div>
                 )}
 
