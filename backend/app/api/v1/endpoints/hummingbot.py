@@ -1,7 +1,9 @@
 """
 Hummingbot API Endpoints (Read-only + Paper Bot)
 
-提供只读访问 Hummingbot API 的 REST 接口：
+提供只读访问 Hummingbot API 的 REST 接口，以及 QuantAgent Paper Bot 管理接口。
+
+只读接口：
 - GET /hummingbot/status     - API 连接状态
 - GET /hummingbot/docker     - Docker 容器状态
 - GET /hummingbot/connectors - Connectors 列表
@@ -9,19 +11,29 @@ Hummingbot API Endpoints (Read-only + Paper Bot)
 - GET /hummingbot/bots       - Bots 编排状态
 - GET /hummingbot/orders     - 订单信息（只读）
 - GET /hummingbot/positions  - 持仓信息（只读）
-- POST /hummingbot/paper-bots/preview - Paper Bot 配置预览（v1.2.1）
-- POST /hummingbot/paper-bots/start   - 启动 Paper Bot（v1.2.2）
-- GET  /hummingbot/paper-bots         - Paper Bot 列表（v1.2.3）
-- GET  /hummingbot/paper-bots/{id}    - Paper Bot 详情（v1.2.3）
-- GET  /hummingbot/paper-bots/{id}/orders     - Paper Bot 模拟订单（v1.2.3）
-- GET  /hummingbot/paper-bots/{id}/positions  - Paper Bot 模拟持仓（v1.2.3）
-- GET  /hummingbot/paper-bots/{id}/portfolio  - Paper Bot 模拟资产（v1.2.3）
-- GET  /hummingbot/paper-bots/{id}/logs      - Paper Bot 日志（v1.2.3）
-- POST /hummingbot/paper-bots/{id}/stop       - 停止 Paper Bot（v1.2.4）
+
+Paper Bot（v1.2.x）：纯现货模拟盘，不接 API Key
+- POST /hummingbot/paper-bots/preview
+- POST /hummingbot/paper-bots/start
+- GET  /hummingbot/paper-bots
+- GET  /hummingbot/paper-bots/{id}
+- GET  /hummingbot/paper-bots/{id}/orders
+- GET  /hummingbot/paper-bots/{id}/positions
+- GET  /hummingbot/paper-bots/{id}/portfolio
+- GET  /hummingbot/paper-bots/{id}/logs
+- POST /hummingbot/paper-bots/{id}/stop
+
+Testnet Perpetual Bot（v1.3.x）：测试网永续合约，需要测试网 API Key
+- POST /hummingbot/testnet-bots/preview
+- POST /hummingbot/testnet-bots/start
+- GET  /hummingbot/testnet-bots
+- GET  /hummingbot/testnet-bots/{id}
+- POST /hummingbot/testnet-bots/{id}/stop
 
 注意：
 - 所有只读接口仅返回数据，不执行真实交易
-- Paper Bot 接口仅生成配置预览，不启动 Bot
+- Paper Bot 接口仅用于本地模拟，不支持 directional_trading controller
+- Testnet Bot 使用测试网 API Key，不动真钱
 - 不暴露 Hummingbot API 认证信息到前端
 """
 
@@ -755,3 +767,72 @@ async def stop_paper_bot_endpoint(
             "error": f"停止 Paper Bot 时发生错误: {str(e)}",
             "timestamp": now,
         }
+
+
+# ── Paper Bot 本地资产隔离接口 (v1.3.0 Phase 3 P2-2) ──────────────────────
+
+@router.get("/paper-bots/{paper_bot_id}/local-portfolio")
+async def get_paper_bot_local_portfolio(paper_bot_id: str):
+    """
+    获取 Paper Bot 的本地隔离资产（独立追踪，不依赖 Hummingbot 全局 Portfolio）。
+
+    当 Hummingbot API 的 /portfolio/state 不支持按 Bot 隔离时，
+    本接口返回通过本地成交记录独立计算的资产状态。
+
+    返回内容：
+    - initial_balance: 初始资金
+    - cash_balance: 当前现金余额
+    - position_value: 当前持仓价值（实时价格）
+    - total_equity: 总权益 = cash + position_value
+    - pnl: 浮动盈亏
+    - pnl_pct: 盈亏百分比
+    - positions: 持仓明细
+    - trade_count: 累计成交笔数
+    """
+    try:
+        from app.services.paper_bot_local_portfolio import paper_bot_local_portfolio
+        portfolio = await paper_bot_local_portfolio.get_portfolio(paper_bot_id)
+        if portfolio is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Paper Bot '{paper_bot_id}' 未找到或未初始化本地资产追踪。"
+            )
+        return portfolio
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取本地资产失败: {str(e)}")
+
+
+@router.get("/paper-bots/{paper_bot_id}/trade-history")
+async def get_paper_bot_trade_history(
+    paper_bot_id: str,
+    limit: int = 50,
+):
+    """
+    获取 Paper Bot 的本地成交历史记录。
+
+    limit: 最大返回条数，默认 50 条
+    """
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit 必须在 1-500 之间")
+
+    try:
+        from app.services.paper_bot_local_portfolio import paper_bot_local_portfolio
+        history = await paper_bot_local_portfolio.get_trade_history(paper_bot_id, limit=limit)
+        return {"paper_bot_id": paper_bot_id, "trades": history, "count": len(history)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取成交历史失败: {str(e)}")
+
+
+@router.get("/paper-bots/local-portfolios")
+async def get_all_local_portfolios():
+    """
+    获取所有 Paper Bot 的本地隔离资产（多 Bot 资产隔离视图）。
+    """
+    try:
+        from app.services.paper_bot_local_portfolio import paper_bot_local_portfolio
+        portfolios = await paper_bot_local_portfolio.get_all_portfolios()
+        return {"portfolios": portfolios, "count": len(portfolios)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取资产列表失败: {str(e)}")

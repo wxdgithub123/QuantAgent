@@ -10,7 +10,8 @@ Hummingbot Config Mapper
 4. 永续/期货 connector 永远返回 unsupported
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from app.schemas.hummingbot_paper_bot import (
@@ -46,35 +47,224 @@ class StrategyMapperEntry:
     controller_name: str
     supported: bool = True
     unsupported_reason: Optional[str] = None
+    # 最小初始资金（USDT）
+    min_initial_balance: float = 100.0
+    # 支持的时间周期
+    supported_timeframes: List[str] = field(
+        default_factory=lambda: ["1m", "5m", "15m", "1h", "4h", "1d"]
+    )
 
 
 STRATEGY_MAPPING: Dict[str, Dict[str, StrategyMapperEntry]] = {
-    # ── low_frequency_signal ──────────────────────────────────────────────────
+    # ── 已验证可用的策略（Hummingbot 镜像中存在对应 controller）──────────────────
+    "boll": {
+        "bollinger": StrategyMapperEntry(
+            controller_type="directional_trading",
+            controller_name="bollinger_v1",
+            supported_timeframes=["5m", "15m", "1h", "4h", "1d"],
+            min_initial_balance=100.0,
+        ),
+    },
+    # ── 兼容旧名映射（low_frequency_signal）───────────────────────────────────
     "low_frequency_signal": {
         "bollinger": StrategyMapperEntry(
             controller_type="directional_trading",
             controller_name="bollinger_v1",
+            supported_timeframes=["15m", "1h"],
         ),
         "supertrend": StrategyMapperEntry(
             controller_type="directional_trading",
             controller_name="supertrend_v1",
+            supported_timeframes=["15m", "1h"],
         ),
         "ma_cross": StrategyMapperEntry(
             controller_type="directional_trading",
             controller_name="macd_bb_v1",
+            supported_timeframes=["15m", "1h"],
         ),
         "rsi": StrategyMapperEntry(
             controller_type="directional_trading",
-            controller_name="bollinger_v1",  # RSI 作为 BB 参数传入
+            controller_name="macd_bb_v1",
+            supported=False,
+            unsupported_reason=(
+                "RSI 信号类型当前暂不支持。"
+                " 请改用已支持的信号类型：bollinger（bollinger_v1）、"
+                "supertrend（supertrend_v1）或 ma_cross（macd_bb_v1）。"
+            ),
+            supported_timeframes=["15m", "1h"],
+            min_initial_balance=100.0,
+        ),
+        "ma_crossover": StrategyMapperEntry(
+            controller_type="directional_trading",
+            controller_name="macd_bb_v1",
+            supported_timeframes=["15m", "1h"],
+        ),
+        "macd": StrategyMapperEntry(
+            controller_type="directional_trading",
+            controller_name="macd_bb_v1",
+            supported_timeframes=["15m", "1h"],
         ),
     },
-    # ── position_executor ────────────────────────────────────────────────────
+    # ── 尚未支持的策略（controller 在 Hummingbot 镜像中不存在）────────────────
+    # supported=False：preflight 直接拒绝，不调用 deploy
+    # 禁止改为 supported=True，否则用户看到 HTTP 200，容器却 Exited(1)
+    "ma": {
+        "ma_cross": StrategyMapperEntry(
+            controller_type="directional_trading",
+            controller_name="dman_v3",
+            supported=False,
+            unsupported_reason=(
+                "ma_cross 映射到的控制器 directional_trading/dman_v3 "
+                "在当前 Hummingbot 镜像中不存在（ModuleNotFoundError）。"
+                " 请改用已支持的策略：bollinger（低频 signal → bollinger_v1）。"
+            ),
+            supported_timeframes=["5m", "15m", "1h", "4h", "1d"],
+        ),
+        "ma_crossover": StrategyMapperEntry(
+            controller_type="directional_trading",
+            controller_name="dman_v3",
+            supported=False,
+            unsupported_reason=(
+                "ma_crossover 的控制器 directional_trading/dman_v3 不存在。"
+                " 请改用 bollinger（bollinger_v1）或 low_frequency_signal/ma_cross（macd_bb_v1）。"
+            ),
+            supported_timeframes=["5m", "15m", "1h", "4h", "1d"],
+        ),
+    },
+    "ema_triple": {
+        "ema_crossoverover": StrategyMapperEntry(
+            controller_type="directional_trading",
+            controller_name="dman_v3",
+            supported=False,
+            unsupported_reason=(
+                "ema_triple 的控制器 directional_trading/dman_v3 不存在。"
+                " 请改用已支持的策略：bollinger、supertrend、macd。"
+            ),
+            supported_timeframes=["5m", "15m", "1h", "4h", "1d"],
+            min_initial_balance=100.0,
+        ),
+        "ema_cross": StrategyMapperEntry(
+            controller_type="directional_trading",
+            controller_name="dman_v3",
+            supported=False,
+            unsupported_reason=(
+                "ema_cross 的控制器 directional_trading/dman_v3 不存在。"
+                " 请改用已支持的策略：bollinger、supertrend、macd。"
+            ),
+            supported_timeframes=["5m", "15m", "1h", "4h", "1d"],
+            min_initial_balance=100.0,
+        ),
+    },
+    "macd": {
+        "macd": StrategyMapperEntry(
+            controller_type="directional_trading",
+            controller_name="dman_v3",
+            supported=False,
+            unsupported_reason=(
+                "macd 的控制器 directional_trading/dman_v3 不存在。"
+                " 请改用 low_frequency_signal/macd（映射到 directional_trading/macd_bb_v1）。"
+            ),
+            supported_timeframes=["5m", "15m", "1h", "4h", "1d"],
+            min_initial_balance=100.0,
+        ),
+    },
+    "rsi": {
+        "rsi": StrategyMapperEntry(
+            controller_type="directional_trading",
+            controller_name="dman_v3",
+            supported=False,
+            unsupported_reason=(
+                "rsi 的控制器 directional_trading/dman_v3 不存在。"
+                " 请改用 bollinger（rsi 信号映射到 bollinger_v1）。"
+            ),
+            supported_timeframes=["5m", "15m", "1h", "4h", "1d"],
+            min_initial_balance=100.0,
+        ),
+    },
+    "atr_trend": {
+        "atr_trailing": StrategyMapperEntry(
+            controller_type="directional_trading",
+            controller_name="dman_v3",
+            supported=False,
+            unsupported_reason=(
+                "atr_trailing 的控制器 directional_trading/dman_v3 不存在。"
+                " 请改用已支持的策略：bollinger、supertrend、macd。"
+            ),
+            supported_timeframes=["15m", "1h", "4h", "1d"],
+            min_initial_balance=100.0,
+        ),
+    },
+    "grid": {
+        "grid": StrategyMapperEntry(
+            controller_type="generic",
+            controller_name="grid_strike",
+            supported=False,
+            unsupported_reason=(
+                "grid 的控制器 generic/grid_strike 在当前 Hummingbot 镜像中不存在。"
+                " 请改用已支持的策略：bollinger、supertrend、macd。"
+            ),
+            supported_timeframes=["1m", "5m", "15m", "1h"],
+            min_initial_balance=500.0,
+        ),
+    },
+    "dca": {
+        "dca": StrategyMapperEntry(
+            controller_type="generic",
+            controller_name="dca",
+            supported=False,
+            unsupported_reason=(
+                "dca 的控制器 generic/dca 在当前 Hummingbot 镜像中不存在。"
+                " 请改用已支持的策略：bollinger、supertrend、macd。"
+            ),
+            supported_timeframes=["5m", "15m", "1h", "4h", "1d"],
+            min_initial_balance=200.0,
+        ),
+    },
+    "pmm": {
+        "pmm": StrategyMapperEntry(
+            controller_type="generic",
+            controller_name="pmm",
+            supported=False,
+            unsupported_reason=(
+                "pmm 的控制器 generic/pmm 在当前 Hummingbot 镜像中不存在。"
+                " 请改用已支持的策略：bollinger、supertrend、macd。"
+            ),
+            supported_timeframes=["1m", "5m", "15m"],
+            min_initial_balance=1000.0,
+        ),
+    },
+    "ichimoku": {
+        "ichimoku": StrategyMapperEntry(
+            controller_type="directional_trading",
+            controller_name="dman_v3",
+            supported=False,
+            unsupported_reason=(
+                "ichimoku 的控制器 directional_trading/dman_v3 不存在。"
+                " 请改用已支持的策略：bollinger、supertrend、macd。"
+            ),
+            supported_timeframes=["1h", "4h", "1d"],
+            min_initial_balance=500.0,
+        ),
+    },
+    "turtle": {
+        "turtle": StrategyMapperEntry(
+            controller_type="directional_trading",
+            controller_name="dman_v3",
+            supported=False,
+            unsupported_reason=(
+                "turtle 的控制器 directional_trading/dman_v3 不存在。"
+                " 请改用已支持的策略：bollinger、supertrend、macd。"
+            ),
+            supported_timeframes=["1h", "4h", "1d"],
+            min_initial_balance=1000.0,
+        ),
+    },
     "position_executor": {
         "default": StrategyMapperEntry(
             controller_type="generic",
             controller_name="pmm",
             supported=False,
-            unsupported_reason="position_executor 当前需要永续 connector，不属于 Branch A 范围",
+            unsupported_reason="position_executor 当前需要永续 connector，请改用已支持的现货策略。",
         ),
     },
 }
@@ -88,14 +278,13 @@ def check_connector(connector: str, available_connectors: List[str]) -> PaperCon
 
     检查项：
     1. 是否在 PAPER_CONNECTOR_WHITELIST 中
-    2. 是否包含禁止关键词（perpetual / testnet）
+    2. 是否包含禁止关键词（testnet）
     3. 是否在 Hummingbot 可用 connectors 列表中
     """
     c_lower = connector.lower()
 
     in_whitelist = c_lower in {c.lower() for c in PAPER_CONNECTOR_WHITELIST}
     not_forbidden = not any(p in c_lower for p in FORBIDDEN_CONNECTOR_PATTERNS)
-    # paper_trade_enabled：connector 在 whitelist 且不在 forbidden 且在可用列表中
     paper_trade_enabled = (
         in_whitelist
         and not_forbidden
@@ -120,10 +309,42 @@ def map_strategy(
     """
     将策略类型 + 信号类型映射到 Hummingbot controller。
 
-    返回 supported=False 时表示当前组合不支持，不生成 payload。
+    返回 supported=False 时表示当前组合不支持，preflight 直接拒绝，不调用 deploy。
     """
     strategy_map = STRATEGY_MAPPING.get(strategy_type, {})
+
+    # 精确匹配
     entry = strategy_map.get(signal_type)
+
+    # 如果没有精确匹配，尝试模糊匹配（同策略类型的 keys）
+    if entry is None and strategy_type in STRATEGY_MAPPING:
+        for key, e in strategy_map.items():
+            if signal_type.lower() in key.lower() or key.lower() in signal_type.lower():
+                entry = e
+                break
+
+    # 兼容：如果策略类型不存在，尝试在 low_frequency_signal 中查找
+    if entry is None:
+        legacy_map = STRATEGY_MAPPING.get("low_frequency_signal", {})
+        entry = legacy_map.get(signal_type)
+        if entry:
+            # 如果在 legacy 中找到，复制回来以便下次快速查找
+            if strategy_type not in STRATEGY_MAPPING:
+                STRATEGY_MAPPING[strategy_type] = {}
+            STRATEGY_MAPPING[strategy_type][signal_type] = entry
+
+    # 全局模糊匹配（仅作为最后的兜底，不跨 strategy_type 匹配）
+    if entry is None:
+        for stype, smap in STRATEGY_MAPPING.items():
+            for skey, e in smap.items():
+                if signal_type.lower() in skey.lower() or skey.lower() in signal_type.lower():
+                    # 仅在 low_frequency_signal 内部模糊匹配，禁止跨策略类型
+                    if stype == "low_frequency_signal":
+                        entry = e
+                        strategy_type = stype
+                        break
+            if entry:
+                break
 
     if entry is None:
         return StrategyMappingInfo(
@@ -132,7 +353,8 @@ def map_strategy(
             controller_name="",
             signal_type=signal_type,
             supported=False,
-            unsupported_reason=f"策略 {strategy_type} + 信号 {signal_type} 的组合尚未支持",
+            unsupported_reason=f"策略 {strategy_type} + 信号 {signal_type} 的组合尚未支持。"
+            f" 当前支持的策略类型：{', '.join(sorted(STRATEGY_MAPPING.keys()))}",
         )
 
     if not entry.supported:
@@ -156,6 +378,19 @@ def map_strategy(
 
 # ── Controller Config Payload 生成 ──────────────────────────────────────────────
 
+def _normalize_timeframe(timeframe: str) -> str:
+    """规范化时间周期名称"""
+    mapping = {
+        "1m": "1m", "m1": "1m",
+        "5m": "5m", "m5": "5m",
+        "15m": "15m", "m15": "15m",
+        "1h": "1h", "h1": "1h",
+        "4h": "4h", "h4": "4h",
+        "1d": "1d", "d1": "1d",
+    }
+    return mapping.get(timeframe.lower(), "1h")
+
+
 def build_controller_config_payload(
     config_id: str,
     controller_type: str,
@@ -174,61 +409,87 @@ def build_controller_config_payload(
     extra_params: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    为指定 controller 生成 Hummingbot V2 Controller config payload。
+    为已验证可用的 controller 生成 Hummingbot V2 Controller config payload。
 
-    所有参数都从 request 中来，不引用外部数据。
-    不支持永续 connector。
+    字段完全对齐 Hummingbot 镜像中的真实 Pydantic schema：
+    - BollingerV1ControllerConfig
+    - SuperTrendConfig
+    - MACDBBV1ControllerConfig
+
+    严禁发送 extra 字段（Hummingbot 使用 Pydantic extra_forbidden，会直接拒绝）。
+    所有字段值以 docker exec python 查询到的 schema 为准。
     """
+    ep = extra_params or {}
+
+    # 转换风控百分比为 Decimal（schema 要求 Decimal 类型）
+    stop_loss_decimal = Decimal(str(round(stop_loss_pct / 100.0, 6)))
+    take_profit_decimal = Decimal(str(round(take_profit_pct / 100.0, 6)))
+    # cooldown_time: schema 要求整数（秒）
+    cooldown_seconds = int(cooldown_minutes * 60)
+    # time_limit: schema 默认 2700 秒（45 分钟）
+    max_runtime_minutes = ep.get("max_runtime_minutes", 60)
+    time_limit_seconds = int(max_runtime_minutes * 60)
+
+    # ── 所有 directional_trading controller 的共同基础字段 ─────────────────────
     base = {
         "id": config_id,
         "controller_type": controller_type,
         "controller_name": controller_name,
+        # connector_name：使用现货 connector（如 binance），schema 默认 binance_perpetual
         "connector_name": connector,
-        "trading_pair": trading_pair,
-        "total_amount_quote": paper_initial_balance,
-        "min_order_amount_quote": order_amount,
+        "trading_pair": trading_pair.upper(),
+        # total_amount_quote：schema 要求 Decimal
+        "total_amount_quote": Decimal(str(paper_initial_balance)),
+        # 通用风控（schema 中 stop_loss/take_profit 是 Decimal，值 0.03=3%）
+        "stop_loss": stop_loss_decimal,
+        "take_profit": take_profit_decimal,
+        # cooldown_time：schema 要求整数（秒），默认值 300
+        "cooldown_time": cooldown_seconds if cooldown_seconds >= 60 else 300,
+        # time_limit：schema 默认 2700 秒（45 分钟）
+        "time_limit": time_limit_seconds,
+        # 现货交易使用 ONEWAY，不使用 HEDGE
+        "position_mode": "ONEWAY",
+        # 现货不使用杠杆
+        "leverage": 1,
     }
 
+    # ── directional_trading/bollinger_v1 ──────────────────────────────────────
     if controller_name == "bollinger_v1":
-        # Bollinger Bands 低频信号策略
-        # 映射 timeframe：15m / 1h
-        interval_map = {"15m": "15m", "1h": "1h"}
-        interval = interval_map.get(timeframe, "1h")
-
         base.update({
-            "interval": interval,
-            "bb_length": 100,
-            "bb_std": 2.0,
+            "interval": _normalize_timeframe(timeframe),
+            # bb_length：schema 默认 100
+            "bb_length": ep.get("boll_period", 100),
+            # bb_std：schema 默认 2.0
+            "bb_std": ep.get("boll_std_dev", 2.0),
             "bb_long_threshold": 0.0,
             "bb_short_threshold": 1.0,
-            # 风险参数（由 executor 层处理，controller 层面只是配置）
+            # max_executors_per_side：控制同时挂单数量
+            "max_executors_per_side": max_open_positions,
         })
 
+    # ── directional_trading/supertrend_v1 ────────────────────────────────────
     elif controller_name == "supertrend_v1":
-        interval_map = {"15m": "15m", "1h": "1h"}
-        interval = interval_map.get(timeframe, "1h")
-
         base.update({
-            "interval": interval,
+            "interval": _normalize_timeframe(timeframe),
             "length": 20,
-            "multiplier": 4.0,
+            "multiplier": ep.get("atr_multiplier", 4.0),
             "percentage_threshold": 0.01,
+            "max_executors_per_side": max_open_positions,
         })
 
+    # ── directional_trading/macd_bb_v1 ───────────────────────────────────────
     elif controller_name == "macd_bb_v1":
-        interval_map = {"15m": "15m", "1h": "1h"}
-        interval = interval_map.get(timeframe, "1h")
-
         base.update({
-            "interval": interval,
-            "bb_length": 100,
-            "macd_fast": 12,
-            "macd_slow": 26,
-            "macd_signal": 9,
+            "interval": _normalize_timeframe(timeframe),
+            "bb_length": ep.get("boll_period", 100),
+            "bb_std": ep.get("boll_std_dev", 2.0),
+            "bb_long_threshold": 0.0,
+            "bb_short_threshold": 1.0,
+            "macd_fast": ep.get("macd_fast", 12),
+            "macd_slow": ep.get("macd_slow", 26),
+            "macd_signal": ep.get("macd_signal", 9),
+            "max_executors_per_side": max_open_positions,
         })
-
-    if extra_params:
-        base.update(extra_params)
 
     return base
 
@@ -276,7 +537,6 @@ async def check_paper_connectors_available(
     """
     available = await get_available_connectors(base_url, username, password)
 
-    # 检查 whitelist 中的 connector 是否可用
     available_lower = {c.lower() for c in available}
     available_paper_connectors = [
         c for c in PAPER_CONNECTOR_WHITELIST
@@ -322,9 +582,7 @@ async def run_preflight_check(
     1. Hummingbot API 是否在线
     2. connector 是否在白名单且不在禁止列表
     3. connector 是否在 Hummingbot 可用 connectors 中
-    4. connector 是否是现货 connector（不包含 perpetual/testnet）
-    5. 策略是否已映射
-    6. 策略是否支持
+    4. 策略是否已映射（supported=False 时直接拒绝）
     """
     errors: List[str] = []
     warnings: List[str] = []
@@ -351,7 +609,6 @@ async def run_preflight_check(
 
     # Step 2: 获取可用 connectors
     available = await get_available_connectors(base_url, username, password)
-    available_lower = {c.lower() for c in available}
     available_set = set(available)
 
     # Step 3: Connector 检查
@@ -359,27 +616,23 @@ async def run_preflight_check(
 
     if not connector_check.not_forbidden:
         errors.append(
-            f"connector '{connector}' 包含禁止关键词（perpetual / testnet）。"
-            " 永续合约 / Testnet / Live connector 不允许用于 Paper Bot。"
+            f"connector '{connector}' 包含禁止关键词（testnet）。"
+            " Testnet connector 不允许用于 Paper Bot。"
         )
 
     if not connector_check.in_whitelist:
         errors.append(
             f"connector '{connector}' 不在 Paper Bot 允许列表中。"
-            f" 当前仅支持现货 connector：{', '.join(sorted(PAPER_CONNECTOR_WHITELIST))}。"
-        )
-        warnings.append(
-            "永续合约模拟属于 Testnet Bot 阶段（v1.3），不属于当前 Paper Bot 范围。"
+            f" 当前支持的 connector：{', '.join(sorted(PAPER_CONNECTOR_WHITELIST))}。"
         )
 
     if connector_check.in_whitelist and not connector_check.paper_trade_enabled:
-        # 在 whitelist 但不在 Hummingbot 可用列表 → 可能是 paper_trade_exchanges 未配置
         warnings.append(
             f"connector '{connector}' 在白名单中但未在 Hummingbot 可用 connectors 中。"
             " 请确保 Hummingbot 的 paper_trade_exchanges 配置中包含此 connector。"
         )
 
-    # Step 4: 策略映射检查
+    # Step 4: 策略映射检查（supported=False 直接拒绝）
     mapping = map_strategy(strategy_type, signal_type)
 
     if not mapping.supported:

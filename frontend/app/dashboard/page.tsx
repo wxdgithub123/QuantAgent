@@ -889,6 +889,9 @@ export default function DashboardPage() {
               <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
                 <Server className="w-4 h-4" /> Hummingbot
               </Link>
+              <Link href="/hummingbot-testnet" className="px-3 py-1.5 text-sm text-orange-400 hover:text-orange-100 hover:bg-orange-500/10 rounded-lg transition-all flex items-center gap-1.5">
+                <Server className="w-4 h-4" /> Testnet
+              </Link>
             </nav>
 
             <div className="flex items-center gap-3">

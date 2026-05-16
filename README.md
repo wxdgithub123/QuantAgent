@@ -236,6 +236,8 @@ QuantAgent/
 ├── frontend/         # Next.js 前端应用
 │   ├── app/          # 页面路由
 │   ├── components/   # React 组件
+│   │   └── hummingbot/ # Paper Bot 前端组件
+│   └── hooks/          # React Hooks
 │   └── lib/          # 工具函数
 ├── gateway/          # Go 网关服务
 │   └── cmd/          # 应用入口
@@ -250,11 +252,51 @@ QuantAgent/
 - **frontend/**：提供交易界面、图表展示、策略配置、实时监控
 - **gateway/**：负责与交易所通信、订单执行、行情数据推送
 
-### 🤖 Hummingbot 集成
+### 🤖 Hummingbot & Paper Bot 集成
 
-QuantAgent 支持与 Hummingbot API 的只读集成，可以查看 Hummingbot 的状态、Docker 容器、Connectors、Bots、Portfolio、订单和持仓信息。
+QuantAgent 支持与 Hummingbot API 的集成，可以查看 Hummingbot 的状态、Docker 容器、Connectors、Bots、Portfolio、订单和持仓信息，并提供 **Paper Bot** 功能用于模拟盘策略测试。
 
 详细说明请参阅：[Hummingbot API 集成说明](docs/hummingbot-integration.md)
+
+#### Paper Bot 快速入门
+
+Paper Bot 是基于 Hummingbot 的模拟交易机器人，支持多策略、多 Bot 并发运行。
+
+**启动 Hummingbot 服务**
+
+```bash
+# 检查服务状态
+docker ps | grep hummingbot
+
+# 启动服务（如未运行）
+docker-compose up -d hummingbot-api
+
+# 验证 API 可访问
+curl http://localhost:8080/
+```
+
+**通过前端操作**
+
+1. 访问 `http://localhost:3002/hummingbot`
+2. 点击「创建 Paper Bot」，填写 Bot 名称、策略类型、交易对等参数
+3. 点击「启动」运行 Bot
+4. 在权益曲线卡片中查看实时收益和统计指标
+5. 点击「停止」结束运行
+
+**API 端点**
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/v1/hummingbot/paper-bots` | 列出所有 Paper Bot |
+| `POST` | `/api/v1/hummingbot/paper-bots` | 创建 Paper Bot |
+| `GET` | `/api/v1/hummingbot/paper-bots/{id}` | 获取 Bot 详情 |
+| `POST` | `/api/v1/hummingbot/paper-bots/{id}/start` | 启动 Bot |
+| `POST` | `/api/v1/hummingbot/paper-bots/{id}/stop` | 停止 Bot |
+| `DELETE` | `/api/v1/hummingbot/paper-bots/{id}` | 删除 Bot |
+| `GET` | `/api/v1/hummingbot/paper-bots/{id}/equity-curve` | 获取权益曲线数据 |
+| `WS` | `/ws/paper-bots` | WebSocket 实时推送 |
+
+前端组件文档：[frontend/components/hummingbot/README.md](frontend/components/hummingbot/README.md)
 
 ### 📝 注意事项
 

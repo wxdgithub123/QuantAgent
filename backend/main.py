@@ -154,6 +154,56 @@ async def _startup_backfill():
 # Lifespan
 # ─────────────────────────────────────────────────────────────────────────────
 
+async def _paper_bot_ws_heartbeat_loop():
+    """WebSocket 心跳任务（每30秒）"""
+    from app.websocket.paper_bot_ws import paper_bot_ws_manager
+    while True:
+        try:
+            await asyncio.sleep(30)
+            await paper_bot_ws_manager.broadcast_heartbeat()
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            pass
+
+
+async def _paper_bot_ws_broadcast_loop():
+    """WebSocket 状态推送任务（每5秒推送运行中 Bot 的状态）"""
+    from app.websocket.paper_bot_ws import paper_bot_ws_manager
+    from app.services.hummingbot_paper_bot_service import get_paper_bot_records
+    while True:
+        try:
+            await asyncio.sleep(5)
+            records = get_paper_bot_records()
+            for paper_bot_id, record in records.items():
+                if record.get("remote_status") == "running":
+                    await paper_bot_ws_manager.broadcast_bot_status(
+                        paper_bot_id,
+                        {
+                            "local_status": record.get("local_status"),
+                            "remote_status": record.get("remote_status"),
+                            "runtime_seconds": _calc_runtime_seconds(record),
+                        }
+                    )
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            pass
+
+
+def _calc_runtime_seconds(record: dict) -> int:
+    """计算 Bot 运行时间"""
+    started_at = record.get("started_at") or record.get("created_at")
+    if not started_at:
+        return 0
+    try:
+        from datetime import datetime
+        started_dt = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        return int((datetime.now().astimezone() - started_dt).total_seconds())
+    except Exception:
+        return 0
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("QuantAgent API Server starting up...")
@@ -252,6 +302,20 @@ async def lifespan(app: FastAPI):
         logger.info("Scheduler started.")
     except Exception as e:
         logger.error(f"Failed to start Scheduler: {e}")
+
+    # Start Paper Bot WebSocket heartbeat
+    try:
+        asyncio.create_task(_paper_bot_ws_heartbeat_loop())
+        logger.info("Paper Bot WebSocket heartbeat task started.")
+    except Exception as e:
+        logger.error(f"Failed to start Paper Bot WS heartbeat: {e}")
+
+    # Start Paper Bot WS broadcast loop
+    try:
+        asyncio.create_task(_paper_bot_ws_broadcast_loop())
+        logger.info("Paper Bot WS broadcast task started.")
+    except Exception as e:
+        logger.error(f"Failed to start Paper Bot WS broadcast: {e}")
 
     yield
 
@@ -382,6 +446,53 @@ async def market_websocket(websocket: WebSocket):
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
         await ws_manager.disconnect(websocket)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Paper Bot WebSocket Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+from app.websocket.paper_bot_ws import paper_bot_ws_manager
+
+
+@app.websocket("/ws/paper-bots")
+async def paper_bot_websocket_global(websocket: WebSocket):
+    """
+    Real-time Paper Bot updates (all bots, global subscription).
+    """
+    await paper_bot_ws_manager.connect(websocket, paper_bot_id=None)
+    try:
+        while True:
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=60)
+            except asyncio.TimeoutError:
+                continue
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        await paper_bot_ws_manager.disconnect(websocket, paper_bot_id=None)
+
+
+@app.websocket("/ws/paper-bots/{paper_bot_id}")
+async def paper_bot_websocket_single(websocket: WebSocket, paper_bot_id: str):
+    """
+    Real-time updates for a specific Paper Bot.
+    """
+    await paper_bot_ws_manager.connect(websocket, paper_bot_id=paper_bot_id)
+    try:
+        while True:
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=60)
+            except asyncio.TimeoutError:
+                continue
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        await paper_bot_ws_manager.disconnect(websocket, paper_bot_id=paper_bot_id)
 
 
 if __name__ == "__main__":

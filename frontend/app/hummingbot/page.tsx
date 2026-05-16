@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { usePaperBotWebSocket } from "@/hooks/usePaperBotWebSocket";
 import {
   RefreshCw, Wifi, WifiOff, Server, Container, Plug, Bot, AlertTriangle,
   CheckCircle, XCircle, ArrowLeft, Activity, BarChart, History, BarChart3, ShoppingCart, Wallet,
@@ -126,6 +127,10 @@ interface PaperBotFormData {
   cooldown_minutes: number;
   max_trades_per_day: number;
   max_runtime_minutes: number;
+  // 永续合约参数
+  leverage?: number;
+  position_mode?: "HEDGE" | "ONEWAY";
+  margin_coin?: string;
 }
 
 interface PaperBot {
@@ -305,6 +310,62 @@ export default function HummingbotPage() {
     fetchAll();
   }, [fetchAll]);
 
+  // ── Paper Bot WebSocket 实时推送 ────────────────────────────────────────
+
+  const { isConnected: wsConnected } = usePaperBotWebSocket({
+    onStatusUpdate: (status) => {
+      // 更新 Paper Bot 状态
+      setPaperBots(prev => {
+        if (!prev) return prev;
+        return {
+          bots: prev.bots.map(bot =>
+            bot.paper_bot_id === status.paper_bot_id
+              ? {
+                  ...bot,
+                  local_status: status.local_status,
+                  remote_status: status.remote_status,
+                  runtime_seconds: status.runtime_seconds,
+                }
+              : bot
+          ),
+        };
+      });
+      // 如果当前选中该 Bot，更新详情
+      if (selectedPaperBot?.paper_bot_id === status.paper_bot_id) {
+        setSelectedPaperBot(prev =>
+          prev ? {
+            ...prev,
+            local_status: status.local_status,
+            remote_status: status.remote_status,
+          } : prev
+        );
+      }
+    },
+    onOrdersUpdate: (orders) => {
+      // 订单更新已在 selectedPaperBot 详情中处理
+    },
+    onPositionsUpdate: (positions) => {
+      // 持仓更新已在 selectedPaperBot 详情中处理
+    },
+    onPortfolioUpdate: (portfolio) => {
+      // 资产更新已在 selectedPaperBot 详情中处理
+    },
+  });
+
+  // 更新 WS 连接状态指示器
+  useEffect(() => {
+    const indicator = document.getElementById("ws-indicator");
+    const label = document.getElementById("ws-label");
+    if (indicator) {
+      indicator.className = `w-2 h-2 rounded-full ${wsConnected ? "bg-green-400 animate-pulse" : "bg-slate-600"}`;
+      indicator.title = wsConnected ? "实时推送已连接" : "实时推送未连接";
+    }
+    if (label) {
+      label.textContent = wsConnected ? "WS Live" : "WS";
+      label.className = `hidden md:inline text-[10px] ${wsConnected ? "text-green-400" : "text-slate-500"}`;
+    }
+  }, [wsConnected]);
+
   // ── Paper Bot 监控函数 ──────────────────────────────────────────────────
 
   const fetchPaperBots = useCallback(async () => {
@@ -441,24 +502,41 @@ export default function HummingbotPage() {
       return;
     }
 
-    // 获取详情
+    // 获取详情（详情包含 can_fetch_runtime_data，决定是否拉取运行时数据）
     fetchPaperBotDetail(selectedPaperBot.paper_bot_id);
-    fetchPaperBotOrders(selectedPaperBot.paper_bot_id);
-    fetchPaperBotPositions(selectedPaperBot.paper_bot_id);
-    fetchPaperBotPortfolio(selectedPaperBot.paper_bot_id);
-    fetchPaperBotLogs(selectedPaperBot.paper_bot_id);
+    // 订单/持仓/资产/日志只在该 Paper Bot 远端真正在运行时才拉取
+    // 依赖 paperBotDetail 中的 can_fetch_runtime_data 字段
+  }, [selectedPaperBot]);
 
-    // 设置轮询（每 10 秒刷新）
-    const interval = setInterval(() => {
-      fetchPaperBotDetail(selectedPaperBot.paper_bot_id);
+  // 当详情响应到达且 can_fetch_runtime_data=true 时，拉取运行时数据
+  useEffect(() => {
+    if (!paperBotDetail || !selectedPaperBot) return;
+    const detail = paperBotDetail as Record<string, unknown>;
+    const canFetch = Boolean(detail.can_fetch_runtime_data);
+
+    if (canFetch) {
       fetchPaperBotOrders(selectedPaperBot.paper_bot_id);
       fetchPaperBotPositions(selectedPaperBot.paper_bot_id);
       fetchPaperBotPortfolio(selectedPaperBot.paper_bot_id);
       fetchPaperBotLogs(selectedPaperBot.paper_bot_id);
-    }, 10000);
+    } else {
+      // 远端未确认运行时，清空运行时数据
+      setPaperBotOrders(null);
+      setPaperBotPositions(null);
+      setPaperBotPortfolio(null);
+      setPaperBotLogs(null);
+    }
+  }, [paperBotDetail, selectedPaperBot, fetchPaperBotOrders, fetchPaperBotPositions, fetchPaperBotPortfolio, fetchPaperBotLogs]);
 
+  // 轮询：详情始终拉取，运行时数据根据 can_fetch_runtime_data 决定
+  useEffect(() => {
+    if (!selectedPaperBot) return;
+    const interval = setInterval(async () => {
+      // 始终拉取详情（更新 can_fetch_runtime_data 状态）
+      await fetchPaperBotDetail(selectedPaperBot.paper_bot_id);
+    }, 10000);
     return () => clearInterval(interval);
-  }, [selectedPaperBot, fetchPaperBotDetail, fetchPaperBotOrders, fetchPaperBotPositions, fetchPaperBotPortfolio, fetchPaperBotLogs]);
+  }, [selectedPaperBot, fetchPaperBotDetail]);
 
   // 辅助函数：计算 connectors 数量
   const getConnectorsCount = (data: unknown): number => {
@@ -596,11 +674,23 @@ export default function HummingbotPage() {
                 <Link href="/hummingbot" className="px-2 py-1 text-xs text-cyan-400 bg-cyan-500/10 rounded border border-cyan-500/20 font-medium">
                   <span className="flex items-center gap-1"><Server className="w-3 h-3" /> Hummingbot</span>
                 </Link>
+                <Link href="/hummingbot-testnet" className="px-2 py-1 text-xs text-orange-400 hover:bg-orange-500/10 rounded border border-orange-500/20 hover:border-orange-500/40 font-medium">
+                  <span className="flex items-center gap-1"><Server className="w-3 h-3" /> Testnet</span>
+                </Link>
               </nav>
               <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20">
                 <Server className="w-3 h-3 mr-1" />
                 只读模式
               </Badge>
+              {/* WebSocket 连接状态 */}
+              <div className="flex items-center gap-1.5">
+                <div
+                  id="ws-indicator"
+                  className="w-2 h-2 rounded-full bg-slate-600"
+                  title="实时推送状态"
+                />
+                <span id="ws-label" className="text-[10px] text-slate-500 hidden md:inline">WS</span>
+              </div>
               <Button
                 size="sm"
                 onClick={fetchAll}
@@ -1366,6 +1456,10 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
     cooldown_minutes: 60,
     max_trades_per_day: 3,
     max_runtime_minutes: 120,
+    // 永续合约参数
+    leverage: 1,
+    position_mode: "ONEWAY",
+    margin_coin: "USDT",
   });
 
   const [previewResult, setPreviewResult] = useState<PaperBotPreviewResponse | null>(null);
@@ -1530,7 +1624,7 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
               <li>• 不连接真实交易所账户</li>
               <li>• 不需要 API Key</li>
               <li>• 不支持 Testnet / Live</li>
-              <li>• 不支持永续合约（Perpetual Connector）</li>
+              <li>• 支持永续合约（Perpetual Connector，模拟保证金交易）</li>
               <li>• 不进行高频挂单、撤单或做市操作</li>
             </ul>
           </div>
@@ -1778,6 +1872,62 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                 className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
               />
             </div>
+
+            {/* Leverage (Perpetual Only) */}
+            {formData.connector?.includes("perpetual") && (
+              <div className="space-y-1">
+                <Label htmlFor="leverage" className="text-slate-300 text-xs">
+                  杠杆倍数 <span className="text-red-400">*</span>
+                </Label>
+                <Input
+                  id="leverage"
+                  type="number"
+                  min={1}
+                  max={125}
+                  value={formData.leverage}
+                  onChange={e => updateField("leverage", Number(e.target.value))}
+                  className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                />
+                <p className="text-slate-500 text-[10px]">1-125x，建议不超过 10x</p>
+              </div>
+            )}
+
+            {/* Position Mode (Perpetual Only) */}
+            {formData.connector?.includes("perpetual") && (
+              <div className="space-y-1">
+                <Label htmlFor="position_mode" className="text-slate-300 text-xs">
+                  持仓模式
+                </Label>
+                <select
+                  id="position_mode"
+                  value={formData.position_mode}
+                  onChange={e => updateField("position_mode", e.target.value as "HEDGE" | "ONEWAY")}
+                  className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                >
+                  <option value="ONEWAY">单向模式</option>
+                  <option value="HEDGE">双向模式 (Hedge)</option>
+                </select>
+                <p className="text-slate-500 text-[10px]">Hedge 模式可同时持有多空仓位</p>
+              </div>
+            )}
+
+            {/* Margin Coin (Perpetual Only) */}
+            {formData.connector?.includes("perpetual") && (
+              <div className="space-y-1">
+                <Label htmlFor="margin_coin" className="text-slate-300 text-xs">
+                  保证金币种
+                </Label>
+                <select
+                  id="margin_coin"
+                  value={formData.margin_coin}
+                  onChange={e => updateField("margin_coin", e.target.value)}
+                  className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                >
+                  <option value="USDT">USDT-M 永续</option>
+                  <option value="USDC">USDC-M 永续</option>
+                </select>
+              </div>
+            )}
           </div>
 
           {/* Submit Button */}
@@ -2241,8 +2391,9 @@ function PaperBotMonitorSection({
                     <th className="text-left py-2 px-3 text-slate-400">Bot 名称</th>
                     <th className="text-left py-2 px-3 text-slate-400">策略类型</th>
                     <th className="text-left py-2 px-3 text-slate-400">交易对</th>
-                    <th className="text-left py-2 px-3 text-slate-400">本地状态</th>
-                    <th className="text-left py-2 px-3 text-slate-400">远端状态</th>
+                    <th className="text-left py-2 px-3 text-slate-400">运行状态</th>
+                    <th className="text-left py-2 px-3 text-slate-400">远端确认</th>
+                    <th className="text-left py-2 px-3 text-slate-400">数据读取</th>
                     <th className="text-left py-2 px-3 text-slate-400">运行时长</th>
                     <th className="text-left py-2 px-3 text-slate-400">启动时间</th>
                     <th className="text-left py-2 px-3 text-slate-400">操作</th>
@@ -2264,15 +2415,16 @@ function PaperBotMonitorSection({
                         <Badge
                           variant="outline"
                           className={
-                            bot.local_status === "running" ? "bg-green-500/10 text-green-400 border-green-500/20" :
-                            bot.local_status === "starting" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
-                            bot.local_status === "submitted" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
-                            bot.local_status === "stopped" ? "bg-slate-500/10 text-slate-400 border-slate-500/20" :
-                            bot.local_status === "error" ? "bg-red-500/10 text-red-400 border-red-500/20" :
-                            "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                            bot.can_fetch_runtime_data ? "bg-green-500/10 text-green-400 border-green-500/20" :
+                            bot.remote_status === "deployed" ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
+                            bot.remote_status === "not_detected" ? "bg-slate-500/10 text-slate-400 border-slate-500/20" :
+                            "bg-red-500/10 text-red-400 border-red-500/20"
                           }
                         >
-                          {bot.local_status}
+                          {bot.can_fetch_runtime_data ? "运行中" :
+                           bot.remote_status === "deployed" ? "已部署" :
+                           bot.remote_status === "not_detected" ? "未检测" :
+                           bot.local_status}
                         </Badge>
                       </td>
                       <td className="py-2 px-3">
@@ -2280,16 +2432,28 @@ function PaperBotMonitorSection({
                           variant="outline"
                           className={
                             bot.remote_status === "running" ? "bg-green-500/10 text-green-400 border-green-500/20" :
-                            bot.remote_status === "not_detected" ? "bg-slate-500/10 text-slate-400 border-slate-500/20" :
-                            "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                            bot.remote_status === "deployed" ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
+                            "bg-slate-500/10 text-slate-400 border-slate-500/20"
                           }
                         >
-                          {bot.remote_status === "running" ? "已检测到" :
-                           bot.remote_status === "not_detected" ? "未检测到" :
-                           bot.remote_status}
+                          {bot.remote_status === "running" ? "已确认" :
+                           bot.remote_status === "deployed" ? "已部署" :
+                           bot.remote_status === "not_detected" ? "未检测" :
+                           bot.remote_status || "-"}
                           {bot.matched_by && bot.matched_by !== "none" && (
                             <span className="text-slate-400 ml-1">via {bot.matched_by}</span>
                           )}
+                        </Badge>
+                      </td>
+                      <td className="py-2 px-3">
+                        <Badge
+                          variant="outline"
+                          className={
+                            bot.can_fetch_runtime_data ? "bg-green-500/10 text-green-400 border-green-500/20" :
+                            "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                          }
+                        >
+                          {bot.can_fetch_runtime_data ? "可读取" : "不可读"}
                         </Badge>
                       </td>
                       <td className="py-2 px-3 text-slate-300">
@@ -2374,23 +2538,41 @@ function PaperBotMonitorSection({
                     <Badge
                       variant="outline"
                       className={
-                        (paperBotDetail as Record<string, unknown>)?.local_status === "running" ? "bg-green-500/10 text-green-400 border-green-500/20" :
-                        (paperBotDetail as Record<string, unknown>)?.local_status === "starting" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
-                        (paperBotDetail as Record<string, unknown>)?.local_status === "submitted" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
-                        (paperBotDetail as Record<string, unknown>)?.local_status === "stopped" ? "bg-slate-500/10 text-slate-400 border-slate-500/20" :
-                        "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                        (paperBotDetail as Record<string, unknown>)?.can_fetch_runtime_data === true
+                          ? "bg-green-500/10 text-green-400 border-green-500/20"
+                          : (paperBotDetail as Record<string, unknown>)?.remote_status === "deployed"
+                          ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                          : (paperBotDetail as Record<string, unknown>)?.remote_status === "not_detected"
+                          ? "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                          : "bg-red-500/10 text-red-400 border-red-500/20"
                       }
                     >
-                      本地状态: {(paperBotDetail as Record<string, unknown>)?.local_status as string || "-"}
+                      {String((paperBotDetail as Record<string, unknown>)?.can_fetch_runtime_data) === "true"
+                        ? "运行中"
+                        : (paperBotDetail as Record<string, unknown>)?.remote_status === "deployed"
+                        ? "已部署，等待运行确认"
+                        : (paperBotDetail as Record<string, unknown>)?.remote_status === "not_detected"
+                        ? "未检测"
+                        : (paperBotDetail as Record<string, unknown>)?.local_status || "-"}
                     </Badge>
                     <Badge
                       variant="outline"
                       className={
-                        (paperBotDetail as Record<string, unknown>)?.remote_status === "running" ? "bg-green-500/10 text-green-400 border-green-500/20" :
-                        "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                        (paperBotDetail as Record<string, unknown>)?.remote_status === "running"
+                          ? "bg-green-500/10 text-green-400 border-green-500/20"
+                          : (paperBotDetail as Record<string, unknown>)?.remote_status === "deployed"
+                          ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                          : "bg-slate-500/10 text-slate-400 border-slate-500/20"
                       }
                     >
-                      远端状态: {(paperBotDetail as Record<string, unknown>)?.remote_status as string || "-"}
+                      远端确认: {(paperBotDetail as Record<string, unknown>)?.remote_status === "running"
+                        ? "已确认"
+                        : (paperBotDetail as Record<string, unknown>)?.remote_status === "deployed"
+                        ? "已部署"
+                        : "未检测"}
+                      {(paperBotDetail as Record<string, unknown>)?.matched_by && (paperBotDetail as Record<string, unknown>)?.matched_by !== "none" && (
+                        <span className="text-slate-400 ml-1">via {(paperBotDetail as Record<string, unknown>)?.matched_by}</span>
+                      )}
                     </Badge>
                   </div>
 
@@ -2398,6 +2580,12 @@ function PaperBotMonitorSection({
                   <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
                     <p className="text-slate-400 text-xs mb-2 font-semibold">对账信息</p>
                     <div className="grid grid-cols-2 gap-2 text-[10px]">
+                      <div>
+                        <span className="text-slate-500">can_fetch_data: </span>
+                        <span className={(paperBotDetail as Record<string, unknown>)?.can_fetch_runtime_data ? "text-green-400" : "text-slate-400"}>
+                          {String((paperBotDetail as Record<string, unknown>)?.can_fetch_runtime_data ?? false)}
+                        </span>
+                      </div>
                       <div>
                         <span className="text-slate-500">matched_remote_bot: </span>
                         <span className={(paperBotDetail as Record<string, unknown>)?.matched_remote_bot ? "text-green-400" : "text-slate-400"}>
@@ -2412,7 +2600,7 @@ function PaperBotMonitorSection({
                         <span className="text-slate-500">hummingbot_bot_id: </span>
                         <span className="text-slate-300">{(paperBotDetail as Record<string, unknown>)?.hummingbot_bot_id as string || "-"}</span>
                       </div>
-                      <div>
+                      <div className="col-span-2">
                         <span className="text-slate-500">last_remote_check: </span>
                         <span className="text-slate-300">
                           {(paperBotDetail as Record<string, unknown>)?.last_remote_check_at
@@ -2420,14 +2608,21 @@ function PaperBotMonitorSection({
                             : "-"}
                         </span>
                       </div>
+                      {(paperBotDetail as Record<string, unknown>)?.reconciliation_message && (
+                        <div className="col-span-2 p-2 bg-amber-500/10 rounded border border-amber-500/20">
+                          <span className="text-amber-400 text-[10px]">
+                            {(paperBotDetail as Record<string, unknown>)?.reconciliation_message as string}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {/* 停止按钮 - 仅远端状态为 running 时显示 */}
+                  {/* 停止按钮 - 仅远端状态为 running 且 can_fetch_runtime_data=true 时显示 */}
                   {(paperBotDetail as Record<string, unknown>)?.mode === "paper" &&
                    (paperBotDetail as Record<string, unknown>)?.live_trading === false &&
                    (paperBotDetail as Record<string, unknown>)?.testnet === false &&
-                   (paperBotDetail as Record<string, unknown>)?.remote_status === "running" && (
+                   (paperBotDetail as Record<string, unknown>)?.can_fetch_runtime_data === true && (
                     <div className="mt-3">
                       <Button
                         size="sm"
@@ -2440,19 +2635,31 @@ function PaperBotMonitorSection({
                     </div>
                   )}
 
-                  {/* 不可停止提示 - 远端未检测到时 */}
+                  {/* 不可停止提示 - can_fetch_runtime_data=false */}
                   {(paperBotDetail as Record<string, unknown>)?.mode === "paper" &&
-                   (paperBotDetail as Record<string, unknown>)?.remote_status !== "running" && (
-                    <div className="mt-3 p-2 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <p className="text-slate-500 text-[10px]">
-                        当前 Hummingbot 远端未检测到该 Paper Bot 正在运行（remote_status={
-                          (paperBotDetail as Record<string, unknown>)?.remote_status || "unknown"
-                        }），因此无法停止。
-                        {((paperBotDetail as Record<string, unknown>)?.local_status === "start_failed" ||
-                          (paperBotDetail as Record<string, unknown>)?.last_error) && (
-                          <span className="text-amber-400"> 请检查启动失败原因。</span>
-                        )}
+                   (paperBotDetail as Record<string, unknown>)?.can_fetch_runtime_data !== true && (
+                    <div className="mt-3 p-3 bg-slate-800/50 rounded-lg border border-slate-700/50 space-y-1">
+                      <p className="text-slate-400 text-[10px]">
+                        当前 Paper Bot 尚未在 Hummingbot active_bots 中确认运行，无法停止。
                       </p>
+                      {(paperBotDetail as Record<string, unknown>)?.matched_by === "bot_runs" && (
+                        <p className="text-amber-400 text-[10px]">
+                          当前仅检测到 bot_runs 部署记录（DEPLOYED），尚未检测到 active_bots 运行实例。
+                          这通常是因为 Hummingbot API 容器内没有 Docker CLI，无法真正创建 Bot 容器。
+                          请检查 docker logs hummingbot-api 确认 Bot 容器是否已启动。
+                        </p>
+                      )}
+                      {(paperBotDetail as Record<string, unknown>)?.matched_by === "docker" && (
+                        <p className="text-amber-400 text-[10px]">
+                          检测到 Docker 容器存在，但 Bot 尚未进入 active_bots 列表。
+                          请等待几秒后刷新页面。
+                        </p>
+                      )}
+                      {(paperBotDetail as Record<string, unknown>)?.local_status === "start_failed" && (
+                        <p className="text-red-400 text-[10px]">
+                          启动失败：{String((paperBotDetail as Record<string, unknown>)?.last_error || "未知错误")}
+                        </p>
+                      )}
                     </div>
                   )}
 

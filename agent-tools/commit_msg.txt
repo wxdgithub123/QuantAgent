@@ -1,0 +1,13 @@
+feat: Branch A - spot-only Paper Bot (no perpetual)
+
+- Add PAPER_CONNECTOR_WHITELIST = {binance, kucoin, gate_io, kraken}
+- Reject perpetual/testnet/live connectors at schema Pydantic validator
+- New schema fields: connector, signal_type, timeframe, cooldown_minutes, max_trades_per_day
+- New hummingbot_config_mapper.py: strategy->controller mapping, preflight checks
+- GET /paper-connectors: detect available paper connectors from Hummingbot API
+- Preflight checks: API online, connector in whitelist, not forbidden, strategy supported
+- Strategy mapping: bollinger_v1, supertrend_v1, macd_bb_v1 for low_frequency_signal
+- position_executor: marked unsupported (requires perpetual connector)
+- Frontend form: new fields, connector dropdown with availability check
+- Docs: add Branch A scope, prohibitions, strategy mapping table
+- Revert binance_perpetual injection from Hummingbot API conf_client.yml

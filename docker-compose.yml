@@ -97,6 +97,35 @@ services:
     networks:
       - quantagent-network
 
+  # Hummingbot API (FastAPI)
+  # 使用自定义镜像（包含 docker.io CLI 和正确的 BOTS_PATH）
+  # 构建命令：docker build -f Dockerfile.hummingbot-api -t hummingbot-api-fixed:latest .
+  hummingbot-api:
+    image: hummingbot-api-fixed:v6
+    container_name: hummingbot-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # Docker socket — 允许容器内创建 Bot 子容器（必须）
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Hummingbot 数据目录（Bot 实例状态）
+      - ./hummingbot_data:/home/hummingbot/data
+      # bots 目录：直接写到宿主机挂载路径 /home/hummingbot/data/bots（绕过 Docker Desktop 同步延迟）
+      # BOTS_HOST_PATH 用于 Bot 容器 volume source（必须是宿主机可访问路径）
+      - ./hummingbot_data/bots:/hummingbot-api/bots
+    environment:
+      # BOTS_HOST_PATH 必须与 docker inspect hummingbot-api 中 /home/hummingbot/data 的 Source 一致
+      - BOTS_HOST_PATH=F:\\区块链量化\\QuantAgent-main\\hummingbot_data\\bots
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    # healthcheck:
+    #   test: ["CMD-SHELL", "curl -f http://localhost:8000/ || exit 1"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    networks:
+      - quantagent-network
+
   # Backend API (FastAPI)
   backend:
     build:
@@ -125,15 +154,16 @@ services:
       - LLM_PROVIDER=ollama
       # 禁用 Ollama 请求的代理
       - OLLAMA_NO_PROXY=true
-      - NO_PROXY=host.docker.internal,host-gateway,ollama,192.168.10.239,localhost,127.0.0.1,host.docker.internal:11434,backend,postgres,redis,nats,clickhouse,frontend,gateway,172.19.0.0/16
+      - NO_PROXY=host.docker.internal,host-gateway,ollama,192.168.10.239,localhost,127.0.0.1,host.docker.internal:11434,backend,postgres,redis,nats,clickhouse,frontend,gateway,hummingbot-api,172.19.0.0/16
       # CORS 配置，允许前端访问 (逗号分隔)
       - CORS_ORIGINS=http://frontend:3000,http://localhost:3002
       # Hummingbot API 集成（只读）
-      # 注意：如果 Hummingbot 也运行在 Docker 中，改为 http://host.docker.internal:8000
-      # 认证信息从 .env 文件读取，不要硬编码
-      - HUMMINGBOT_API_URL=${HUMMINGBOT_API_URL:-http://host.docker.internal:8000}
-      - HUMMINGBOT_API_USERNAME=${HUMMINGBOT_API_USERNAME}
-      - HUMMINGBOT_API_PASSWORD=${HUMMINGBOT_API_PASSWORD}
+      # 注意：Hummingbot 也运行在 Docker 网络中，通过 Docker 内部 DNS 访问
+      - HUMMINGBOT_API_URL=${HUMMINGBOT_API_URL:-http://hummingbot-api:8000}
+      # 认证：Hummingbot API 默认使用 HTTP Basic Auth（admin:admin）
+      # 如果 .env 文件中没有设置这两个变量，backend 调用时会收到 401
+      - HUMMINGBOT_API_USERNAME=${HUMMINGBOT_API_USERNAME:-admin}
+      - HUMMINGBOT_API_PASSWORD=${HUMMINGBOT_API_PASSWORD:-admin}
       - HUMMINGBOT_API_TIMEOUT=${HUMMINGBOT_API_TIMEOUT:-10}
     volumes:
       - ./backend:/app

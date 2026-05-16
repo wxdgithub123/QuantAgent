@@ -83,6 +83,41 @@ interface BacktestResult {
   created_at: string;
 }
 
+interface OptimizeResultFull {
+  strategy_type: string;
+  symbol: string;
+  interval: string;
+  best_params: Record<string, number>;
+  best_sharpe: number;
+  best_return: number;
+  best_max_drawdown: number;
+  best_equity_curve: { t: string; v: number }[];
+  best_drawdown_curve: { t: string; v: number }[];
+  best_trades: any[];
+  total_combos: number;
+  algorithm: string;
+  target_metric: string;
+  results: OptimizeResultItem[];
+  warnings: OptimizeWarning[];
+  saved_id: number | null;
+}
+
+interface OptimizeResultItem {
+  params: Record<string, number>;
+  sharpe: number;
+  total_return: number;
+  max_drawdown: number;
+  win_rate: number;
+  total_trades: number;
+}
+
+interface OptimizeWarning {
+  type: string;
+  severity: "high" | "medium" | "low";
+  message: string;
+  recommendation: string;
+}
+
 // ─── Metric Card ──────────────────────────────────────────────────────────────
 function MetricCard({ label, value, positive, sub }: { label: string; value: string; positive?: boolean; sub?: string }) {
   return (
@@ -509,6 +544,117 @@ function SummaryEvaluationCard({
   );
 }
 
+// ─── Launch Paper Bot Dialog ───────────────────────────────────────────────────
+function LaunchPaperBotDialog({
+  result,
+  onConfirm,
+  onCancel,
+}: {
+  result: any;
+  onConfirm: (botName: string, paperBalance: number, orderAmount: number) => void;
+  onCancel: () => void;
+}) {
+  const [botName, setBotName] = useState(`paper_${result?.symbol?.toLowerCase() || "bot"}_${Date.now().toString(36)}`);
+  const [paperBalance, setPaperBalance] = useState(result?.metrics?.initial_capital || 10000);
+  const [orderAmount, setOrderAmount] = useState(100);
+
+  const sharpeRatio = result?.metrics?.sharpe_ratio ?? 0;
+  const maxDrawdown = result?.metrics?.max_drawdown ?? 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 bg-green-500/10 rounded-full flex items-center justify-center">
+            <Play className="w-5 h-5 text-green-400" />
+          </div>
+          <h3 className="text-lg font-bold text-slate-100">启动 Paper Bot</h3>
+        </div>
+
+        {/* 回测质量提示 */}
+        <div className="bg-slate-800/50 rounded-xl p-3 mb-4 border border-slate-700/50">
+          <p className="text-xs text-slate-400 mb-1">将从以下回测结果创建 Paper Bot：</p>
+          <div className="flex items-center gap-2 mb-2">
+            <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20">
+              {result.strategy_type}
+            </Badge>
+            <span className="text-sm text-slate-300">{result.symbol} / {result.interval}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="flex items-center gap-1">
+              <span className="text-slate-500">夏普:</span>
+              <span className={sharpeRatio >= 1 ? "text-green-400" : sharpeRatio >= 0.5 ? "text-amber-400" : "text-red-400"}>
+                {sharpeRatio.toFixed(3)}
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-slate-500">回撤:</span>
+              <span className="text-red-400">-{maxDrawdown.toFixed(1)}%</span>
+            </div>
+          </div>
+          {sharpeRatio < 0.5 && (
+            <p className="text-[10px] text-amber-400 mt-1">
+              警告：夏普比率低于 0.5，建议优化后再创建 Paper Bot
+            </p>
+          )}
+        </div>
+
+        {/* 参数表单 */}
+        <div className="space-y-3 mb-5">
+          <div>
+            <Label className="text-xs text-slate-400 mb-1 block">Bot 名称</Label>
+            <Input
+              value={botName}
+              onChange={e => setBotName(e.target.value)}
+              className="bg-slate-800 border-slate-700 text-slate-200 text-xs h-8"
+              placeholder="paper_bot_name"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs text-slate-400 mb-1 block">初始资金 (USDT)</Label>
+              <Input
+                type="number"
+                value={paperBalance}
+                onChange={e => setPaperBalance(Number(e.target.value))}
+                className="bg-slate-800 border-slate-700 text-slate-200 text-xs h-8"
+                min={100}
+              />
+            </div>
+            <div>
+              <Label className="text-xs text-slate-400 mb-1 block">每笔订单金额</Label>
+              <Input
+                type="number"
+                value={orderAmount}
+                onChange={e => setOrderAmount(Number(e.target.value))}
+                className="bg-slate-800 border-slate-700 text-slate-200 text-xs h-8"
+                min={1}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex gap-3">
+          <Button
+            onClick={onCancel}
+            variant="outline"
+            className="flex-1 bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700"
+          >
+            取消
+          </Button>
+          <Button
+            onClick={() => onConfirm(botName, paperBalance, orderAmount)}
+            className="flex-1 bg-green-600 hover:bg-green-500 text-white"
+          >
+            <Play className="w-3 h-3 mr-1" />
+            创建并启动
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Delete Confirmation Dialog ─────────────────────────────────────────────
 function DeleteConfirmDialog({
   record,
@@ -588,7 +734,7 @@ export default function BacktestPage() {
   const [deleteTarget, setDeleteTarget] = useState<any>(null); // Record to delete
 
   // Composition Mode
-  const [backtestMode, setBacktestMode] = useState<"single" | "composition" | "wfa">("single");
+  const [backtestMode, setBacktestMode] = useState<"single" | "composition" | "wfa" | "optimize">("single");
   const [selectedStrategies, setSelectedStrategies] = useState<string[]>([]);
   const [compositionType, setCompositionType] = useState<"weighted" | "voting">("weighted");
   const [compositionRunning, setCompositionRunning] = useState(false);
@@ -601,6 +747,210 @@ export default function BacktestPage() {
   const [wfaResult, setWfaResult] = useState<any>(null);
   const [wfaTrainRatio, setWfaTrainRatio] = useState<number>(0.7);
   const [wfaWindowsCount, setWfaWindowsCount] = useState<number>(5);
+
+  // ── Parameter Optimization Mode ──────────────────────────────────────────
+  const [optRunning, setOptRunning] = useState(false);
+  const [optError, setOptError] = useState<string | null>(null);
+  const [optResult, setOptResult] = useState<OptimizeResultFull | null>(null);
+  const [optAlgorithm, setOptAlgorithm] = useState<"grid" | "optuna">("grid");
+  const [optNTrials, setOptNTrials] = useState(50);
+  const [optTargetMetric, setOptTargetMetric] = useState<string>("sharpe");
+  const [optCommission, setOptCommission] = useState(0.001);
+  const [optSlippage, setOptSlippage] = useState(0.0005);
+  // param ranges: { [key]: { min, max, step, values[] } }
+  const [optParamRanges, setOptParamRanges] = useState<Record<string, { min: number; max: number; step: number; values: number[] }>>({});
+  const [optHistory, setOptHistory] = useState<any[]>([]);
+  const [optSaveDialogOpen, setOptSaveDialogOpen] = useState(false);
+  const [optApplyDialogOpen, setOptApplyDialogOpen] = useState(false);
+  const [optSelectedParams, setOptSelectedParams] = useState<Record<string, number> | null>(null);
+  const [optSelectedRank, setOptSelectedRank] = useState<number>(0);
+
+  // ── Build param_ranges from optParamRanges config ─────────────────────────
+  const buildParamRanges = (): Record<string, number[]> => {
+    const ranges: Record<string, number[]> = {};
+    for (const [key, cfg] of Object.entries(optParamRanges)) {
+      if (!cfg.values || cfg.values.length === 0) {
+        // Generate from min/max/step
+        const vals: number[] = [];
+        for (let v = cfg.min; v <= cfg.max; v += cfg.step) {
+          vals.push(Math.round(v * 1000) / 1000);
+        }
+        ranges[key] = vals;
+      } else {
+        ranges[key] = cfg.values;
+      }
+    }
+    return ranges;
+  };
+
+  // ── Auto-initialize param ranges when strategy/template changes ────────────
+  const initParamRanges = useCallback(() => {
+    const tpl = templates.find(t => t.id === selectedType);
+    if (!tpl || !tpl.params || tpl.params.length === 0) return;
+    const newRanges: Record<string, { min: number; max: number; step: number; values: number[] }> = {};
+    for (const p of tpl.params) {
+      const step = p.step || Math.max(1, Math.round((p.max - p.min) / 5));
+      const defaultValues: number[] = [];
+      for (let v = p.default; v >= p.min; v -= step) {
+        defaultValues.unshift(v);
+      }
+      for (let v = p.default + step; v <= p.max; v += step) {
+        defaultValues.push(v);
+      }
+      newRanges[p.key] = { min: p.min, max: p.max, step, values: defaultValues };
+    }
+    setOptParamRanges(newRanges);
+  }, [selectedType, templates]);
+
+  useEffect(() => {
+    if (backtestMode === "optimize" && selectedType) {
+      initParamRanges();
+    }
+  }, [backtestMode, selectedType, initParamRanges]);
+
+  const handleOptRun = async () => {
+    const ranges = buildParamRanges();
+    if (Object.keys(ranges).length === 0) {
+      setOptError("请至少配置一个参数的优化范围");
+      return;
+    }
+    setOptRunning(true);
+    setOptError(null);
+    setOptResult(null);
+    try {
+      const res = await fetch("/api/v1/strategy/optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          strategy_type: selectedType,
+          symbol,
+          interval,
+          limit,
+          initial_capital: initialCapital,
+          commission: optCommission,
+          slippage: optSlippage,
+          param_ranges: ranges,
+          max_combos: 5000,
+          algorithm: optAlgorithm,
+          n_trials: optNTrials,
+          target_metric: optTargetMetric,
+          use_numba: false,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "参数优化失败");
+      setOptResult(data as OptimizeResultFull);
+    } catch (err: any) {
+      setOptError(err.message);
+    } finally {
+      setOptRunning(false);
+    }
+  };
+
+  const handleOptApplyToBacktest = () => {
+    if (!optResult) return;
+    // Switch to single mode and set the best params
+    setSelectedType(optResult.strategy_type);
+    const tpl = templates.find(t => t.id === optResult.strategy_type);
+    if (tpl) {
+      const newParams: Record<string, number> = {};
+      for (const p of tpl.params) {
+        newParams[p.key] = optResult.best_params[p.key] ?? p.default;
+      }
+      setParamValues(newParams);
+    }
+    setBacktestMode("single");
+  };
+
+  const handleOptSaveTemplate = async () => {
+    if (!optResult) return;
+    try {
+      const res = await fetch(`/api/v1/strategy/templates/${optResult.strategy_type}/params`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          params: optSelectedParams || optResult.best_params,
+          updated_by: "optimization",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "保存失败");
+      // Refresh templates
+      const tRes = await fetch("/api/v1/strategy/templates");
+      const tData = await tRes.json();
+      setTemplates(tData.templates || []);
+      setOptSaveDialogOpen(false);
+    } catch (err: any) {
+      setOptError(err.message);
+    }
+  };
+
+  const handleOptGeneratePaperBot = async () => {
+    if (!optResult) return;
+    const params = optSelectedParams || optResult.best_params;
+    try {
+      const res = await fetch("/api/v1/strategy/optimize/create-paper-bot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          strategy_type: optResult.strategy_type,
+          symbol: optResult.symbol,
+          interval: optResult.interval,
+          params,
+          initial_capital: initialCapital,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || data.error || "创建 Paper Bot 失败");
+      window.open("/hummingbot", "_blank");
+    } catch (err: any) {
+      setOptError(err.message);
+    }
+  };
+
+  const handleOptGenerateTestnetBot = async () => {
+    if (!optResult) return;
+    const params = optSelectedParams || optResult.best_params;
+    try {
+      const res = await fetch("/api/v1/strategy/optimize/create-testnet-bot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          strategy_type: optResult.strategy_type,
+          symbol: optResult.symbol,
+          interval: optResult.interval,
+          params,
+          initial_capital: initialCapital,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || data.error || "创建 Testnet Bot 失败");
+      window.open("/hummingbot-testnet", "_blank");
+    } catch (err: any) {
+      setOptError(err.message);
+    }
+  };
+
+  const handleOptRunWFA = () => {
+    if (!optResult) return;
+    const params = optSelectedParams || optResult.best_params;
+    // Switch to WFA mode with selected params pre-set
+    setSelectedType(optResult.strategy_type);
+    const tpl = templates.find(t => t.id === optResult.strategy_type);
+    if (tpl) {
+      const newParams: Record<string, number> = {};
+      for (const p of tpl.params) {
+        newParams[p.key] = params[p.key] ?? p.default;
+      }
+      setParamValues(newParams);
+    }
+    setBacktestMode("wfa");
+  };
+
+  const handleOptSelectRank = (item: OptimizeResultItem, rank: number) => {
+    setOptSelectedParams(item.params);
+    setOptSelectedRank(rank);
+  };
 
   const handleWfaRun = async () => {
     setWfaRunning(true);
@@ -770,6 +1120,47 @@ export default function BacktestPage() {
   }, []);
 
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
+
+  // Launch Paper Bot state
+  const [launchTarget, setLaunchTarget] = useState<any>(null);
+  const [launchDialogOpen, setLaunchDialogOpen] = useState(false);
+  const [launchLoading, setLaunchLoading] = useState(false);
+  const [launchResult, setLaunchResult] = useState<any>(null);
+
+  // Launch Paper Bot handler
+  const handleLaunchPaperBot = useCallback((backtestResult: any) => {
+    setLaunchTarget(backtestResult);
+    setLaunchResult(null);
+    setLaunchDialogOpen(true);
+  }, []);
+
+  const handleLaunchConfirm = useCallback(async (botName: string, paperBalance: number, orderAmount: number) => {
+    if (!launchTarget?.id) return;
+    setLaunchLoading(true);
+    try {
+      const params = new URLSearchParams({
+        bot_name: botName,
+        paper_initial_balance: String(paperBalance),
+        order_amount: String(orderAmount),
+      });
+      const res = await fetch(
+        `/api/v1/analytics/backtest/${launchTarget.id}/create-paper-bot?${params}`,
+        { method: "POST" }
+      );
+      const data = await res.json();
+      setLaunchResult(data);
+      if (data.data?.paper_bot_id) {
+        setTimeout(() => {
+          setLaunchDialogOpen(false);
+          window.location.href = "/hummingbot";
+        }, 2000);
+      }
+    } catch (e) {
+      setLaunchResult({ error: "网络错误，创建失败" });
+    } finally {
+      setLaunchLoading(false);
+    }
+  }, [launchTarget]);
 
   // Delete handler
   const handleDeleteRecord = useCallback(async (record: any) => {
@@ -973,7 +1364,7 @@ export default function BacktestPage() {
             </div>
           </button>
           <button
-            onClick={() => setBacktestMode("wfa")}
+            onClick={() => { setBacktestMode("wfa"); }}
             className={`px-4 py-2 text-sm rounded-lg transition-all ${
               backtestMode === "wfa"
                 ? "bg-orange-600/20 text-orange-400 border border-orange-500/30 font-medium"
@@ -983,6 +1374,19 @@ export default function BacktestPage() {
             <div className="flex items-center gap-2">
               <RefreshCw className="w-4 h-4" />
               推进分析 (WFA)
+            </div>
+          </button>
+          <button
+            onClick={() => { setBacktestMode("optimize"); }}
+            className={`px-4 py-2 text-sm rounded-lg transition-all ${
+              backtestMode === "optimize"
+                ? "bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 font-medium"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <TrendingUp className="w-4 h-4" />
+              参数优化
             </div>
           </button>
         </div>
@@ -1190,6 +1594,17 @@ export default function BacktestPage() {
                     />
                   </CardContent>
                 </Card>
+
+                {/* Launch Paper Bot Button */}
+                <div className="flex items-center justify-end gap-2">
+                  <Button
+                    onClick={() => handleLaunchPaperBot(result)}
+                    className="h-8 text-xs bg-green-600 hover:bg-green-500 text-white"
+                  >
+                    <Play className="w-3 h-3 mr-1" />
+                    启动 Paper Bot 验证
+                  </Button>
+                </div>
 
                 {/* Trade List */}
                 {(result.trades || []).length > 0 && (
@@ -1782,6 +2197,587 @@ export default function BacktestPage() {
             </div>
           </div>
         )}
+
+        {backtestMode === "optimize" && (
+          <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
+            {/* ── Left Config Panel ── */}
+            <div className="xl:col-span-1 space-y-4">
+              {/* Strategy Selection */}
+              <Card className="bg-slate-900 border-slate-700/50">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                    <div className="w-6 h-6 bg-emerald-500/10 rounded flex items-center justify-center border border-emerald-500/20">
+                      <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+                    </div>
+                    策略选择
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <Select value={selectedType} onValueChange={setSelectedType}>
+                    <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-200">
+                      <SelectValue placeholder="选择策略" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-800 border-slate-700">
+                      {templates.map(t => (
+                        <SelectItem key={t.id} value={t.id} className="text-slate-200 focus:bg-slate-700">
+                          {t.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <MarketConfigPanel
+                    symbol={symbol} setSymbol={setSymbol}
+                    interval={interval} setIntervalVal={setIntervalVal}
+                    limit={limit} setLimit={setLimit}
+                    startTime={startTime} setStartTime={setStartTime}
+                    endTime={endTime} setEndTime={setEndTime}
+                    initialCapital={initialCapital} setInitialCapital={setInitialCapital}
+                    symbols={[
+                      { value: "BTCUSDT", label: "BTC/USDT" },
+                      { value: "ETHUSDT", label: "ETH/USDT" },
+                      { value: "SOLUSDT", label: "SOL/USDT" },
+                    ]}
+                    intervals={[
+                      { value: "15m", label: "15 分钟" },
+                      { value: "1h", label: "1 小时" },
+                      { value: "4h", label: "4 小时" },
+                      { value: "1d", label: "1 天" },
+                    ]}
+                    limitOptions={[
+                      { value: 300, label: "300 根" },
+                      { value: 500, label: "500 根" },
+                      { value: 1000, label: "1000 根" },
+                      { value: 2000, label: "2000 根" },
+                    ]}
+                    accentColor="green"
+                  />
+                </CardContent>
+              </Card>
+
+              {/* Algorithm & Optimization Config */}
+              <Card className="bg-slate-900 border-slate-700/50">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                    <div className="w-6 h-6 bg-emerald-500/10 rounded flex items-center justify-center border border-emerald-500/20">
+                      <BarChart3 className="w-3.5 h-3.5 text-emerald-400" />
+                    </div>
+                    优化配置
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {/* Algorithm Select */}
+                  <div>
+                    <label className="text-xs text-slate-400 mb-1.5 block">优化算法</label>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setOptAlgorithm("grid")}
+                        className={`flex-1 py-2 text-xs rounded-lg border transition-all ${
+                          optAlgorithm === "grid"
+                            ? "bg-emerald-600/20 border-emerald-500/50 text-emerald-400 font-medium"
+                            : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                        }`}
+                      >
+                        Grid Search
+                      </button>
+                      <button
+                        onClick={() => setOptAlgorithm("optuna")}
+                        className={`flex-1 py-2 text-xs rounded-lg border transition-all ${
+                          optAlgorithm === "optuna"
+                            ? "bg-emerald-600/20 border-emerald-500/50 text-emerald-400 font-medium"
+                            : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                        }`}
+                      >
+                        Optuna
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      {optAlgorithm === "grid" ? "穷举所有参数组合，精确但耗时" : "贝叶斯优化，效率高但有随机性"}
+                    </p>
+                  </div>
+
+                  {/* Target Metric */}
+                  <div>
+                    <label className="text-xs text-slate-400 mb-1.5 block">目标指标</label>
+                    <div className="grid grid-cols-3 gap-1">
+                      {[
+                        { value: "sharpe", label: "Sharpe" },
+                        { value: "return", label: "收益率" },
+                        { value: "return_per_dd", label: "收益/回撤" },
+                      ].map(m => (
+                        <button
+                          key={m.value}
+                          onClick={() => setOptTargetMetric(m.value)}
+                          className={`py-1.5 text-[10px] rounded-lg border transition-all ${
+                            optTargetMetric === m.value
+                              ? "bg-emerald-600/20 border-emerald-500/50 text-emerald-400 font-medium"
+                              : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                          }`}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Optuna Trials */}
+                  {optAlgorithm === "optuna" && (
+                    <div>
+                      <div className="flex justify-between text-xs text-slate-300 mb-1">
+                        <label>搜索次数</label>
+                        <span className="font-mono text-emerald-400">{optNTrials}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={10}
+                        max={200}
+                        step={10}
+                        value={optNTrials}
+                        onChange={e => setOptNTrials(Number(e.target.value))}
+                        className="w-full accent-emerald-500"
+                      />
+                    </div>
+                  )}
+
+                  {/* Commission */}
+                  <div>
+                    <label className="text-xs text-slate-400 mb-1.5 block">
+                      手续费率 (%)
+                      <span className="ml-1 font-mono text-slate-500">{optCommission > 0 ? (optCommission * 100).toFixed(3) : "默认 0.1%"}</span>
+                    </label>
+                    <input
+                      type="number"
+                      step="0.0001"
+                      min="0"
+                      max="0.01"
+                      value={optCommission}
+                      onChange={e => setOptCommission(Math.max(0, parseFloat(e.target.value) || 0))}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                  </div>
+
+                  {/* Slippage */}
+                  <div>
+                    <label className="text-xs text-slate-400 mb-1.5 block">
+                      滑点率 (%)
+                      <span className="ml-1 font-mono text-slate-500">{optSlippage > 0 ? (optSlippage * 100).toFixed(3) : "默认 0.05%"}</span>
+                    </label>
+                    <input
+                      type="number"
+                      step="0.0001"
+                      min="0"
+                      max="0.01"
+                      value={optSlippage}
+                      onChange={e => setOptSlippage(Math.max(0, parseFloat(e.target.value) || 0))}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Parameter Ranges Config */}
+              <Card className="bg-slate-900 border-slate-700/50">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                    <div className="w-6 h-6 bg-purple-500/10 rounded flex items-center justify-center border border-purple-500/20">
+                      <Activity className="w-3.5 h-3.5 text-purple-400" />
+                    </div>
+                    参数范围配置
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {Object.keys(optParamRanges).length === 0 ? (
+                    <p className="text-xs text-slate-500 text-center py-4">
+                      选择策略后自动加载参数范围
+                    </p>
+                  ) : (
+                    Object.entries(optParamRanges).map(([key, cfg]) => {
+                      const tplParam = templates.find(t => t.id === selectedType)?.params.find(p => p.key === key);
+                      return (
+                        <div key={key} className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-slate-300 font-medium">
+                              {tplParam?.label || key}
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-mono">
+                              {cfg.values.length > 0
+                                ? `${cfg.values.length} 个值`
+                                : `步长 ${cfg.step}`}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-3 gap-2">
+                            <div>
+                              <label className="text-[10px] text-slate-500 block mb-0.5">最小</label>
+                              <input
+                                type="number"
+                                value={cfg.min}
+                                onChange={e => setOptParamRanges(prev => ({
+                                  ...prev,
+                                  [key]: { ...cfg, min: parseFloat(e.target.value) || 0, values: [] }
+                                }))}
+                                className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-[11px] text-slate-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-slate-500 block mb-0.5">最大</label>
+                              <input
+                                type="number"
+                                value={cfg.max}
+                                onChange={e => setOptParamRanges(prev => ({
+                                  ...prev,
+                                  [key]: { ...cfg, max: parseFloat(e.target.value) || 0, values: [] }
+                                }))}
+                                className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-[11px] text-slate-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-slate-500 block mb-0.5">步长</label>
+                              <input
+                                type="number"
+                                step="1"
+                                value={cfg.step}
+                                onChange={e => setOptParamRanges(prev => ({
+                                  ...prev,
+                                  [key]: { ...cfg, step: Math.max(0.001, parseFloat(e.target.value) || 1), values: [] }
+                                }))}
+                                className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-[11px] text-slate-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                              />
+                            </div>
+                          </div>
+                          {/* Preview values */}
+                          <div className="flex flex-wrap gap-1">
+                            {(cfg.values.length > 0 ? cfg.values : Array.from(
+                              { length: Math.min(6, Math.ceil((cfg.max - cfg.min) / cfg.step) + 1) },
+                              (_, i) => Math.round((cfg.min + i * cfg.step) * 1000) / 1000
+                            )).slice(0, 8).map((v, i) => (
+                              <Badge key={i} variant="outline" className="text-[9px] px-1 py-0 bg-slate-700 border-slate-600 text-slate-400">
+                                {typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(2)) : v}
+                              </Badge>
+                            ))}
+                            {cfg.values.length > 8 && (
+                              <Badge variant="outline" className="text-[9px] px-1 py-0 bg-slate-700 border-slate-600 text-slate-500">
+                                +{cfg.values.length - 8}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                  {/* Combo count estimate */}
+                  {Object.keys(optParamRanges).length > 0 && (
+                    <div className="pt-2 border-t border-slate-700/50">
+                      <p className="text-[10px] text-slate-500">
+                        预估组合数: ~{Object.values(optParamRanges).reduce((acc, cfg) => {
+                          const count = cfg.values.length > 0
+                            ? cfg.values.length
+                            : Math.max(1, Math.ceil((cfg.max - cfg.min) / cfg.step) + 1);
+                          return acc * count;
+                        }, 1).toLocaleString()}
+                      </p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Run Button */}
+              <Button
+                onClick={handleOptRun}
+                disabled={optRunning || Object.keys(optParamRanges).length === 0}
+                className={`w-full gap-2 ${
+                  optRunning
+                    ? "bg-slate-700 text-slate-400 cursor-not-allowed"
+                    : "bg-emerald-600 hover:bg-emerald-500 text-white"
+                }`}
+              >
+                {optRunning ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    优化中...
+                  </>
+                ) : (
+                  <>
+                    <TrendingUp className="w-4 h-4" />
+                    开始参数优化
+                  </>
+                )}
+              </Button>
+
+              {/* Error */}
+              {optError && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-red-400">
+                  {optError}
+                </div>
+              )}
+            </div>
+
+            {/* ── Right Results Panel ── */}
+            <div className="xl:col-span-3 space-y-4">
+              {!optResult ? (
+                <div className="flex flex-col items-center justify-center h-96 text-slate-500 border border-slate-800 rounded-2xl">
+                  <TrendingUp className="w-16 h-16 mb-4 opacity-30" />
+                  <p className="text-lg font-medium">等待参数优化结果</p>
+                  <p className="text-sm mt-1">配置策略和参数范围后点击「开始参数优化」</p>
+                  <p className="text-[10px] mt-3 text-slate-600">支持 Grid Search / Optuna 算法 · 实时防过拟合预警</p>
+                </div>
+              ) : (
+                <>
+                  {/* Warnings Banner */}
+                  {optResult.warnings && optResult.warnings.length > 0 && (
+                    <div className="space-y-2">
+                      {optResult.warnings.map((w, i) => (
+                        <div
+                          key={i}
+                          className={`flex items-start gap-3 p-3 rounded-xl border text-sm ${
+                            w.severity === "high"
+                              ? "bg-red-500/10 border-red-500/20 text-red-400"
+                              : "bg-amber-500/10 border-amber-500/20 text-amber-400"
+                          }`}
+                        >
+                          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                          <div className="flex-1">
+                            <p className="font-medium text-xs">{w.message}</p>
+                            <p className="text-[10px] opacity-75 mt-0.5">{w.recommendation}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Result Header */}
+                  <div className="flex items-center gap-3">
+                    <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-xs px-2 py-1">
+                      ✓ 优化完成
+                    </Badge>
+                    <Badge variant="outline" className="bg-slate-800 text-slate-300 border-slate-600 text-xs">
+                      {optResult.symbol} / {optResult.interval} / {optResult.algorithm === "grid" ? "Grid" : "Optuna"}
+                    </Badge>
+                    <Badge variant="outline" className="bg-slate-800 text-slate-300 border-slate-600 text-xs">
+                      共 {optResult.total_combos.toLocaleString()} 个组合
+                    </Badge>
+                    <span className="text-[10px] text-slate-500 ml-auto">
+                      {optResult.target_metric === "sharpe" ? "目标: Sharpe" : optResult.target_metric === "return" ? "目标: 收益率" : "目标: 收益/回撤"}
+                    </span>
+                  </div>
+
+                  {/* Best Params Metrics */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <MetricCard
+                      label="最优 Sharpe"
+                      value={optResult.best_sharpe.toFixed(3)}
+                      positive={optResult.best_sharpe >= 1}
+                      sub={`收益率 ${optResult.best_return >= 0 ? "+" : ""}${optResult.best_return.toFixed(2)}%`}
+                    />
+                    <MetricCard
+                      label="最优收益率"
+                      value={`${optResult.best_return >= 0 ? "+" : ""}${optResult.best_return.toFixed(2)}%`}
+                      positive={optResult.best_return >= 0}
+                      sub={`Sharpe ${optResult.best_sharpe.toFixed(3)}`}
+                    />
+                    <MetricCard
+                      label="最大回撤"
+                      value={`-${optResult.best_max_drawdown.toFixed(2)}%`}
+                      positive={optResult.best_max_drawdown < 15}
+                      sub={`年化 ${(optResult.best_return / Math.max(0.01, optResult.best_max_drawdown)).toFixed(2)}x`}
+                    />
+                    <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                      <p className="text-xs text-slate-400 uppercase tracking-wider mb-1">最优参数</p>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {Object.entries(optResult.best_params).map(([k, v]) => (
+                          <Badge key={k} variant="outline" className="text-[10px] px-1.5 py-0 bg-slate-700 border-slate-600 text-slate-300">
+                            {k}: {typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(3)) : v}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      onClick={handleOptApplyToBacktest}
+                      className="gap-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs h-8"
+                    >
+                      <Play className="w-3 h-3" /> 应用到回测
+                    </Button>
+                    <Button
+                      onClick={() => { setOptSaveDialogOpen(true); setOptSelectedParams(optResult.best_params); }}
+                      className="gap-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs h-8"
+                    >
+                      <CheckCircle2 className="w-3 h-3" /> 保存为策略模板
+                    </Button>
+                    <Button
+                      onClick={handleOptGeneratePaperBot}
+                      className="gap-1.5 bg-green-600 hover:bg-green-500 text-white text-xs h-8"
+                    >
+                      <Activity className="w-3 h-3" /> 生成 Paper Bot
+                    </Button>
+                    <Button
+                      onClick={handleOptGenerateTestnetBot}
+                      className="gap-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs h-8"
+                    >
+                      <Server className="w-3 h-3" /> 生成 Testnet Bot
+                    </Button>
+                    <Button
+                      onClick={handleOptRunWFA}
+                      className="gap-1.5 bg-orange-600 hover:bg-orange-500 text-white text-xs h-8"
+                    >
+                      <RefreshCw className="w-3 h-3" /> 进入 WFA 验证
+                    </Button>
+                  </div>
+
+                  {/* Charts: Equity + Drawdown */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <Card className="bg-slate-900 border-slate-700/50 overflow-hidden">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                          <TrendingUp className="w-4 h-4 text-emerald-400" />
+                          最优参数权益曲线
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="p-0">
+                        <EquityCurveChart
+                          data={optResult.best_equity_curve || []}
+                          initialCapital={initialCapital}
+                          height={280}
+                        />
+                      </CardContent>
+                    </Card>
+                    <Card className="bg-slate-900 border-slate-700/50 overflow-hidden">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                          <TrendingDown className="w-4 h-4 text-red-400" />
+                          回撤曲线
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="p-0">
+                        <DrawdownCurveChart
+                          data={optResult.best_drawdown_curve || []}
+                          height={280}
+                        />
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  {/* Top N Leaderboard */}
+                  <Card className="bg-slate-900 border-slate-700/50">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                        <BarChart3 className="w-4 h-4 text-purple-400" />
+                        参数排行榜 Top 20
+                        {optSelectedRank > 0 && (
+                          <Badge variant="outline" className="ml-2 text-[10px] bg-amber-500/10 border-amber-500/20 text-amber-400">
+                            已选 #{optSelectedRank + 1}
+                          </Badge>
+                        )}
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-slate-800 bg-slate-900">
+                              <th className="px-3 py-2 text-left text-slate-400 font-medium">#</th>
+                              <th className="px-3 py-2 text-right text-slate-400 font-medium">Sharpe</th>
+                              <th className="px-3 py-2 text-right text-slate-400 font-medium">收益率</th>
+                              <th className="px-3 py-2 text-right text-slate-400 font-medium">最大回撤</th>
+                              <th className="px-3 py-2 text-right text-slate-400 font-medium">胜率</th>
+                              <th className="px-3 py-2 text-right text-slate-400 font-medium">交易数</th>
+                              <th className="px-3 py-2 text-left text-slate-400 font-medium">参数</th>
+                              <th className="px-3 py-2 text-center text-slate-400 font-medium">操作</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {optResult.results.slice(0, 20).map((item, i) => {
+                              const isSelected = optSelectedRank === i;
+                              const isBest = i === 0;
+                              return (
+                                <tr
+                                  key={i}
+                                  className={`border-b border-slate-800/50 transition-colors cursor-pointer ${
+                                    isSelected
+                                      ? "bg-emerald-500/10"
+                                      : "hover:bg-slate-800/30"
+                                  } ${isBest ? "bg-yellow-500/5" : ""}`}
+                                  onClick={() => handleOptSelectRank(item, i)}
+                                >
+                                  <td className="px-3 py-2">
+                                    <span className={`font-bold font-mono ${
+                                      isBest ? "text-yellow-400" : isSelected ? "text-emerald-400" : "text-slate-400"
+                                    }`}>
+                                      {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : i + 1}
+                                    </span>
+                                  </td>
+                                  <td className={`px-3 py-2 text-right font-mono font-medium ${
+                                    item.sharpe >= 1 ? "text-green-400" : item.sharpe >= 0 ? "text-slate-100" : "text-red-400"
+                                  }`}>
+                                    {item.sharpe.toFixed(3)}
+                                  </td>
+                                  <td className={`px-3 py-2 text-right font-mono ${
+                                    item.total_return >= 0 ? "text-green-400" : "text-red-400"
+                                  }`}>
+                                    {item.total_return >= 0 ? "+" : ""}{item.total_return.toFixed(2)}%
+                                  </td>
+                                  <td className={`px-3 py-2 text-right font-mono ${
+                                    item.max_drawdown < 10 ? "text-green-400" : item.max_drawdown < 20 ? "text-amber-400" : "text-red-400"
+                                  }`}>
+                                    -{item.max_drawdown.toFixed(2)}%
+                                  </td>
+                                  <td className="px-3 py-2 text-right font-mono text-slate-300">
+                                    {item.win_rate.toFixed(1)}%
+                                  </td>
+                                  <td className="px-3 py-2 text-right font-mono text-slate-400">
+                                    {item.total_trades}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <div className="flex flex-wrap gap-1">
+                                      {Object.entries(item.params).map(([k, v]) => (
+                                        <Badge key={k} variant="outline" className="text-[9px] px-1 py-0 bg-slate-800 border-slate-700 text-slate-400 whitespace-nowrap">
+                                          {k}: {typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(2)) : v}
+                                        </Badge>
+                                      ))}
+                                    </div>
+                                  </td>
+                                  <td className="px-3 py-2 text-center">
+                                    <div className="flex items-center justify-center gap-1">
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); handleOptApplyToBacktest(); setOptSelectedParams(item.params); setOptSelectedRank(i); }}
+                                        className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-blue-400 transition-colors"
+                                        title="应用到回测"
+                                      >
+                                        <Play className="w-3 h-3" />
+                                      </button>
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); setOptSaveDialogOpen(true); setOptSelectedParams(item.params); setOptSelectedRank(i); }}
+                                        className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-purple-400 transition-colors"
+                                        title="保存为模板"
+                                      >
+                                        <CheckCircle2 className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Heatmap Section */}
+                  {optResult.results.length > 1 && (
+                    <HeatmapSection results={optResult.results} paramRanges={optParamRanges} />
+                  )}
+
+                  {/* Stability Score */}
+                  {optResult.results.length >= 5 && (
+                    <ParamStabilityScoreCard results={optResult.results} />
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </main>
 
       {/* Delete Confirmation Dialog */}
@@ -1792,6 +2788,335 @@ export default function BacktestPage() {
           onCancel={() => setDeleteTarget(null)}
         />
       )}
+
+      {/* Launch Paper Bot Dialog */}
+      {launchDialogOpen && launchTarget && (
+        <LaunchPaperBotDialog
+          result={launchTarget}
+          onConfirm={handleLaunchConfirm}
+          onCancel={() => setLaunchDialogOpen(false)}
+        />
+      )}
+
+      {/* Save Template Dialog */}
+      {optSaveDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 bg-purple-500/10 rounded-full flex items-center justify-center">
+                <CheckCircle2 className="w-5 h-5 text-purple-400" />
+              </div>
+              <h3 className="text-lg font-bold text-slate-100">保存为策略模板</h3>
+            </div>
+            <p className="text-sm text-slate-400 mb-4">
+              将以下参数保存为 <span className="text-slate-200 font-medium">{optResult?.strategy_type}</span> 的新默认参数：
+            </p>
+            <div className="bg-slate-800/50 rounded-xl p-3 mb-4 border border-slate-700/50">
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(optSelectedParams || optResult?.best_params || {}).map(([k, v]) => (
+                  <Badge key={k} variant="outline" className="text-xs bg-slate-700 border-slate-600 text-slate-200">
+                    {k}: {typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(3)) : v}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <Button
+                onClick={() => setOptSaveDialogOpen(false)}
+                className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300"
+              >
+                取消
+              </Button>
+              <Button
+                onClick={handleOptSaveTemplate}
+                className="flex-1 bg-purple-600 hover:bg-purple-500 text-white"
+              >
+                确认保存
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+// ─── DrawdownCurveChart ───────────────────────────────────────────────────────
+interface DrawdownCurveChartProps {
+  data: { t: string; v: number }[];
+  height?: number;
+}
+
+function DrawdownCurveChart({ data, height = 280 }: DrawdownCurveChartProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<any>(null);
+  const seriesRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const chart = createChart(containerRef.current, {
+      layout: {
+        background: { color: "transparent" },
+        textColor: "#94a3b8",
+      },
+      grid: {
+        vertLines: { color: "#1e293b" },
+        horzLines: { color: "#1e293b" },
+      },
+      rightPriceScale: {
+        borderColor: "#334155",
+        scaleMargins: { top: 0.1, bottom: 0.1 },
+      },
+      timeScale: {
+        borderColor: "#334155",
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      handleScale: false,
+      handleScroll: false,
+    });
+
+    const lineSeries = chart.addSeries(LineSeries, {
+      color: "#ef4444",
+      lineWidth: 2,
+      title: "回撤",
+    });
+
+    chartRef.current = chart;
+    seriesRef.current = lineSeries;
+
+    const handleResize = () => {
+      if (containerRef.current && chartRef.current) {
+        chart.applyOptions({ width: containerRef.current.clientWidth });
+      }
+    };
+    window.addEventListener("resize", handleResize);
+    handleResize();
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      try {
+        if (chartRef.current && containerRef.current && document.body.contains(containerRef.current)) {
+          chartRef.current.remove();
+        }
+      } catch {}
+      chartRef.current = null;
+      seriesRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!seriesRef.current || !data || data.length === 0) return;
+    const points = data
+      .map(d => ({ time: (new Date(d.t).getTime() / 1000) as Time, value: Math.abs(d.v) }))
+      .filter((p, i, arr) => i === 0 || arr[i - 1].time !== p.time)
+      .sort((a, b) => a.time - b.time);
+    seriesRef.current.setData(points);
+    chartRef.current?.timeScale().fitContent();
+  }, [data]);
+
+  const maxDD = data.length > 0 ? Math.max(...data.map(d => Math.abs(d.v))) : 0;
+
+  return (
+    <div className="relative overflow-hidden">
+      <div ref={containerRef} className="w-full" style={{ height: `${height}px` }} />
+      <div className="absolute top-2 left-3 text-[10px] text-slate-400">最大回撤: <span className="text-red-400 font-mono">-{maxDD.toFixed(2)}%</span></div>
+    </div>
+  );
+}
+
+// ─── HeatmapSection ──────────────────────────────────────────────────────────
+interface HeatmapSectionProps {
+  results: OptimizeResultItem[];
+  paramRanges: Record<string, { min: number; max: number; step: number; values: number[] }>;
+}
+
+function HeatmapSection({ results, paramRanges }: HeatmapSectionProps) {
+  const paramKeys = Object.keys(paramRanges);
+  if (paramKeys.length < 2 || paramKeys.length > 3 || results.length < 4) {
+    return null;
+  }
+
+  const primaryKey = paramKeys[0];
+  const secondaryKey = paramKeys[1];
+  const primaryVals = [...new Set(results.map(r => r.params[primaryKey]))].sort((a, b) => a - b);
+  const secondaryVals = [...new Set(results.map(r => r.params[secondaryKey]))].sort((a, b) => a - b);
+
+  // Build heatmap matrix (metric: sharpe, return, or max_drawdown)
+  const metricOptions = [
+    { key: "sharpe", label: "Sharpe", format: (v: number) => v.toFixed(2), higherBetter: true },
+    { key: "return", label: "收益率", format: (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`, higherBetter: true },
+    { key: "max_drawdown", label: "最大回撤", format: (v: number) => `-${v.toFixed(1)}%`, higherBetter: false },
+  ];
+  const [selectedMetric, setSelectedMetric] = useState("sharpe");
+
+  const getCellValue = (pv: number, sv: number): number | null => {
+    const r = results.find(r => r.params[primaryKey] === pv && r.params[secondaryKey] === sv);
+    return r ? (r as any)[selectedMetric] : null;
+  };
+
+  const allValues = results.map(r => (r as any)[selectedMetric] as number);
+  const minVal = Math.min(...allValues);
+  const maxVal = Math.max(...allValues);
+  const metricCfg = metricOptions.find(m => m.key === selectedMetric)!;
+
+  const getColor = (val: number): string => {
+    const norm = maxVal === minVal ? 0.5 : (val - minVal) / (maxVal - minVal);
+    if (metricCfg.higherBetter) {
+      if (norm < 0.33) return "bg-red-900/60";
+      if (norm < 0.66) return "bg-yellow-900/60";
+      return "bg-green-900/60";
+    } else {
+      if (norm < 0.33) return "bg-green-900/60";
+      if (norm < 0.66) return "bg-yellow-900/60";
+      return "bg-red-900/60";
+    }
+  };
+
+  return (
+    <Card className="bg-slate-900 border-slate-700/50">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+          <BarChart3 className="w-4 h-4 text-purple-400" />
+          参数热力图
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {/* Metric Selector */}
+        <div className="flex gap-2 mb-4">
+          {metricOptions.map(m => (
+            <button
+              key={m.key}
+              onClick={() => setSelectedMetric(m.key)}
+              className={`px-3 py-1.5 text-xs rounded-lg border transition-all ${
+                selectedMetric === m.key
+                  ? "bg-emerald-600/20 border-emerald-500/50 text-emerald-400 font-medium"
+                  : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+        <div className="overflow-x-auto">
+          <table className="border-collapse">
+            <thead>
+              <tr>
+                <th className="p-1 text-[10px] text-slate-500 font-normal"></th>
+                {secondaryVals.map(sv => (
+                  <th key={sv} className="p-1 text-[10px] text-slate-400 font-normal text-center min-w-[60px]">
+                    {sv}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {primaryVals.map(pv => (
+                <tr key={pv}>
+                  <td className="p-1 text-[10px] text-slate-400 font-normal text-right pr-2">{pv}</td>
+                  {secondaryVals.map(sv => {
+                    const val = getCellValue(pv, sv);
+                    const hasData = val !== null;
+                    return (
+                      <td key={sv} className="p-0.5">
+                        <div
+                          className={`rounded text-center text-[10px] font-mono px-2 py-1 min-w-[60px] ${
+                            hasData ? getColor(val) + " text-slate-200" : "bg-slate-800 text-slate-600"
+                          }`}
+                          title={hasData ? `${metricCfg.label}: ${metricCfg.format(val)}` : "无数据"}
+                        >
+                          {hasData ? metricCfg.format(val) : "—"}
+                        </div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {/* Color legend */}
+        <div className="flex items-center gap-2 mt-3 text-[10px] text-slate-500">
+          <span>{metricCfg.higherBetter ? "低" : "高"}</span>
+          <div className="flex gap-0.5">
+            <div className="w-6 h-3 rounded bg-red-900/60" />
+            <div className="w-6 h-3 rounded bg-yellow-900/60" />
+            <div className="w-6 h-3 rounded bg-green-900/60" />
+          </div>
+          <span>{metricCfg.higherBetter ? "高" : "低"}</span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── ParamStabilityScoreCard ─────────────────────────────────────────────────
+interface ParamStabilityScoreCardProps {
+  results: OptimizeResultItem[];
+}
+
+function ParamStabilityScoreCard({ results }: ParamStabilityScoreCardProps) {
+  if (results.length < 5) return null;
+
+  const metric = "sharpe";
+  const values = results.map(r => r[metric]);
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length;
+  const std = Math.sqrt(variance);
+  const cv = std / Math.abs(mean) || 0; // coefficient of variation
+
+  const sharpeValues = values;
+  const sorted = [...sharpeValues].sort((a, b) => a - b);
+  const q1 = sorted[Math.floor(sorted.length * 0.25)];
+  const q3 = sorted[Math.floor(sorted.length * 0.75)];
+  const iqr = q3 - q1;
+
+  // Stability score: lower CV = more stable, capped 0-100
+  const stabilityScore = Math.max(0, Math.min(100, Math.round((1 - Math.min(cv, 2)) * 100)));
+  const scoreColor = stabilityScore >= 70 ? "text-green-400" : stabilityScore >= 40 ? "text-amber-400" : "text-red-400";
+  const scoreBg = stabilityScore >= 70 ? "bg-green-500/10 border-green-500/20" : stabilityScore >= 40 ? "bg-amber-500/10 border-amber-500/20" : "bg-red-500/10 border-red-500/20";
+
+  return (
+    <Card className="bg-slate-900 border-slate-700/50">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+          <Activity className="w-4 h-4 text-purple-400" />
+          参数稳定性评估
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className={`p-4 rounded-xl border text-center ${scoreBg}`}>
+            <p className="text-xs text-slate-400 mb-1">稳定性评分</p>
+            <p className={`text-3xl font-bold font-mono ${scoreColor}`}>{stabilityScore}</p>
+            <p className="text-[10px] text-slate-500 mt-1">/ 100</p>
+          </div>
+          <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700/50">
+            <p className="text-xs text-slate-400 mb-1">Sharpe 标准差</p>
+            <p className="text-xl font-bold font-mono text-slate-200">{std.toFixed(3)}</p>
+            <p className="text-[10px] text-slate-500 mt-1">离散程度</p>
+          </div>
+          <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700/50">
+            <p className="text-xs text-slate-400 mb-1">变异系数 (CV)</p>
+            <p className={`text-xl font-bold font-mono ${cv < 0.3 ? "text-green-400" : cv < 0.6 ? "text-amber-400" : "text-red-400"}`}>
+              {cv.toFixed(3)}
+            </p>
+            <p className="text-[10px] text-slate-500 mt-1">CV 越低越稳定</p>
+          </div>
+          <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700/50">
+            <p className="text-xs text-slate-400 mb-1">IQR</p>
+            <p className="text-xl font-bold font-mono text-slate-200">{iqr.toFixed(3)}</p>
+            <p className="text-[10px] text-slate-500 mt-1">四分位距</p>
+          </div>
+        </div>
+        <p className="text-xs text-slate-500 mt-3">
+          {stabilityScore >= 70
+            ? "✓ 参数稳定性良好，不同参数组合的收益表现较为一致，过拟合风险较低"
+            : stabilityScore >= 40
+            ? "⚠ 参数稳定性一般，建议关注排名靠前且稳定的参数组合"
+            : "✗ 参数稳定性差，最优参数可能存在过拟合，建议通过 WFA 验证"}
+        </p>
+      </CardContent>
+    </Card>
   );
 }

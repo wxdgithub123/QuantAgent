@@ -412,5 +412,169 @@ class SchedulerService:
             max_instances=1
         )
 
+        # ── Paper Bot Tasks ─────────────────────────────────────────────────────
+        # Paper Bot Equity Snapshot Task (Every 30 minutes)
+        self.scheduler.add_job(
+            paper_bot_equity_snapshot_task,
+            'interval',
+            minutes=30,
+            id='paper_bot_equity_snapshot',
+            replace_existing=True,
+            max_instances=1
+        )
+
+        # Paper Bot Status Reconciliation Task (Every 1 minute)
+        self.scheduler.add_job(
+            paper_bot_reconciliation_task,
+            'interval',
+            minutes=1,
+            id='paper_bot_reconciliation',
+            replace_existing=True,
+            max_instances=1
+        )
+
+
+async def paper_bot_equity_snapshot_task():
+    """
+    每30分钟记录所有运行中 Paper Bot 的权益快照。
+    """
+    try:
+        from app.services.hummingbot_paper_bot_service import get_paper_bot_records
+        from app.services.paper_bot_equity_service import paper_bot_equity_service
+
+        records = get_paper_bot_records()
+        running_bots = [
+            (bot_id, record)
+            for bot_id, record in records.items()
+            if record.get("remote_status") == "running"
+        ]
+
+        if not running_bots:
+            logger.debug("No running Paper Bots for equity snapshot")
+            return
+
+        from app.services.hummingbot_paper_bot_service import (
+            get_paper_bot_portfolio,
+            get_paper_bot_positions,
+        )
+
+        async with get_db() as session:
+            for paper_bot_id, record in running_bots:
+                try:
+                    portfolio = await get_paper_bot_portfolio(paper_bot_id)
+                    positions = await get_paper_bot_positions(paper_bot_id)
+
+                    portfolio_data = portfolio.get("data", {}).get("portfolio") if portfolio.get("data") else None
+                    positions_data = positions.get("data", {}).get("positions", []) if positions.get("data") else []
+
+                    await paper_bot_equity_service.record_snapshot(
+                        session=session,
+                        paper_bot_id=paper_bot_id,
+                        portfolio_data=portfolio_data,
+                        positions_data=positions_data,
+                        trades_summary=None,
+                    )
+                except Exception as e:
+                    logger.error(f"Paper Bot equity snapshot failed for {paper_bot_id}: {e}")
+
+        logger.info(f"Paper Bot equity snapshots recorded for {len(running_bots)} bots")
+    except Exception as e:
+        logger.error(f"Paper Bot equity snapshot task failed: {e}")
+
+
+async def paper_bot_reconciliation_task():
+    """
+    每分钟对账 Paper Bot 状态，更新远端检测结果。
+    检测到 Bot 意外停止时记录警告。
+    同时通过 WebSocket 推送状态更新。
+    """
+    try:
+        from app.services.hummingbot_paper_bot_service import (
+            get_paper_bot_records,
+            _fetch_hummingbot_active_bots,
+            update_paper_bot_fields,
+            get_paper_bot_portfolio,
+            get_paper_bot_orders,
+            get_paper_bot_positions,
+        )
+        from app.websocket.paper_bot_ws import paper_bot_ws_manager
+        from app.services.paper_bot_local_portfolio import paper_bot_local_portfolio
+
+        records = get_paper_bot_records()
+        remote_bots, _ = await _fetch_hummingbot_active_bots()
+
+        from datetime import datetime
+        now = datetime.utcnow().isoformat() + "Z"
+
+        for paper_bot_id, record in records.items():
+            is_running = any(
+                paper_bot_id.lower() in str(bot.get("instance_name", "")).lower()
+                for bot in remote_bots
+            )
+
+            if is_running:
+                update_paper_bot_fields(
+                    paper_bot_id,
+                    remote_status="running",
+                    local_status="running",
+                    matched_remote_bot=True,
+                    last_remote_check_at=now,
+                )
+
+                # 并行获取所有数据，减少总等待时间
+                portfolio, orders, positions, local_portfolio = await asyncio.gather(
+                    get_paper_bot_portfolio(paper_bot_id),
+                    get_paper_bot_orders(paper_bot_id),
+                    get_paper_bot_positions(paper_bot_id),
+                    paper_bot_local_portfolio.get_portfolio(paper_bot_id),
+                    return_exceptions=True,
+                )
+
+                # 推送 Portfolio（Hummingbot 全局）
+                if not isinstance(portfolio, Exception) and portfolio:
+                    portfolio_data = portfolio.get("data", {}).get("portfolio") if portfolio.get("data") else None
+                    if portfolio_data:
+                        await paper_bot_ws_manager.broadcast_portfolio(paper_bot_id, portfolio_data)
+
+                # 推送 Orders
+                if not isinstance(orders, Exception) and orders:
+                    orders_data = orders.get("data", {}).get("orders", []) if orders.get("data") else []
+                    if orders_data:
+                        await paper_bot_ws_manager.broadcast_orders(paper_bot_id, orders_data)
+
+                # 推送 Positions
+                if not isinstance(positions, Exception) and positions:
+                    positions_data = positions.get("data", {}).get("positions", []) if positions.get("data") else []
+                    if positions_data:
+                        await paper_bot_ws_manager.broadcast_positions(paper_bot_id, positions_data)
+
+                # 推送本地隔离资产
+                if not isinstance(local_portfolio, Exception) and local_portfolio:
+                    await paper_bot_ws_manager.broadcast_portfolio(paper_bot_id, {
+                        "source": "local",
+                        **local_portfolio,
+                    })
+            else:
+                if record.get("remote_status") == "running":
+                    update_paper_bot_fields(
+                        paper_bot_id,
+                        remote_status="stopped",
+                        local_status="stopped",
+                        matched_remote_bot=False,
+                        last_error="Bot 意外停止（由定时任务检测）",
+                        last_remote_check_at=now,
+                    )
+                    logger.warning(f"Paper Bot 停止检测: {paper_bot_id}")
+
+                    # 推送停止状态
+                    await paper_bot_ws_manager.broadcast_bot_status(paper_bot_id, {
+                        "local_status": "stopped",
+                        "remote_status": "stopped",
+                        "event": "unexpected_stop",
+                        "message": "Bot 意外停止，已被定时任务检测到",
+                    })
+    except Exception as e:
+        logger.error(f"Paper Bot reconciliation task failed: {e}")
+
 # Singleton
 scheduler_service = SchedulerService()

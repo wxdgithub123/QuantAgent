@@ -16,6 +16,7 @@ from . import (
     dynamic_selection,
     walk_forward,
     hummingbot,
+    paper_bot_equity,
 )
 
 __all__ = [
@@ -32,4 +33,5 @@ __all__ = [
     "dynamic_selection",
     "walk_forward",
     "hummingbot",
+    "paper_bot_equity",
 ]

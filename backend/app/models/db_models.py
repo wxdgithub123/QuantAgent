@@ -207,6 +207,15 @@ class OptimizationResult(Base):
     best_params = Column(JSONB, nullable=False, default={})  # params with best sharpe
     best_sharpe = Column(Float, nullable=True)
     best_return = Column(Float, nullable=True)
+    best_max_drawdown = Column(Float, nullable=True)
+    best_equity_curve = Column(JSONB, nullable=True, default=[])  # [{t, v}] for best params
+    best_drawdown_curve = Column(JSONB, nullable=True, default=[])  # [{t, v}] for best params
+    best_trades = Column(JSONB, nullable=True, default=[])
+    target_metric = Column(String(20), nullable=True)  # "sharpe" | "return" | "return_per_dd"
+    commission = Column(Float, nullable=True)  # e.g. 0.001
+    slippage = Column(Float, nullable=True)  # e.g. 0.0005
+    param_ranges = Column(JSONB, nullable=True, default={})
+    algorithm = Column(String(20), nullable=True)  # "grid" | "optuna"
     total_combos = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -540,6 +549,115 @@ class WFOSession(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
 
+class PaperBotEquitySnapshot(Base):
+    """Paper Bot 权益快照"""
+    __tablename__ = "paper_bot_equity_snapshots"
+    __table_args__ = (
+        Index("idx_paper_bot_equity_bot_id", "paper_bot_id"),
+        Index("idx_paper_bot_equity_timestamp", "timestamp"),
+    )
+
+    id = Column(String(100), primary_key=True)
+    paper_bot_id = Column(String(100), nullable=False, index=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+
+    # 权益组成
+    total_equity = Column(Numeric(20, 8), nullable=False, comment="总权益")
+    cash_balance = Column(Numeric(20, 8), nullable=False, comment="现金余额")
+    position_value = Column(Numeric(20, 8), nullable=False, default=0, comment="持仓价值")
+
+    # 持仓明细（JSON 存储）
+    positions_detail = Column(JSONB, nullable=True, comment="持仓明细")
+
+    # 交易统计
+    total_trades = Column(Integer, default=0, comment="总交易次数")
+    winning_trades = Column(Integer, default=0, comment="盈利交易次数")
+    losing_trades = Column(Integer, default=0, comment="亏损交易次数")
+    total_fees = Column(Numeric(20, 8), default=0.0, comment="总手续费")
+
+    # 对比数据
+    initial_capital = Column(Numeric(20, 8), nullable=False, comment="初始资金")
+    pnl = Column(Numeric(20, 8), default=0.0, comment="浮动盈亏")
+    pnl_pct = Column(Numeric(10, 4), default=0.0, comment="盈亏百分比")
+    drawdown = Column(Numeric(10, 4), default=0.0, comment="回撤百分比")
+    peak_equity = Column(Numeric(20, 8), nullable=False, comment="历史最高权益")
+
+    # 收益率统计
+    daily_return = Column(Numeric(10, 6), default=0.0, comment="日收益率")
+
+    # 元数据
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class PaperBotTradeRecord(Base):
+    """Paper Bot 交易记录"""
+    __tablename__ = "paper_bot_trade_records"
+    __table_args__ = (
+        Index("idx_paper_bot_trade_bot_id", "paper_bot_id"),
+        Index("idx_paper_bot_trade_timestamp", "timestamp"),
+    )
+
+    id = Column(String(100), primary_key=True)
+    paper_bot_id = Column(String(100), nullable=False, index=True)
+    trade_id = Column(String(100), nullable=False, index=True)
+
+    # 订单信息
+    order_id = Column(String(100), nullable=False)
+    symbol = Column(String(50), nullable=False)
+    side = Column(String(10), nullable=False)  # BUY / SELL
+
+    # 价格与数量
+    quantity = Column(Numeric(20, 8), nullable=False)
+    price = Column(Numeric(20, 8), nullable=False)
+    total = Column(Numeric(20, 8), nullable=False)
+
+    # 费用
+    fee = Column(Numeric(20, 8), default=0.0)
+    fee_coin = Column(String(20), default="USDT")
+
+    # P&L（平仓时才有）
+    realized_pnl = Column(Numeric(20, 8), nullable=True)
+    unrealized_pnl = Column(Numeric(20, 8), default=0.0)
+
+    # 关联
+    strategy_id = Column(String(100), nullable=True)
+
+    # 时间
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class PaperBotPositionSnapshot(Base):
+    """Paper Bot 持仓快照"""
+    __tablename__ = "paper_bot_position_snapshots"
+    __table_args__ = (
+        Index("idx_paper_bot_pos_bot_id", "paper_bot_id"),
+        Index("idx_paper_bot_pos_timestamp", "timestamp"),
+    )
+
+    id = Column(String(100), primary_key=True)
+    paper_bot_id = Column(String(100), nullable=False, index=True)
+    symbol = Column(String(50), nullable=False)
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+
+    # 持仓信息
+    side = Column(String(10), nullable=False)  # LONG / SHORT
+    quantity = Column(Numeric(20, 8), nullable=False)
+    avg_price = Column(Numeric(20, 8), nullable=False)
+    current_price = Column(Numeric(20, 8), nullable=False)
+
+    # 价值与盈亏
+    position_value = Column(Numeric(20, 8), nullable=False)
+    unrealized_pnl = Column(Numeric(20, 8), default=0.0)
+    unrealized_pnl_pct = Column(Numeric(10, 4), default=0.0)
+
+    # 清算
+    liquidation_price = Column(Numeric(20, 8), nullable=True)
+    margin_used = Column(Numeric(20, 8), default=0.0)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class WFOWindowResult(Base):
     """Walk-Forward Optimization Window Result"""
 
@@ -552,22 +670,22 @@ class WFOWindowResult(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     wfo_session_id = Column(Integer, nullable=False)  # Links to WFOSession.id
     window_index = Column(Integer, nullable=False)
-    
+
     # Window Boundaries
     is_start_time = Column(DateTime(timezone=True), nullable=False)
     is_end_time = Column(DateTime(timezone=True), nullable=False)
     oos_start_time = Column(DateTime(timezone=True), nullable=False)
     oos_end_time = Column(DateTime(timezone=True), nullable=False)
-    
+
     # Window Results
     best_params = Column(JSONB, nullable=False, default={})
     is_metrics = Column(JSONB, nullable=False, default={})
     oos_metrics = Column(JSONB, nullable=False, default={})
-    
+
     # Stability Metrics
     wfe = Column(Float, nullable=True)  # Walk-Forward Efficiency (OOS / IS annualized return ratio)
     param_stability = Column(Float, nullable=True)  # Parameter drift metric
-    
+
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

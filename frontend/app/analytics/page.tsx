@@ -578,6 +578,9 @@ function AnalyticsContent() {
                 <Link href="/hummingbot" className="px-2 py-1 text-xs text-cyan-400 hover:text-cyan-100 rounded hover:bg-cyan-500/10">
                   <span className="flex items-center gap-1"><Server className="w-3 h-3" /> Hummingbot</span>
                 </Link>
+                <Link href="/hummingbot-testnet" className="px-2 py-1 text-xs text-orange-400 hover:text-orange-100 rounded hover:bg-orange-500/10">
+                  <span className="flex items-center gap-1"><Server className="w-3 h-3" /> Testnet</span>
+                </Link>
               </nav>
               {/* 回放会话选择器 - Session Selector */}
               <div className="flex items-center gap-2">

@@ -15,7 +15,7 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -44,18 +44,50 @@ from app.services.hummingbot_config_mapper import (
     map_strategy,
     run_preflight_check,
 )
+from dataclasses import dataclass
+
+
+@dataclass
+class ReconciliationResult:
+    """远端状态对账结果（列表页和详情页共用）"""
+    local_status: str
+    remote_status: str
+    matched_remote_bot: bool
+    matched_by: str          # active_bots | docker | bot_runs | none
+    can_fetch_runtime_data: bool
+    hummingbot_bot_id: Optional[str]
+    hummingbot_status_raw: Optional[Dict[str, Any]]
+    message: Optional[str]   # 用于页面提示
 
 logger = logging.getLogger(__name__)
 
 
 # ── 敏感字段黑名单 ──────────────────────────────────────────────────────────────
 
+SAFE_BOOL_FIELDS = {
+    # 安全布尔字段（永远不会包含密钥或凭证，可以直接暴露）
+    "requires_api_key",
+    "uses_real_exchange_account",
+    "paper_trade_enabled",
+    "live_trading",
+    "testnet",
+    "api_online",
+    "connected",
+    "available",
+    "not_forbidden",
+    "in_whitelist",
+    "controller_available",
+    "preflight_passed",
+    "matched_remote_bot",
+    "can_fetch_runtime_data",
+    "bot_api_available",
+}
+
 SENSITIVE_FIELD_PATTERNS = [
     "api_key", "apikey", "apiSecret", "api_secret", "secret",
     "private_key", "privateKey", "exchange_secret", "exchangeSecret",
     "password", "passphrase", "token", "access_token", "refresh_token",
     "wallet_private_key", "wallet_privatekey", "mnemonic", "seed_phrase", "seedphrase",
-    "real_trading", "live_trading", "testnet",
 ]
 
 DANGEROUS_MODE_VALUES = ["live", "testnet"]
@@ -152,7 +184,7 @@ def _validate_low_freq_params(request: PaperBotPreviewRequest) -> None:
 def _build_config_preview(request: PaperBotPreviewRequest) -> ConfigPreview:
     from app.schemas.hummingbot_paper_bot import RiskConfig as RC, StrategyParams as SP
 
-    strategy_type_val = request.strategy_type.value
+    strategy_type_val = request.strategy_type.value if hasattr(request.strategy_type, "value") else str(request.strategy_type)
     signal_type_val = (
         getattr(request, "signal_type", None).value
         if hasattr(getattr(request, "signal_type", None), "value")
@@ -176,7 +208,7 @@ def _build_config_preview(request: PaperBotPreviewRequest) -> ConfigPreview:
         max_runtime_minutes=getattr(request, "max_runtime_minutes", 60),
         cooldown_minutes=getattr(request, "cooldown_minutes", 60),
         max_trades_per_day=getattr(request, "max_trades_per_day", 3),
-        max_open_positions=1,
+        max_open_positions=getattr(request, "max_open_positions", 1),
     )
 
     strategy_params = SP(
@@ -186,6 +218,56 @@ def _build_config_preview(request: PaperBotPreviewRequest) -> ConfigPreview:
         trading_pair=getattr(request, "trading_pair", "BTC-USDT"),
         paper_initial_balance=getattr(request, "paper_initial_balance", 10000),
         order_amount=getattr(request, "order_amount", 100),
+        # 均线参数
+        fast_period=getattr(request, "fast_period", None),
+        slow_period=getattr(request, "slow_period", None),
+        # EMA 参数
+        ema_fast=getattr(request, "ema_fast", None),
+        ema_medium=getattr(request, "ema_medium", None),
+        ema_slow=getattr(request, "ema_slow", None),
+        # MACD 参数
+        macd_fast=getattr(request, "macd_fast", None),
+        macd_slow=getattr(request, "macd_slow", None),
+        macd_signal=getattr(request, "macd_signal", None),
+        # RSI 参数
+        rsi_period=getattr(request, "rsi_period", None),
+        rsi_oversold=getattr(request, "rsi_oversold", None),
+        rsi_overbought=getattr(request, "rsi_overbought", None),
+        # 布林带参数
+        boll_period=getattr(request, "boll_period", None),
+        boll_std_dev=getattr(request, "boll_std_dev", None),
+        # ATR 参数
+        atr_period=getattr(request, "atr_period", None),
+        atr_multiplier=getattr(request, "atr_multiplier", None),
+        # Ichimoku 参数
+        tenkan_period=getattr(request, "tenkan_period", None),
+        kijun_period=getattr(request, "kijun_period", None),
+        senkou_period=getattr(request, "senkou_period", None),
+        # Turtle 参数
+        turtle_entry_period=getattr(request, "turtle_entry_period", None),
+        turtle_exit_period=getattr(request, "turtle_exit_period", None),
+        turtle_breakout_pct=getattr(request, "turtle_breakout_pct", None),
+        # 网格参数
+        grid_levels=getattr(request, "grid_levels", None),
+        grid_spacing_pct=getattr(request, "grid_spacing_pct", None),
+        price_range_upper=getattr(request, "price_range_upper", None),
+        price_range_lower=getattr(request, "price_range_lower", None),
+        # 风控参数
+        max_position_size=getattr(request, "max_position_size", None),
+        max_daily_loss=getattr(request, "max_daily_loss", None),
+        max_drawdown_pct=getattr(request, "max_drawdown_pct", None),
+        stop_loss_pct=getattr(request, "stop_loss_pct", 5.0),
+        take_profit_pct=getattr(request, "take_profit_pct", 10.0),
+        cooldown_minutes=getattr(request, "cooldown_minutes", 60),
+        max_trades_per_day=getattr(request, "max_trades_per_day", 3),
+        max_open_positions=getattr(request, "max_open_positions", 1),
+        # 执行参数
+        order_type=getattr(request, "order_type", "MARKET"),
+        time_in_force=getattr(request, "time_in_force", "GTC"),
+        # 永续合约参数
+        leverage=getattr(request, "leverage", None),
+        position_mode=getattr(request, "position_mode", None),
+        margin_coin=getattr(request, "margin_coin", None),
         risk=risk_config,
     )
 
@@ -193,11 +275,11 @@ def _build_config_preview(request: PaperBotPreviewRequest) -> ConfigPreview:
         "当前配置仅用于 Paper Bot 预览。",
         "不会执行真实交易。",
         "不会使用真实交易所 API Key。",
-        f"Connector: {connector}（现货）",
+        f"Connector: {connector}",
         f"策略: {strategy_type_val} / {signal_type_val}",
         f"周期: {timeframe_val}",
         f"交易对: {getattr(request, 'trading_pair', 'BTC-USDT')}",
-        "本 Paper Bot 仅用于低频策略自动化验证，不进行高频挂单、撤单或做市操作。",
+        "本 Paper Bot 用于策略自动化验证。",
     ]
 
     return ConfigPreview(
@@ -227,7 +309,10 @@ def sanitize_data(data: Any, depth: int = 0) -> Any:
         result = {}
         for key, value in data.items():
             key_lower = key.lower()
-            if any(sk in key_lower for sk in SENSITIVE_KEYS):
+            # 白名单字段不过滤（安全布尔值，不会包含密钥）
+            if key_lower in SAFE_BOOL_FIELDS:
+                result[key] = sanitize_data(value, depth + 1)
+            elif any(sk in key_lower for sk in SENSITIVE_KEYS):
                 result[key] = "***REDACTED***"
             else:
                 result[key] = sanitize_data(value, depth + 1)
@@ -261,7 +346,7 @@ def _log_paper_bot_operation(
         "success": success,
         "error": error_message,
         "config": safe_config,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }, default=str))
 
 
@@ -320,7 +405,7 @@ def record_paper_bot(
     connector: str = "binance",
 ) -> None:
     """创建本地记录，初始状态为 submitted"""
-    now = datetime.utcnow().isoformat() + "Z"
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     _paper_bot_records[paper_bot_id] = {
         "paper_bot_id": paper_bot_id,
         "bot_name": bot_name,
@@ -341,6 +426,7 @@ def record_paper_bot(
         "started_at": now,
         "config": config,
         "hummingbot_status_raw": None,
+        "can_fetch_runtime_data": False,
     }
 
 
@@ -469,10 +555,12 @@ async def _run_preflight_checks() -> PreflightResult:
         accounts_resp = await _call_hummingbot_api("GET", "/accounts/")
         result.accounts = accounts_resp if isinstance(accounts_resp, list) else accounts_resp.get("data", [])
         result.paper_account_available = "paper_account" in result.accounts
-        if not result.paper_account_available:
+        # preflight 通过条件：只要有任何账户即可（master_account 或 paper_account）
+        # deploy 时根据实际存在的账户选择 credentials_profile
+        if not result.accounts:
             result.preflight_errors.append(
-                f"Hummingbot 中未找到 paper_account。可用账户: {result.accounts}。"
-                " 请在 Hummingbot 中创建 paper_account。"
+                f"Hummingbot 中未找到任何账户（accounts 接口返回: {result.accounts}）。"
+                " 请在 Hummingbot 中创建账户。"
             )
     except Exception as e:
         result.preflight_errors.append(f"无法获取账户列表: {str(e)}")
@@ -496,121 +584,22 @@ async def _run_preflight_checks() -> PreflightResult:
     except Exception as e:
         result.preflight_errors.append(f"deploy-v2-controllers 接口不可用: {str(e)}")
 
-    # 综合判断
+    # 综合判断：API 在线 + 有账户 + deploy 接口可用
     result.preflight_passed = (
         result.api_online
-        and result.paper_account_available
+        and bool(result.accounts)
         and result.deploy_callable
         and len(result.preflight_errors) == 0
     )
     return result
 
 
-async def _create_controller_config(
-    config_name: str,
-    request: PaperBotPreviewRequest,
-) -> tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
-    """
-    通过 /controllers/configs/ API 创建 controller config。
-
-    根据 strategy_type 映射到 Hummingbot 支持的 controller：
-    - grid → generic/grid_strike
-    - position_executor → generic/pmm
-
-    返回 (success, error_message, created_config)
-    """
-    # 映射策略到 controller
-    strategy = request.strategy_type.value
-    trading_pair = request.trading_pair.upper().replace("-", "-")
-
-    # grid 策略使用 grid_strike controller
-    if strategy == "grid":
-        controller_type = "generic"
-        controller_name = "grid_strike"
-        # BTC-USDT → BTC-USDT (binance_perpetual needs uppercase)
-        connector_name = _get_connector_for_pair(trading_pair)
-        config_payload: Dict[str, Any] = {
-            "id": config_name,
-            "controller_type": controller_type,
-            "controller_name": controller_name,
-            "connector_name": connector_name,
-            "trading_pair": trading_pair,
-            "total_amount_quote": request.paper_initial_balance,
-            "min_spread_between_orders": request.grid_spacing_pct / 100.0 if request.grid_spacing_pct else 0.005,
-            "min_order_amount_quote": request.order_amount,
-            "max_open_orders": request.grid_levels or 20,
-            "side": "BUY",
-            "start_price": _estimate_start_price(trading_pair),
-            "end_price": _estimate_end_price(trading_pair, request.grid_spacing_pct or 0.5),
-            "limit_price": _estimate_start_price(trading_pair),
-            "leverage": 20,
-            "position_mode": "HEDGE",
-            "side": 1,
-        }
-
-    # position_executor 使用 pmm controller
-    elif strategy == "position_executor":
-        controller_type = "generic"
-        controller_name = "pmm"
-        connector_name = _get_connector_for_pair(trading_pair)
-        config_payload = {
-            "id": config_name,
-            "controller_type": controller_type,
-            "controller_name": controller_name,
-            "connector_name": connector_name,
-            "trading_pair": trading_pair,
-            "total_amount_quote": request.paper_initial_balance,
-            "min_order_amount_quote": request.order_amount,
-            "leverage": 20,
-            "position_mode": "HEDGE",
-        }
-        if request.spread_pct:
-            config_payload["bid_spread"] = request.spread_pct
-            config_payload["ask_spread"] = request.spread_pct
-
-    else:
-        return False, f"不支持的策略类型: {strategy}", None
-
-    try:
-        resp = await _call_hummingbot_api(
-            "POST",
-            f"/controllers/configs/{config_name}",
-            json_data=config_payload,
-            timeout=20.0,
-        )
-        return True, None, config_payload
-    except Exception as e:
-        return False, f"创建 controller config 失败: {str(e)}", None
-
-
 def _get_connector_for_pair(trading_pair: str) -> str:
     """根据交易对返回 connector 名称"""
     pair_upper = trading_pair.upper()
     if "USDT" in pair_upper or "BTC" in pair_upper or "ETH" in pair_upper:
-        return "binance_perpetual"
-    return "binance_perpetual"
-
-
-def _estimate_start_price(trading_pair: str) -> float:
-    """根据交易对估算起始价格"""
-    pair_upper = trading_pair.upper()
-    if "BTC" in pair_upper:
-        return 65000.0
-    elif "ETH" in pair_upper:
-        return 3500.0
-    elif "SOL" in pair_upper:
-        return 150.0
-    elif "BNB" in pair_upper:
-        return 600.0
-    elif "DOGE" in pair_upper:
-        return 0.15
-    return 100.0
-
-
-def _estimate_end_price(trading_pair: str, grid_spacing_pct: float) -> float:
-    """根据交易对和网格间距估算结束价格"""
-    start = _estimate_start_price(trading_pair)
-    return start * (1 + grid_spacing_pct / 100.0 * 10)
+        return "binance"
+    return "binance"
 
 
 async def _verify_bot_in_active_list(
@@ -722,7 +711,7 @@ async def start_paper_bot(
 
         config_preview = _build_config_preview(request)
         paper_bot_id = f"paper_{request.bot_name}_{uuid.uuid4().hex[:8]}"
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
         strategy_type_val = (
             request.strategy_type.value
@@ -751,6 +740,15 @@ async def start_paper_bot(
             for i, err in enumerate(preflight.errors, 1):
                 err_lines.append(f"  {i}. {err}")
             err_summary = "\n".join(err_lines)
+
+            # 使用错误格式化器生成友好错误信息
+            try:
+                from app.services.paper_bot_error_formatter import format_preflight_errors
+                formatted_error = format_preflight_errors(preflight.errors)
+                friendly_error = formatted_error
+            except Exception:
+                friendly_error = {"code": "preflight_multiple_failures", "short": err_summary, "raw_message": err_summary}
+
             _log_paper_bot_operation(
                 operation="start_paper_bot",
                 bot_name=request.bot_name,
@@ -765,6 +763,7 @@ async def start_paper_bot(
                 remote_started=False,
                 remote_confirmed=False,
                 error=err_summary,
+                friendly_error=friendly_error,
             )
 
         # ── Step 3: 策略映射检查 ─────────────────────────────────────────────
@@ -802,12 +801,29 @@ async def start_paper_bot(
             connector=connector,
         )
 
-        # ── Step 5: 创建 controller config ────────────────────────────────────
+        # ── Step 4.1: 初始化本地资产追踪 ─────────────────────────────────────
+        init_balance = float(getattr(request, "paper_initial_balance", 10000))
+        try:
+            from app.services.paper_bot_local_portfolio import paper_bot_local_portfolio
+            await paper_bot_local_portfolio.init_portfolio(
+                paper_bot_id=paper_bot_id,
+                initial_balance=init_balance,
+                quote_asset="USDT",
+            )
+        except Exception as e:
+            logger.warning(f"[Portfolio] Failed to init portfolio for {paper_bot_id}: {e}")
+
+        # ── Step 5: 构建 extra_params 并创建 controller config ─────────────────
         controller_config_id = f"paper_{request.bot_name.replace('-', '_')}_{uuid.uuid4().hex[:8]}"
         timeframe_val = (
             getattr(request, "timeframe", None).value
             if hasattr(getattr(request, "timeframe", None), "value")
             else "1h"
+        )
+        signal_type_val = (
+            getattr(request, "signal_type", None).value
+            if hasattr(getattr(request, "signal_type", None), "value")
+            else "bollinger"
         )
         stop_loss = getattr(request, "stop_loss_pct", 5.0)
         take_profit = getattr(request, "take_profit_pct", 10.0)
@@ -815,6 +831,84 @@ async def start_paper_bot(
         max_trades = getattr(request, "max_trades_per_day", 3)
         init_balance = getattr(request, "paper_initial_balance", 10000)
         order_amt = getattr(request, "order_amount", 100)
+        max_open_pos = getattr(request, "max_open_positions", 1)
+
+        # 收集所有策略参数到 extra_params
+        extra_params: Dict[str, Any] = {
+            # 风控参数
+            "stop_loss_pct": stop_loss,
+            "take_profit_pct": take_profit,
+            "cooldown_minutes": cooldown,
+            "max_trades_per_day": max_trades,
+            "max_open_positions": max_open_pos,
+            # 执行参数
+            "order_type": getattr(request, "order_type", "MARKET"),
+            "time_in_force": getattr(request, "time_in_force", "GTC"),
+            # 永续合约参数
+            "leverage": getattr(request, "leverage", 1),
+            "position_mode": getattr(request, "position_mode", "ONEWAY"),
+            "margin_coin": getattr(request, "margin_coin", "USDT"),
+        }
+
+        # 均线策略参数
+        if hasattr(request, "fast_period"):
+            extra_params["fast_period"] = getattr(request, "fast_period", 10)
+        if hasattr(request, "slow_period"):
+            extra_params["slow_period"] = getattr(request, "slow_period", 30)
+        # EMA 参数
+        if hasattr(request, "ema_fast"):
+            extra_params["ema_fast"] = getattr(request, "ema_fast", 12)
+        if hasattr(request, "ema_medium"):
+            extra_params["ema_medium"] = getattr(request, "ema_medium", 26)
+        if hasattr(request, "ema_slow"):
+            extra_params["ema_slow"] = getattr(request, "ema_slow", 50)
+        # MACD 参数
+        if hasattr(request, "macd_fast"):
+            extra_params["macd_fast"] = getattr(request, "macd_fast", 12)
+        if hasattr(request, "macd_slow"):
+            extra_params["macd_slow"] = getattr(request, "macd_slow", 26)
+        if hasattr(request, "macd_signal"):
+            extra_params["macd_signal"] = getattr(request, "macd_signal", 9)
+        # RSI 参数
+        if hasattr(request, "rsi_period"):
+            extra_params["rsi_period"] = getattr(request, "rsi_period", 14)
+        if hasattr(request, "rsi_oversold"):
+            extra_params["rsi_oversold"] = getattr(request, "rsi_oversold", 30)
+        if hasattr(request, "rsi_overbought"):
+            extra_params["rsi_overbought"] = getattr(request, "rsi_overbought", 70)
+        # 布林带参数
+        if hasattr(request, "boll_period"):
+            extra_params["boll_period"] = getattr(request, "boll_period", 20)
+        if hasattr(request, "boll_std_dev"):
+            extra_params["boll_std_dev"] = getattr(request, "boll_std_dev", 2.0)
+        # ATR 参数
+        if hasattr(request, "atr_period"):
+            extra_params["atr_period"] = getattr(request, "atr_period", 14)
+        if hasattr(request, "atr_multiplier"):
+            extra_params["atr_multiplier"] = getattr(request, "atr_multiplier", 3.0)
+        # Ichimoku 参数
+        if hasattr(request, "tenkan_period"):
+            extra_params["tenkan_period"] = getattr(request, "tenkan_period", 9)
+        if hasattr(request, "kijun_period"):
+            extra_params["kijun_period"] = getattr(request, "kijun_period", 26)
+        if hasattr(request, "senkou_period"):
+            extra_params["senkou_period"] = getattr(request, "senkou_period", 52)
+        # Turtle 参数
+        if hasattr(request, "turtle_entry_period"):
+            extra_params["turtle_entry_period"] = getattr(request, "turtle_entry_period", 20)
+        if hasattr(request, "turtle_exit_period"):
+            extra_params["turtle_exit_period"] = getattr(request, "turtle_exit_period", 10)
+        if hasattr(request, "turtle_breakout_pct"):
+            extra_params["turtle_breakout_pct"] = getattr(request, "turtle_breakout_pct", 2.0)
+        # 网格参数
+        if hasattr(request, "grid_levels"):
+            extra_params["grid_levels"] = getattr(request, "grid_levels", 10)
+        if hasattr(request, "grid_spacing_pct"):
+            extra_params["grid_spacing_pct"] = getattr(request, "grid_spacing_pct", 1.0)
+        if hasattr(request, "price_range_upper"):
+            extra_params["price_range_upper"] = getattr(request, "price_range_upper")
+        if hasattr(request, "price_range_lower"):
+            extra_params["price_range_lower"] = getattr(request, "price_range_lower")
 
         config_payload = build_controller_config_payload(
             config_id=controller_config_id,
@@ -830,7 +924,8 @@ async def start_paper_bot(
             take_profit_pct=take_profit,
             cooldown_minutes=cooldown,
             max_trades_per_day=max_trades,
-            max_open_positions=1,
+            max_open_positions=max_open_pos,
+            extra_params=extra_params,
         )
 
         try:
@@ -869,9 +964,15 @@ async def start_paper_bot(
             )
 
         # ── Step 6: 调用 deploy-v2-controllers ──────────────────────────────
+        # credentials_profile：根据 accounts 接口返回的实际账户动态选择
+        # paper_account → paper_account（Hummingbot 中存在时优先使用）
+        # master_account → master_account（Hummingbot 默认账户）
+        available_accounts = preflight.accounts if hasattr(preflight, 'accounts') else []
+        credentials_profile = "paper_account" if "paper_account" in available_accounts else "master_account"
+
         deploy_payload = {
             "instance_name": paper_bot_id,
-            "credentials_profile": "paper_account",
+            "credentials_profile": credentials_profile,
             "controllers_config": [controller_config_id],
             "headless": True,
         }
@@ -1012,125 +1113,245 @@ async def start_paper_bot(
 async def _fetch_hummingbot_active_bots() -> tuple[List[Dict], str]:
     """
     从 Hummingbot API 获取活跃 bots（兼容旧/新格式 + bot-runs）。
-
-    优先级：
-    1. /bot-orchestration/bot-runs — 返回 DEPLOYED 状态的 Bot
-    2. /bot-orchestration/status — Docker 容器级别状态
+    优先返回 active_bots，备选 bot_runs。
     """
-    # 优先：查 bot-runs（包含 DEPLOYED 状态）
-    try:
-        result = await _call_hummingbot_api("GET", "/bot-orchestration/bot-runs")
-        runs_data = result.get("data", [])
-        if not isinstance(runs_data, list):
-            runs_data = result.get("data", {}).get("data", [])
-        if isinstance(runs_data, list) and len(runs_data) > 0:
-            # 只取 DEPLOYED 状态的
+    active_bots, _, bot_runs_deployed = await _fetch_all_remote_sources()
+    if active_bots:
+        return active_bots, "active_bots"
+    if bot_runs_deployed:
+        return bot_runs_deployed, "bot_runs"
+    return [], "none"
+
+
+async def _fetch_all_remote_sources() -> tuple[
+    List[Dict[str, Any]],
+    List[Dict[str, Any]],
+    List[Dict[str, Any]],
+]:
+    """
+    并行获取所有远端数据源，供对账函数使用。
+    返回 (active_bots, docker_bots, bot_runs_deployed)。
+    """
+    import asyncio
+
+    async def fetch_active():
+        try:
+            result = await _call_hummingbot_api("GET", "/bot-orchestration/status")
+            bots = result.get("data", {}) or {}
+            if isinstance(bots, dict) and ("active_bots" in bots or "disconnected_bots" in bots):
+                active = bots.get("active_bots", []) or []
+                disconnected = bots.get("disconnected_bots", []) or []
+                return list(active) + list(disconnected)
+            if isinstance(bots, dict):
+                return [
+                    {"instance_name": k, **sanitize_data(v)}
+                    for k, v in bots.items() if isinstance(v, dict)
+                ]
+            if isinstance(bots, list):
+                return bots
+            return []
+        except Exception:
+            return []
+
+    async def fetch_docker():
+        try:
+            result = await _call_hummingbot_api("GET", "/docker/active-containers")
+            raw = result.get("data", []) or result
+            if isinstance(raw, dict):
+                containers = raw.get("containers", []) or list(raw.values())
+            elif isinstance(raw, list):
+                containers = raw
+            else:
+                containers = []
+            return sanitize_data(containers)
+        except Exception:
+            return []
+
+    async def fetch_bot_runs():
+        try:
+            result = await _call_hummingbot_api("GET", "/bot-orchestration/bot-runs")
+            runs_data = result.get("data", [])
+            if not isinstance(runs_data, list):
+                runs_data = result.get("data", {}).get("data", [])
             deployed = [
-                r for r in runs_data
+                r for r in (runs_data or [])
                 if str(r.get("deployment_status", "")).upper() == "DEPLOYED"
             ]
-            if deployed:
-                return sanitize_data(deployed), "bot_runs"
-    except Exception as e:
-        logger.warning(f"Failed to fetch bot-runs: {e}")
+            return sanitize_data(deployed)
+        except Exception:
+            return []
 
-    # 备选：查 /bot-orchestration/status
-    try:
-        result = await _call_hummingbot_api("GET", "/bot-orchestration/status")
-        bots = result.get("data", {}) or {}
+    active_bots, docker_bots, bot_runs_deployed = await asyncio.gather(
+        fetch_active(), fetch_docker(), fetch_bot_runs()
+    )
+    return active_bots, docker_bots, bot_runs_deployed
 
-        # 旧格式: active_bots / disconnected_bots 是 list
-        if isinstance(bots, dict) and ("active_bots" in bots or "disconnected_bots" in bots):
-            active = bots.get("active_bots", []) or []
-            disconnected = bots.get("disconnected_bots", []) or []
-            bots_list = list(active) + list(disconnected)
-            return sanitize_data(bots_list), "bot_api"
 
-        # 新格式: data 是 dict，key 是 instance_name
-        if isinstance(bots, dict):
-            bots_list = [
-                {"instance_name": k, **sanitize_data(v)}
-                for k, v in bots.items()
-                if isinstance(v, dict)
-            ]
-            if bots_list:
-                return bots_list, "bot_api_dict_keys"
+# ── v1.2.3: 统一对账函数 ─────────────────────────────────────────────────────
 
-        if isinstance(bots, list):
-            return sanitize_data(bots), "bot_api"
-    except Exception as e:
-        logger.warning(f"Failed to fetch active bots: {e}")
+def _build_match_keys(paper_bot_id: str, bot_name: str, record: Dict[str, Any]) -> Dict[str, str]:
+    """
+    构建宽松匹配 key 集合，用于与远端 Bot 字段进行匹配。
+    支持：完全相等、互为子串、去掉 paper_ 前缀、去掉随机后缀后匹配。
+    """
+    keys: Dict[str, str] = {}
 
-    return [], "none"
+    paper_id_lower = paper_bot_id.lower()
+    bot_name_lower = bot_name.lower()
+
+    keys["paper_bot_id"] = paper_id_lower
+    keys["bot_name"] = bot_name_lower
+
+    # 去掉 paper_ 前缀
+    stripped = paper_id_lower.removeprefix("paper_")
+    if stripped != paper_id_lower:
+        keys["paper_bot_id_stripped"] = stripped
+
+    # 去掉随机后缀（8位hex）
+    import re
+    suffix8 = re.match(r"^(.+?)(_[a-f0-9]{8})?$", paper_id_lower)
+    if suffix8 and suffix8.group(2):
+        keys["paper_bot_id_no_suffix"] = suffix8.group(1)
+
+    # 从本地记录中取 config_id / controller_config_id
+    config = record.get("config", {}) or {}
+    for field in ("config_id", "controller_config_id", "hummingbot_bot_id"):
+        val = record.get(field) or config.get(field)
+        if val and isinstance(val, str):
+            keys[field] = val.lower()
+
+    return keys
+
+
+def _bot_matches_remote(
+    keys: Dict[str, str],
+    remote_bot: Dict[str, Any],
+) -> bool:
+    """
+    判断一个远端 Bot 是否与本地 Paper Bot 匹配。
+    检查 instance_name / bot_name / config_id / container_name 等所有字段。
+    """
+    for field in ("instance_name", "bot_name", "name", "config_id",
+                  "controller_config_id", "container_name", "container_name"):
+        remote_val = remote_bot.get(field)
+        if not remote_val or not isinstance(remote_val, str):
+            continue
+        remote_lower = remote_val.lower()
+        for key_name, local_val in keys.items():
+            # 完全相等
+            if remote_lower == local_val:
+                return True
+            # 互为子串
+            if local_val in remote_lower or remote_lower in local_val:
+                return True
+    return False
+
+
+async def reconcile_paper_bot(
+    paper_bot_id: str,
+    record: Dict[str, Any],
+    active_bots: List[Dict[str, Any]],
+    docker_bots: List[Dict[str, Any]],
+    bot_runs_deployed: List[Dict[str, Any]],
+) -> ReconciliationResult:
+    """
+    统一对账函数：判断本地 Paper Bot 在远端的真实状态。
+
+    匹配优先级（从高到低）：
+    1. active_bots  — Bot 真正在运行，可获取订单/持仓/日志
+    2. docker       — Docker 容器存在，可获取容器日志
+    3. bot_runs     — 仅有部署记录，尚未真正运行，不能获取运行时数据
+
+    返回结果确保列表页和详情页完全一致。
+    """
+    bot_name = record.get("bot_name", "")
+    keys = _build_match_keys(paper_bot_id, bot_name, record)
+
+    # ── 优先级 1: active_bots ───────────────────────────────────────────────
+    for bot in active_bots:
+        if _bot_matches_remote(keys, bot):
+            hb_id = bot.get("instance_name") or bot.get("bot_name") or bot.get("name")
+            return ReconciliationResult(
+                local_status="running",
+                remote_status="running",
+                matched_remote_bot=True,
+                matched_by="active_bots",
+                can_fetch_runtime_data=True,
+                hummingbot_bot_id=hb_id,
+                hummingbot_status_raw=bot,
+                message=None,
+            )
+
+    # ── 优先级 2: docker running containers ─────────────────────────────────
+    for bot in docker_bots:
+        if _bot_matches_remote(keys, bot):
+            hb_id = bot.get("instance_name") or bot.get("bot_name") or bot.get("name")
+            return ReconciliationResult(
+                local_status="running",
+                remote_status="running",
+                matched_remote_bot=True,
+                matched_by="docker",
+                can_fetch_runtime_data=True,
+                hummingbot_bot_id=hb_id,
+                hummingbot_status_raw=bot,
+                message=None,
+            )
+
+    # ── 优先级 3: bot_runs DEPLOYED ───────────────────────────────────────
+    for run in bot_runs_deployed:
+        if _bot_matches_remote(keys, run):
+            hb_id = run.get("instance_name") or run.get("bot_name")
+            return ReconciliationResult(
+                local_status=record.get("local_status", "submitted"),
+                remote_status="deployed",
+                matched_remote_bot=True,
+                matched_by="bot_runs",
+                can_fetch_runtime_data=False,
+                hummingbot_bot_id=hb_id,
+                hummingbot_status_raw=run,
+                message="Hummingbot 有部署记录，但尚未在 active_bots 中确认运行。"
+                        " 当前 Bot 容器未启动或部署尚未完成。",
+            )
+
+    # ── 优先级 4: 未匹配 ───────────────────────────────────────────────────
+    return ReconciliationResult(
+        local_status=record.get("local_status", "submitted"),
+        remote_status="not_detected",
+        matched_remote_bot=False,
+        matched_by="none",
+        can_fetch_runtime_data=False,
+        hummingbot_bot_id=None,
+        hummingbot_status_raw=None,
+        message=None,
+    )
 
 
 async def get_paper_bots_list() -> Dict[str, Any]:
     """获取 Paper Bot 列表，并对账 Hummingbot active_bots"""
-    now = datetime.utcnow().isoformat() + "Z"
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     local_records = get_paper_bot_records()
-    remote_bots, matched_by = await _fetch_hummingbot_active_bots()
-
-    remote_bot_map: Dict[str, Dict] = {}
-    for bot in remote_bots:
-        # bot-runs 返回 instance_name 和 bot_name
-        instance_name = str(bot.get("instance_name") or bot.get("bot_name") or "").lower()
-        if instance_name:
-            remote_bot_map[instance_name] = bot
-
-    # 构建一个宽松的匹配 map（包含匹配，用于 bot_name 匹配）
-    remote_bot_by_name: Dict[str, Dict] = {}
-    for bot in remote_bots:
-        name = str(bot.get("bot_name") or "").lower()
-        if name and name not in remote_bot_by_name:
-            remote_bot_by_name[name] = bot
+    active_bots, docker_bots, bot_runs_deployed = await _fetch_all_remote_sources()
 
     bots = []
     for paper_bot_id, record in local_records.items():
-        bot_name = record.get("bot_name", "").lower()
+        recon = await reconcile_paper_bot(
+            paper_bot_id=paper_bot_id,
+            record=record,
+            active_bots=active_bots,
+            docker_bots=docker_bots,
+            bot_runs_deployed=bot_runs_deployed,
+        )
 
-        # 宽松匹配：remote instance_name 包含 paper_bot_id
-        matched_hb_bot: Optional[Dict[str, Any]] = None
-        matched_key: Optional[str] = None
-
-        paper_id_lower = paper_bot_id.lower()
-        for remote_name, bot_info in remote_bot_map.items():
-            if paper_id_lower in remote_name or remote_name in paper_id_lower:
-                matched_hb_bot = bot_info
-                matched_key = remote_name
-                break
-
-        # 如果没匹配，尝试用 bot_name 匹配
-        if not matched_hb_bot:
-            for name, bot_info in remote_bot_by_name.items():
-                if bot_name in name or name in bot_name:
-                    matched_hb_bot = bot_info
-                    matched_key = name
-                    break
-
-        if matched_hb_bot:
-            hummingbot_bot_id = (
-                matched_hb_bot.get("instance_name")
-                or matched_hb_bot.get("bot_name")
-                or matched_key
-            )
-            update_paper_bot_fields(
-                paper_bot_id,
-                remote_status="running",
-                local_status="running",
-                matched_remote_bot=True,
-                matched_by=matched_by,
-                hummingbot_bot_id=hummingbot_bot_id,
-                last_remote_check_at=now,
-            )
-        else:
-            # 不覆盖本地记录的 local_status 和 last_error
-            update_paper_bot_fields(
-                paper_bot_id,
-                remote_status="not_detected",
-                matched_remote_bot=False,
-                matched_by="none",
-                last_remote_check_at=now,
-            )
+        update_paper_bot_fields(
+            paper_bot_id,
+            local_status=recon.local_status,
+            remote_status=recon.remote_status,
+            matched_remote_bot=recon.matched_remote_bot,
+            matched_by=recon.matched_by,
+            hummingbot_bot_id=recon.hummingbot_bot_id,
+            can_fetch_runtime_data=recon.can_fetch_runtime_data,
+            last_remote_check_at=now,
+        )
 
         runtime = 0
         started_at = record.get("started_at") or record.get("created_at")
@@ -1149,26 +1370,28 @@ async def get_paper_bots_list() -> Dict[str, Any]:
             "mode": "paper",
             "live_trading": False,
             "testnet": False,
-            "local_status": record.get("local_status", "submitted"),
-            "remote_status": record.get("remote_status", "not_detected"),
-            "matched_remote_bot": record.get("matched_remote_bot", False),
-            "matched_by": record.get("matched_by", "none"),
-            "hummingbot_bot_id": record.get("hummingbot_bot_id"),
+            "local_status": recon.local_status,
+            "remote_status": recon.remote_status,
+            "matched_remote_bot": recon.matched_remote_bot,
+            "matched_by": recon.matched_by,
+            "hummingbot_bot_id": recon.hummingbot_bot_id,
+            "can_fetch_runtime_data": recon.can_fetch_runtime_data,
+            "reconciliation_message": recon.message,
             "started_at": started_at,
             "runtime_seconds": runtime,
             "last_error": record.get("last_error"),
         })
 
     bots.sort(key=lambda b: b.get("started_at") or "", reverse=True)
-
     return {
-        "connected": len(remote_bots) > 0,
+        "connected": len(active_bots) > 0 or len(bot_runs_deployed) > 0,
         "source": "quantagent",
         "data": {
             "bots": bots,
             "reconciliation": {
-                "remote_bots_found": len(remote_bots),
-                "matched_by": matched_by,
+                "active_bots_found": len(active_bots),
+                "docker_bots_found": len(docker_bots),
+                "bot_runs_deployed_found": len(bot_runs_deployed),
                 "last_check_at": now,
             },
         },
@@ -1180,39 +1403,29 @@ async def get_paper_bots_list() -> Dict[str, Any]:
 
 async def get_paper_bot_detail(paper_bot_id: str) -> Dict[str, Any]:
     """获取 Paper Bot 详情（包含最新对账状态）"""
-    now = datetime.utcnow().isoformat() + "Z"
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     record = get_paper_bot_record(paper_bot_id)
 
     if not record:
         return {"connected": False, "source": "quantagent", "data": None, "error": f"Paper Bot '{paper_bot_id}' 不存在"}
 
-    # 重新对账
-    remote_bots, matched_by = await _fetch_hummingbot_active_bots()
-    remote_bot_map = {
-        str(b.get("name") or b.get("instance_name") or "").lower(): b
-        for b in remote_bots
-    }
-    bot_name = record.get("bot_name", "").lower()
-    matched = paper_bot_id.lower() in remote_bot_map or bot_name in remote_bot_map
-
-    if matched:
-        matched_hb_bot = remote_bot_map.get(paper_bot_id.lower()) or remote_bot_map.get(bot_name)
-        remote_status = "running"
-        local_status = "running"
-        hummingbot_bot_id = matched_hb_bot.get("name") or matched_hb_bot.get("instance_name") or None
-        hummingbot_status_raw = matched_hb_bot
-    else:
-        remote_status = "not_detected"
-        local_status = record.get("local_status", "submitted")
-        hummingbot_bot_id = None
-        hummingbot_status_raw = None
+    active_bots, docker_bots, bot_runs_deployed = await _fetch_all_remote_sources()
+    recon = await reconcile_paper_bot(
+        paper_bot_id=paper_bot_id,
+        record=record,
+        active_bots=active_bots,
+        docker_bots=docker_bots,
+        bot_runs_deployed=bot_runs_deployed,
+    )
 
     update_paper_bot_fields(
         paper_bot_id,
-        remote_status=remote_status,
-        matched_remote_bot=matched,
-        matched_by="none" if not matched else matched_by,
-        hummingbot_bot_id=hummingbot_bot_id,
+        local_status=recon.local_status,
+        remote_status=recon.remote_status,
+        matched_remote_bot=recon.matched_remote_bot,
+        matched_by=recon.matched_by,
+        hummingbot_bot_id=recon.hummingbot_bot_id,
+        can_fetch_runtime_data=recon.can_fetch_runtime_data,
         last_remote_check_at=now,
     )
 
@@ -1236,17 +1449,19 @@ async def get_paper_bot_detail(paper_bot_id: str) -> Dict[str, Any]:
             "mode": "paper",
             "live_trading": False,
             "testnet": False,
-            "local_status": local_status,
-            "remote_status": remote_status,
-            "matched_remote_bot": matched,
-            "matched_by": "none" if not matched else matched_by,
-            "hummingbot_bot_id": hummingbot_bot_id,
+            "local_status": recon.local_status,
+            "remote_status": recon.remote_status,
+            "matched_remote_bot": recon.matched_remote_bot,
+            "matched_by": recon.matched_by,
+            "hummingbot_bot_id": recon.hummingbot_bot_id,
+            "can_fetch_runtime_data": recon.can_fetch_runtime_data,
+            "reconciliation_message": recon.message,
             "last_remote_check_at": now,
             "started_at": started_at,
             "runtime_seconds": runtime,
             "config": sanitize_data(record.get("config", {})),
             "last_error": record.get("last_error"),
-            "hummingbot_status_raw": sanitize_data(hummingbot_status_raw),
+            "hummingbot_status_raw": sanitize_data(recon.hummingbot_status_raw),
         },
         "error": None,
     }
@@ -1256,9 +1471,9 @@ async def get_paper_bot_detail(paper_bot_id: str) -> Dict[str, Any]:
 
 async def get_paper_bot_orders(paper_bot_id: str) -> Dict[str, Any]:
     record = get_paper_bot_record(paper_bot_id)
-    remote_status = record.get("remote_status", "not_detected") if record else "not_detected"
+    can_fetch = record.get("can_fetch_runtime_data", record.get("remote_status") == "running") if record else False
 
-    if remote_status != "running":
+    if not can_fetch:
         return {
             "connected": True,
             "source": "quantagent",
@@ -1312,9 +1527,9 @@ async def get_paper_bot_orders(paper_bot_id: str) -> Dict[str, Any]:
 
 async def get_paper_bot_positions(paper_bot_id: str) -> Dict[str, Any]:
     record = get_paper_bot_record(paper_bot_id)
-    remote_status = record.get("remote_status", "not_detected") if record else "not_detected"
+    can_fetch = record.get("can_fetch_runtime_data", record.get("remote_status") == "running") if record else False
 
-    if remote_status != "running":
+    if not can_fetch:
         return {
             "connected": True,
             "source": "quantagent",
@@ -1354,9 +1569,9 @@ async def get_paper_bot_positions(paper_bot_id: str) -> Dict[str, Any]:
 
 async def get_paper_bot_portfolio(paper_bot_id: str) -> Dict[str, Any]:
     record = get_paper_bot_record(paper_bot_id)
-    remote_status = record.get("remote_status", "not_detected") if record else "not_detected"
+    can_fetch = record.get("can_fetch_runtime_data", record.get("remote_status") == "running") if record else False
 
-    if remote_status != "running":
+    if not can_fetch:
         return {
             "connected": True,
             "source": "quantagent",
@@ -1394,10 +1609,10 @@ async def get_paper_bot_portfolio(paper_bot_id: str) -> Dict[str, Any]:
 
 async def get_paper_bot_logs(paper_bot_id: str) -> Dict[str, Any]:
     record = get_paper_bot_record(paper_bot_id)
-    remote_status = record.get("remote_status", "not_detected") if record else "not_detected"
+    can_fetch = record.get("can_fetch_runtime_data", record.get("remote_status") == "running") if record else False
 
     logs_message = None
-    if remote_status != "running":
+    if not can_fetch:
         logs_message = (
             "当前 Paper Bot 尚未被 Hummingbot 远端确认运行（remote_status=not_detected），"
             "因此暂无运行日志。"
@@ -1412,7 +1627,7 @@ async def get_paper_bot_logs(paper_bot_id: str) -> Dict[str, Any]:
     logs_available = False
     logs: List[str] = []
 
-    if remote_status == "running" and container_name:
+    if can_fetch and container_name:
         try:
             result = await _call_hummingbot_api(
                 "GET",
@@ -1427,7 +1642,7 @@ async def get_paper_bot_logs(paper_bot_id: str) -> Dict[str, Any]:
         except Exception:
             pass
 
-    if not logs_available and remote_status == "running":
+    if not logs_available and can_fetch:
         logs_message = "当前 Hummingbot API 版本暂未提供容器日志接口，请通过 docker compose logs 查看。"
 
     return {
@@ -1474,7 +1689,7 @@ async def stop_paper_bot(
     paper_bot_id: str,
     raw_request_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    now = datetime.utcnow().isoformat() + "Z"
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     confirm = raw_request_data.get("confirm") if raw_request_data else None
     if confirm is not True:
@@ -1582,6 +1797,14 @@ async def stop_paper_bot(
             stop_error = f"停止 Paper Bot 失败: {stop_error}"
 
     new_local_status = "stopped" if stop_success else record.get("local_status", "unknown")
+
+    # ── 清理本地资产追踪 ────────────────────────────────────────────────────
+    try:
+        from app.services.paper_bot_local_portfolio import paper_bot_local_portfolio
+        await paper_bot_local_portfolio.destroy_portfolio(paper_bot_id)
+    except Exception as e:
+        logger.warning(f"[Portfolio] Failed to destroy portfolio for {paper_bot_id}: {e}")
+
     update_paper_bot_fields(
         paper_bot_id,
         local_status=new_local_status,

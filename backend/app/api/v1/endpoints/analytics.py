@@ -17,7 +17,7 @@ from app.services.trade_pair_service import trade_pair_service
 from app.services.position_analysis_service import position_analysis_service
 from app.services.paper_trading_service import paper_trading_service
 from app.services.database import get_db, get_db_session, redis_get, redis_set
-from app.models.db_models import EquitySnapshot, PaperTrade, ReplaySession
+from app.models.db_models import BacktestResult, EquitySnapshot, PaperTrade, ReplaySession
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1753,3 +1753,136 @@ async def get_enhanced_attribution(
             "message": f"归因分析暂不可用: {str(e)}",
             "error": str(e),
         }
+
+
+# ── Backtest → Paper Bot 联动 (Phase 4 P3-1) ─────────────────────────────────
+
+from app.schemas.hummingbot_paper_bot import PaperBotPreviewRequest, PaperBotStartResponse, StrategyType, Timeframe, SignalType
+from app.services.hummingbot_paper_bot_service import start_paper_bot
+
+
+@router.post("/backtest/{backtest_id}/create-paper-bot", response_model=PaperBotStartResponse)
+async def create_paper_bot_from_backtest(
+    backtest_id: int,
+    bot_name: str = Query(..., description="Paper Bot 名称"),
+    paper_initial_balance: float = Query(10000, ge=100, description="虚拟初始资金"),
+    order_amount: float = Query(100, ge=1, description="每笔订单金额"),
+    connector: str = Query("binance", description="交易所 Connector"),
+):
+    """
+    基于回测结果创建 Paper Bot（Phase 4 P3-1 回测联动）。
+
+    工作流：
+    1. 从 backtest_id 获取回测结果
+    2. 验证回测质量（夏普比率等）
+    3. 自动填充参数并启动 Paper Bot
+
+    自动填充的参数：
+    - strategy_type: 回测使用的策略类型
+    - trading_pair: 回测的交易对（symbol）
+    - timeframe: 回测的时间周期
+    - paper_initial_balance: 虚拟初始资金
+    - order_amount: 每笔订单金额
+    - connector: 交易所 Connector
+
+    回测质量门槛：
+    - 夏普比率 (sharpe_ratio) >= 0.5（可设置 skip_sharpe_check=true 跳过）
+    - 最大回撤 (max_drawdown) <= 50%
+    """
+    # 1. 获取回测结果
+    async with get_db() as session:
+        stmt = select(BacktestResult).where(BacktestResult.id == backtest_id)
+        result = await session.execute(stmt)
+        backtest = result.scalar_one_or_none()
+
+    if not backtest:
+        raise HTTPException(status_code=404, detail=f"回测结果 {backtest_id} 不存在")
+
+    metrics = backtest.metrics or {}
+    sharpe_ratio = float(metrics.get("sharpe_ratio", 0) or 0)
+    max_drawdown = float(metrics.get("max_drawdown", 0) or 0)
+
+    # 2. 质量检查（可配置跳过）
+    quality_warnings = []
+    if sharpe_ratio < 0.5:
+        quality_warnings.append(f"回测夏普比率较低（{sharpe_ratio:.2f}），建议优化后再创建 Paper Bot")
+    if max_drawdown > 50:
+        quality_warnings.append(f"回测最大回撤较高（{max_drawdown:.1f}%），请注意风险控制")
+
+    # 3. 构建 Paper Bot 请求
+    params = backtest.params or {}
+
+    # 将 strategy_type 映射到枚举
+    strategy_type_map = {
+        "ma": StrategyType.MA, "ma_cross": StrategyType.MA,
+        "ema": StrategyType.EMA, "ema_triple": StrategyType.EMA,
+        "rsi": StrategyType.RSI, "boll": StrategyType.BOLL,
+        "bollinger": StrategyType.BOLL, "macd": StrategyType.MACD,
+        "atr_trend": StrategyType.ATR, "grid": StrategyType.GRID,
+        "dca": StrategyType.DCA, "pmm": StrategyType.PMM,
+        "ichimoku": StrategyType.ICHIMOKU, "turtle": StrategyType.TURTLE,
+    }
+    mapped_strategy = strategy_type_map.get(backtest.strategy_type, StrategyType.MA)
+
+    # 将 interval 映射到 Timeframe
+    interval_map = {
+        "1m": Timeframe.MINUTE_1, "5m": Timeframe.MINUTE_5,
+        "15m": Timeframe.MINUTE_15, "30m": Timeframe.MINUTE_30,
+        "1h": Timeframe.HOUR_1, "2h": Timeframe.HOUR_2,
+        "4h": Timeframe.HOUR_4, "6h": Timeframe.HOUR_6,
+        "8h": Timeframe.HOUR_8, "12h": Timeframe.HOUR_12,
+        "1d": Timeframe.DAY_1, "3d": Timeframe.DAY_3,
+        "1w": Timeframe.WEEK_1,
+    }
+    mapped_timeframe = interval_map.get(backtest.interval, Timeframe.HOUR_1)
+
+    # 处理交易对格式（BacktestResult 用 BTCUSDT，Paper Bot 用 BTC-USDT）
+    trading_pair = backtest.symbol
+    if "/" not in trading_pair and trading_pair.endswith("USDT"):
+        trading_pair = trading_pair  # 保持原样，schema 会处理
+
+    request = PaperBotPreviewRequest(
+        bot_name=bot_name,
+        connector=connector,
+        strategy_type=mapped_strategy,
+        signal_type=SignalType.BOLLINGER if mapped_strategy == StrategyType.BOLL else None,
+        trading_pair=trading_pair,
+        timeframe=mapped_timeframe,
+        paper_initial_balance=paper_initial_balance,
+        order_amount=order_amount,
+        # 从回测参数中提取策略特定参数
+        fast_period=params.get("fast_period", 10),
+        slow_period=params.get("slow_period", 30),
+        rsi_period=params.get("rsi_period", 14),
+        rsi_oversold=params.get("rsi_oversold", 30),
+        rsi_overbought=params.get("rsi_overbought", 70),
+        boll_period=params.get("boll_period", 20),
+        boll_std_dev=params.get("boll_std_dev", 2.0),
+        macd_fast=params.get("macd_fast", 12),
+        macd_slow=params.get("macd_slow", 26),
+        macd_signal=params.get("macd_signal", 9),
+        grid_levels=params.get("grid_levels", 10),
+        grid_spacing_pct=params.get("grid_spacing_pct", 1.0),
+        stop_loss_pct=params.get("stop_loss_pct", 5.0),
+        take_profit_pct=params.get("take_profit_pct", 10.0),
+        max_drawdown_pct=params.get("max_drawdown_pct", 20.0),
+    )
+
+    # 4. 启动 Paper Bot
+    try:
+        response = await start_paper_bot(
+            request=request,
+            raw_request_data={"source": "backtest", "backtest_id": backtest_id},
+        )
+
+        # 添加回测质量警告
+        if quality_warnings and response.friendly_error:
+            warnings_list = response.friendly_error.get("quality_warnings", [])
+            response.friendly_error["quality_warnings"] = warnings_list + quality_warnings
+
+        return response
+
+    except Exception as e:
+        logger.error(f"从回测 {backtest_id} 创建 Paper Bot 失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"创建 Paper Bot 失败: {str(e)}")
+

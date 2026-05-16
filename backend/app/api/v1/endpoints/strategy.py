@@ -679,11 +679,14 @@ class OptimizeRequest(BaseModel):
     interval:        str = "1d"
     limit:           int = 500
     initial_capital: float = 10000.0
+    commission:      float = 0.001    # maker fee, e.g. 0.001 = 0.1%
+    slippage:        float = 0.0005   # price slippage, e.g. 0.0005 = 0.05%
     param_ranges:    Dict[str, List[Any]] = {}
-    max_combos:      int = 100
-    algorithm:       str = "grid" # "grid" | "optuna"
-    n_trials:        int = 50     # For Optuna
-    use_numba:       bool = False # Experimental
+    max_combos:      int = 5000
+    algorithm:       str = "grid"     # "grid" | "optuna"
+    n_trials:        int = 50         # For Optuna
+    target_metric:   str = "sharpe"   # "sharpe" | "return" | "return_per_dd"
+    use_numba:       bool = False     # Experimental
 
 
 class OptimizeResponse(BaseModel):
@@ -693,9 +696,283 @@ class OptimizeResponse(BaseModel):
     best_params:   Dict[str, Any]
     best_sharpe:   float
     best_return:   float
+    best_max_drawdown: float
+    best_equity_curve: List[Dict[str, Any]]
+    best_drawdown_curve: List[Dict[str, Any]]
+    best_trades: List[Dict[str, Any]]
     total_combos:  int
+    algorithm:     str
+    target_metric: str
     results:       List[Dict[str, Any]]
+    warnings:      List[Dict[str, Any]] = []
     saved_id:      Optional[int] = None
+
+
+def _compute_target_score(result: Dict[str, Any], target_metric: str) -> float:
+    """Compute a scalar score for ranking optimization results."""
+    sharpe = result.get("sharpe", 0.0)
+    total_return = result.get("total_return", 0.0)
+    max_drawdown = abs(result.get("max_drawdown", 0.001))
+
+    if target_metric == "return":
+        return total_return
+    elif target_metric == "return_per_dd":
+        return total_return / max_drawdown if max_drawdown > 0 else total_return * 999
+    else:  # sharpe (default)
+        return sharpe
+
+
+def _run_backtest_for_params(
+    df: pd.DataFrame,
+    strategy_type: str,
+    params: Dict[str, Any],
+    initial_capital: float,
+    commission: float,
+    slippage: float,
+) -> Dict[str, Any]:
+    """Run a single backtest and return full result with equity curve."""
+    import numpy as np
+
+    signal_func = build_signal_func(strategy_type, params)
+    signals = resolve_signal_output(signal_func(df))
+
+    capital = initial_capital
+    position = 0.0
+    entry_price = 0.0
+    entry_time = None
+    trades = []
+    markers = []
+    equity_list = []
+    total_commission = 0.0
+
+    prices = df["close"]
+    times = df.index
+    execution_signals = signals.shift(1).fillna(0).astype(int)
+
+    for i in range(len(df)):
+        price = float(prices.iloc[i])
+        signal = int(execution_signals.iloc[i]) if i < len(execution_signals) else 0
+        current_time = times[i]
+
+        current_equity = capital + position * price
+        equity_list.append(current_equity)
+
+        if signal == 1 and position == 0 and capital > 0:
+            effective_buy_price = price * (1 + slippage)
+            fee = capital * commission
+            invest = capital - fee
+            position = invest / effective_buy_price
+            entry_price = effective_buy_price
+            entry_time = current_time
+            total_commission += fee
+            capital = 0.0
+            markers.append({
+                "time": str(current_time)[:19],
+                "price": round(price, 6),
+                "side": "BUY",
+                "pnl": None,
+            })
+
+        elif signal == -1 and position > 0:
+            effective_sell_price = price * (1 - slippage)
+            gross = position * effective_sell_price
+            fee = gross * commission
+            net = gross - fee
+            total_commission += fee
+            pnl = net - (entry_price * position * (1 + commission))
+            pnl_pct = (effective_sell_price / entry_price - 1) * 100 - commission * 200
+            trades.append({
+                "entry_time": str(entry_time)[:19],
+                "exit_time": str(current_time)[:19],
+                "entry_price": round(entry_price, 6),
+                "exit_price": round(effective_sell_price, 6),
+                "quantity": round(position, 8),
+                "pnl": round(pnl, 4),
+                "pnl_pct": round(pnl_pct, 4),
+            })
+            markers.append({
+                "time": str(current_time)[:19],
+                "price": round(price, 6),
+                "side": "SELL",
+                "pnl": round(pnl, 4),
+            })
+            capital = net
+            position = 0.0
+            entry_price = 0.0
+            entry_time = None
+
+    # Force-close at last bar
+    if position > 0:
+        price = float(prices.iloc[-1])
+        effective_sell_price = price * (1 - slippage)
+        fee = position * effective_sell_price * commission
+        net = position * effective_sell_price - fee
+        total_commission += fee
+        pnl = net - (entry_price * position * (1 + commission))
+        pnl_pct = (effective_sell_price / entry_price - 1) * 100 - commission * 200
+        trades.append({
+            "entry_time": str(entry_time)[:19],
+            "exit_time": str(times[-1])[:19],
+            "entry_price": round(entry_price, 6),
+            "exit_price": round(effective_sell_price, 6),
+            "quantity": round(position, 8),
+            "pnl": round(pnl, 4),
+            "pnl_pct": round(pnl_pct, 4),
+        })
+        markers.append({
+            "time": str(times[-1])[:19],
+            "price": round(price, 6),
+            "side": "SELL",
+            "pnl": round(pnl, 4),
+        })
+        capital = net
+        position = 0.0
+
+    equity_series = pd.Series(equity_list, index=times)
+    final_capital = capital
+
+    total_return = (final_capital / initial_capital - 1) * 100
+    annualization_factor = infer_annualization_factor(times)
+    daily_ret = equity_series.pct_change().dropna()
+    annual_return = annualize_return(total_return / 100, len(daily_ret), annualization_factor)
+
+    rolling_max = equity_series.cummax()
+    drawdown = (equity_series - rolling_max) / rolling_max
+    max_drawdown = abs(float(drawdown.min())) * 100
+
+    # Build drawdown curve (downsampled)
+    dd_step = max(1, len(drawdown) // 500)
+    drawdown_curve = [
+        {"t": str(idx)[:19], "v": round(float(v) * 100, 4)}
+        for idx, v in drawdown.iloc[::dd_step].items()
+    ]
+
+    sharpe = annualize_sharpe(daily_ret, annualization_factor)
+
+    n_trades = len(trades)
+    if n_trades > 0:
+        winning = [t for t in trades if t["pnl"] > 0]
+        losing = [t for t in trades if t["pnl"] < 0]
+        win_rate = len(winning) / n_trades * 100
+        avg_win = float(np.mean([t["pnl"] for t in winning])) if winning else 0.0
+        avg_loss = abs(float(np.mean([t["pnl"] for t in losing]))) if losing else 0.0
+        profit_factor = avg_win / avg_loss if avg_loss > 0 else float("inf")
+    else:
+        win_rate = profit_factor = 0.0
+
+    # Equity curve downsampled
+    step = max(1, len(equity_series) // 500)
+    equity_curve = [
+        {"t": str(idx)[:19], "v": round(float(val), 2)}
+        for idx, val in equity_series.iloc[::step].items()
+    ]
+
+    return {
+        "total_return": round(total_return, 4),
+        "annual_return": round(annual_return, 4),
+        "max_drawdown": round(max_drawdown, 4),
+        "sharpe": round(sharpe, 4),
+        "win_rate": round(win_rate, 4),
+        "profit_factor": round(min(profit_factor, 999.0), 4),
+        "total_trades": n_trades,
+        "total_commission": round(total_commission, 4),
+        "final_capital": round(final_capital, 4),
+        "equity_curve": equity_curve,
+        "drawdown_curve": drawdown_curve,
+        "trades": trades,
+        "markers": markers,
+    }
+
+
+def _generate_optimization_warnings(
+    results: List[Dict[str, Any]],
+    best_result: Dict[str, Any],
+    n_total: int,
+) -> List[Dict[str, Any]]:
+    """Generate anti-overfitting warnings for optimization results."""
+    warnings = []
+    best_sharpe = best_result.get("sharpe", 0.0)
+    best_return = best_result.get("total_return", 0.0)
+    best_dd = abs(best_result.get("max_drawdown", 0.0))
+    best_trades = best_result.get("total_trades", 0)
+
+    # 1. Trade count too low
+    if best_trades < 10:
+        warnings.append({
+            "type": "low_trades",
+            "severity": "high",
+            "message": f"最优参数交易次数过少（{best_trades} 次），结果统计不具代表性",
+            "recommendation": "增加回测数据量或放宽参数范围以产生更多交易",
+        })
+    elif best_trades < 20:
+        warnings.append({
+            "type": "low_trades",
+            "severity": "medium",
+            "message": f"最优参数交易次数偏低（{best_trades} 次），建议谨慎参考",
+            "recommendation": "建议增加回测数据量以获得更稳定的统计",
+        })
+
+    # 2. Max drawdown too high
+    if best_dd > 30:
+        warnings.append({
+            "type": "high_drawdown",
+            "severity": "high",
+            "message": f"最大回撤过高（{best_dd:.1f}%），存在较大风险",
+            "recommendation": "考虑收紧止损参数或降低仓位以控制回撤",
+        })
+    elif best_dd > 20:
+        warnings.append({
+            "type": "high_drawdown",
+            "severity": "medium",
+            "message": f"最大回撤偏高（{best_dd:.1f}%）",
+            "recommendation": "建议关注实盘资金管理，控制单笔仓位",
+        })
+
+    # 3. Best params isolated (sharpe much better than second best)
+    if len(results) >= 2:
+        second_sharpe = results[1].get("sharpe", 0.0)
+        sharpe_gap = best_sharpe - second_sharpe
+        if best_sharpe > 0 and sharpe_gap / best_sharpe > 0.3:
+            warnings.append({
+                "type": "isolated_best",
+                "severity": "medium",
+                "message": f"最优 Sharpe ({best_sharpe:.3f}) 与第二名差距过大（+{sharpe_gap:.3f}），可能存在过拟合",
+                "recommendation": "建议选择 Sharpe 排名靠前且稳定的参数组合",
+            })
+
+    # 4. Negative Sharpe
+    if best_sharpe < 0:
+        warnings.append({
+            "type": "negative_sharpe",
+            "severity": "high",
+            "message": f"最优 Sharpe 为负（{best_sharpe:.3f}），策略在该参数下表现不佳",
+            "recommendation": "不建议使用当前参数，建议扩大参数搜索范围",
+        })
+
+    # 5. WFE-like estimate: best vs median performance
+    if len(results) >= 5:
+        median_sharpe = sorted([r.get("sharpe", 0.0) for r in results])[len(results) // 2]
+        if best_sharpe > 0 and median_sharpe > 0:
+            wfe = median_sharpe / best_sharpe if best_sharpe != 0 else 0
+            if wfe < 0.3:
+                warnings.append({
+                    "type": "low_wfe",
+                    "severity": "medium",
+                    "message": f"Walk-Forward 类似指标偏低（WFE≈{wfe:.2f}），最优参数在样本内表现过于突出",
+                    "recommendation": "建议选择中上游参数而非最优参数，或进入 WFA 验证",
+                })
+
+    # 6. All returns negative
+    all_returns = [r.get("total_return", 0.0) for r in results]
+    if all(r < 0 for r in all_returns):
+        warnings.append({
+            "type": "all_negative",
+            "severity": "high",
+            "message": "全部参数组合收益率均为负，当前市场环境下策略不适用",
+            "recommendation": "建议更换策略或等待市场环境变化",
+        })
+
+    return warnings
 
 
 @router.post("/optimize", response_model=OptimizeResponse)
@@ -703,6 +980,7 @@ async def optimize_strategy(req: OptimizeRequest):
     """
     Run parameter optimization for a strategy.
     Supports Grid Search (default) and Optuna (Bayesian Optimization).
+    Returns full equity/drawdown curves for the best params and anti-overfitting warnings.
     """
     try:
         get_template(req.strategy_type)
@@ -711,7 +989,7 @@ async def optimize_strategy(req: OptimizeRequest):
 
     # Validate combos for Grid Search
     if req.algorithm == "grid":
-        param_names  = list(req.param_ranges.keys()) if req.param_ranges else []
+        param_names = list(req.param_ranges.keys()) if req.param_ranges else []
         param_values = [req.param_ranges[k] for k in param_names]
         if not param_names:
             total_combos = 1
@@ -719,7 +997,6 @@ async def optimize_strategy(req: OptimizeRequest):
             total_combos = 1
             for v in param_values:
                 total_combos *= len(v)
-                
         if total_combos > req.max_combos:
             raise HTTPException(
                 status_code=400,
@@ -728,9 +1005,9 @@ async def optimize_strategy(req: OptimizeRequest):
     else:
         total_combos = req.n_trials
 
-    symbol_ccxt  = _normalize_symbol(req.symbol)
+    symbol_ccxt = _normalize_symbol(req.symbol)
     symbol_clean = req.symbol.upper()
-    MAX_LIMITS   = {"15m": 500, "1h": 1000, "4h": 2000, "1d": 2000, "1w": 2000, "1M": 2000}
+    MAX_LIMITS = {"15m": 500, "1h": 1000, "4h": 2000, "1d": 2000, "1w": 2000, "1M": 2000}
     effective_limit = min(req.limit, MAX_LIMITS.get(req.interval, 1000))
 
     try:
@@ -744,35 +1021,69 @@ async def optimize_strategy(req: OptimizeRequest):
     # Run Optimization
     if req.algorithm == "optuna":
         optimizer = OptunaOptimizer(df, req.strategy_type, req.initial_capital)
-        # Optuna runs in a thread to avoid blocking event loop
         result = await asyncio.to_thread(optimizer.optimize, n_trials=req.n_trials, use_numba=req.use_numba)
-        
         valid_results = result["results"]
         best_params = result["best_params"]
-        best_sharpe = result["best_sharpe"]
-        
-        # Find best result details
-        best_return = 0.0
-        if valid_results:
-            best_res = valid_results[0] # Sorted by sharpe
-            best_return = best_res.get("total_return", 0.0)
-            
-    else: # grid
+    else:
         optimizer = GridOptimizer(df, req.strategy_type, req.initial_capital)
         valid_results = await optimizer.optimize(req.param_ranges, use_numba=req.use_numba)
-        
-        if valid_results:
-            best = valid_results[0]
-            best_params = best["params"]
-            best_sharpe = best["sharpe"]
-            best_return = best["total_return"]
-        else:
-            best_params = {}
-            best_sharpe = 0.0
-            best_return = 0.0
+        best_params = valid_results[0]["params"] if valid_results else {}
 
-    params_grid = valid_results[:50]
+    if not valid_results:
+        raise HTTPException(status_code=400, detail="所有参数组合均失败，请检查参数范围或策略配置")
 
+    # Re-rank results by target metric
+    for r in valid_results:
+        r["_target_score"] = _compute_target_score(r, req.target_metric)
+    valid_results.sort(key=lambda x: x["_target_score"], reverse=True)
+
+    # Extract best result after re-ranking
+    best = valid_results[0]
+    best_sharpe = best.get("sharpe", 0.0)
+    best_return = best.get("total_return", 0.0)
+    best_max_drawdown = best.get("max_drawdown", 0.0)
+
+    # Run full backtest for best params to get equity/drawdown curves
+    try:
+        full_result = _run_backtest_for_params(
+            df=df,
+            strategy_type=req.strategy_type,
+            params=best_params,
+            initial_capital=req.initial_capital,
+            commission=req.commission,
+            slippage=req.slippage,
+        )
+        best_equity_curve = full_result.get("equity_curve", [])
+        best_drawdown_curve = full_result.get("drawdown_curve", [])
+        best_trades = full_result.get("trades", [])[:100]
+        # Update best metrics with more accurate values from full backtest
+        best_sharpe = full_result.get("sharpe", best_sharpe)
+        best_return = full_result.get("total_return", best_return)
+        best_max_drawdown = full_result.get("max_drawdown", best_max_drawdown)
+        # Update best result entry with full metrics
+        best.update({
+            "sharpe": best_sharpe,
+            "total_return": best_return,
+            "max_drawdown": best_max_drawdown,
+            "win_rate": full_result.get("win_rate", 0),
+            "total_trades": full_result.get("total_trades", 0),
+        })
+    except Exception as e:
+        logger.warning(f"Failed to run full backtest for best params: {e}")
+        best_equity_curve = []
+        best_drawdown_curve = []
+        best_trades = []
+
+    # Generate anti-overfitting warnings
+    warnings = _generate_optimization_warnings(valid_results, best, total_combos)
+
+    # Prepare result grid (top 50, stripped of internal fields)
+    params_grid = [
+        {k: v for k, v in r.items() if k != "_target_score"}
+        for r in valid_results[:50]
+    ]
+
+    # Persist to DB
     saved_id = None
     try:
         async with get_db() as session:
@@ -782,8 +1093,17 @@ async def optimize_strategy(req: OptimizeRequest):
                 interval=req.interval,
                 params_grid=params_grid,
                 best_params=best_params,
-                best_sharpe=best_sharpe,
-                best_return=best_return,
+                best_sharpe=round(best_sharpe, 4),
+                best_return=round(best_return, 4),
+                best_max_drawdown=round(best_max_drawdown, 4),
+                best_equity_curve=best_equity_curve,
+                best_drawdown_curve=best_drawdown_curve,
+                best_trades=best_trades,
+                target_metric=req.target_metric,
+                commission=req.commission,
+                slippage=req.slippage,
+                param_ranges=req.param_ranges,
+                algorithm=req.algorithm,
                 total_combos=total_combos,
             )
             session.add(row)
@@ -799,8 +1119,15 @@ async def optimize_strategy(req: OptimizeRequest):
         best_params=best_params,
         best_sharpe=round(best_sharpe, 4),
         best_return=round(best_return, 4),
+        best_max_drawdown=round(best_max_drawdown, 4),
+        best_equity_curve=best_equity_curve,
+        best_drawdown_curve=best_drawdown_curve,
+        best_trades=best_trades,
         total_combos=total_combos,
-        results=valid_results[:50],
+        algorithm=req.algorithm,
+        target_metric=req.target_metric,
+        results=params_grid,
+        warnings=warnings,
         saved_id=saved_id,
     )
 
@@ -829,13 +1156,16 @@ async def get_optimization_history(
     return {
         "history": [
             {
-                "id":            row.id,
-                "strategy_type": row.strategy_type,
-                "symbol":        row.symbol,
-                "interval":      row.interval,
-                "best_params":   row.best_params,
-                "best_sharpe":   row.best_sharpe,
-                "best_return":   row.best_return,
+                "id":             row.id,
+                "strategy_type":  row.strategy_type,
+                "symbol":         row.symbol,
+                "interval":       row.interval,
+                "best_params":    row.best_params,
+                "best_sharpe":    row.best_sharpe,
+                "best_return":    row.best_return,
+                "best_max_drawdown": row.best_max_drawdown,
+                "algorithm":      row.algorithm,
+                "target_metric":  row.target_metric,
                 "total_combos":  row.total_combos,
                 "created_at":    row.created_at.isoformat() if row.created_at else None,
             }
@@ -843,6 +1173,179 @@ async def get_optimization_history(
         ],
         "total": len(rows),
     }
+
+
+@router.get("/optimize/{record_id}")
+async def get_optimization_detail(record_id: int):
+    """Return full details of a saved optimization result."""
+    from sqlalchemy import select
+    async with get_db() as session:
+        stmt = select(OptimizationResult).where(OptimizationResult.id == record_id)
+        result = await session.execute(stmt)
+        row = result.scalar_one_or_none()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="优化记录不存在")
+
+    return {
+        "id": row.id,
+        "strategy_type": row.strategy_type,
+        "symbol": row.symbol,
+        "interval": row.interval,
+        "best_params": row.best_params,
+        "best_sharpe": row.best_sharpe,
+        "best_return": row.best_return,
+        "best_max_drawdown": row.best_max_drawdown,
+        "best_equity_curve": row.best_equity_curve or [],
+        "best_drawdown_curve": row.best_drawdown_curve or [],
+        "best_trades": row.best_trades or [],
+        "params_grid": row.params_grid or [],
+        "param_ranges": row.param_ranges or {},
+        "algorithm": row.algorithm,
+        "target_metric": row.target_metric,
+        "commission": row.commission,
+        "slippage": row.slippage,
+        "total_combos": row.total_combos,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Create Paper Bot from Optimization Result
+# ─────────────────────────────────────────────────────────────────────────────
+
+class OptimizePaperBotRequest(BaseModel):
+    strategy_type: str
+    symbol: str
+    interval: str
+    params: Dict[str, Any]
+    initial_capital: float = 10000.0
+    commission: float = 0.001
+    slippage: float = 0.0005
+
+
+@router.post("/optimize/create-paper-bot")
+async def create_paper_bot_from_optimization(req: OptimizePaperBotRequest):
+    """
+    Create a Paper Bot directly from optimization result parameters.
+    No backtest_id needed — takes params from the optimization run.
+    """
+    from app.schemas.hummingbot_paper_bot import PaperBotPreviewRequest, PaperBotStartResponse, StrategyType, Timeframe
+    from app.services.hummingbot_paper_bot_service import start_paper_bot
+
+    # Map strategy_type string to enum
+    strategy_map: Dict[str, StrategyType] = {
+        "ma": StrategyType.MA,
+        "rsi": StrategyType.RSI,
+        "boll": StrategyType.BOLLINGER,
+        "bollinger": StrategyType.BOLLINGER,
+        "macd": StrategyType.MACD,
+        "atr": StrategyType.ATR,
+        "kdj": StrategyType.KDJ,
+        "supertrend": StrategyType.SUPERTREND,
+    }
+    mapped_strategy = strategy_map.get(req.strategy_type.lower(), StrategyType.MA)
+
+    timeframe_map: Dict[str, Timeframe] = {
+        "15m": Timeframe.MINUTES_15,
+        "1h": Timeframe.HOUR,
+        "4h": Timeframe.HOURS_4,
+        "1d": Timeframe.DAY,
+    }
+    mapped_timeframe = timeframe_map.get(req.interval, Timeframe.DAY)
+
+    params = req.params
+
+    request = PaperBotPreviewRequest(
+        strategy_type=mapped_strategy,
+        trading_pair=req.symbol.replace("USDT", "-USDT"),
+        timeframe=mapped_timeframe,
+        paper_initial_balance=req.initial_capital,
+        order_amount=100,
+        fast_period=params.get("fast_period", 10),
+        slow_period=params.get("slow_period", 30),
+        rsi_period=params.get("rsi_period", 14),
+        rsi_oversold=params.get("rsi_oversold", 30),
+        rsi_overbought=params.get("rsi_overbought", 70),
+        boll_period=params.get("boll_period", 20),
+        boll_std_dev=float(params.get("boll_std_dev", 2.0)),
+        macd_fast=params.get("macd_fast", 12),
+        macd_slow=params.get("macd_slow", 26),
+        macd_signal=params.get("macd_signal", 9),
+    )
+
+    try:
+        response = await start_paper_bot(
+            request=request,
+            raw_request_data={"source": "optimization", "params": req.params},
+        )
+        return {
+            "success": True,
+            "paper_bot_id": response.paper_bot_id,
+            "bot_name": response.bot_name,
+            "remote_started": response.remote_started,
+            "remote_confirmed": response.remote_confirmed,
+            "error": response.friendly_error or response.error,
+        }
+    except Exception as e:
+        logger.error(f"Paper bot creation from optimization failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Create Testnet Bot from Optimization Result
+# ─────────────────────────────────────────────────────────────────────────────
+
+class OptimizeTestnetRequest(BaseModel):
+    strategy_type: str
+    symbol: str
+    interval: str
+    params: Dict[str, Any]
+    initial_capital: float = 10000.0
+
+
+@router.post("/optimize/create-testnet-bot")
+async def create_testnet_bot_from_optimization(req: OptimizeTestnetRequest):
+    """
+    Create a Testnet Perpetual Bot directly from optimization result parameters.
+    """
+    from app.schemas.hummingbot_testnet_bot import TestnetBotStartRequest, TestnetBotMode
+    from app.services.hummingbot_testnet_bot_service import start_testnet_bot
+
+    strategy_type_val = req.strategy_type.lower()
+    params = req.params
+
+    trading_pair = req.symbol.replace("USDT", "-USDT")
+    if "PERP" not in trading_pair and "USDT" in trading_pair:
+        trading_pair = trading_pair.replace("-USDT", "-USDT-PERP")
+
+    request = TestnetBotStartRequest(
+        bot_name=f"test_{req.strategy_type}_{req.symbol}_{datetime.now().strftime('%Y%m%d%H%M')}",
+        trading_pair=trading_pair,
+        strategy_type=strategy_type_val,
+        timeframe=req.interval,
+        initial_capital=req.initial_capital,
+        mode=TestnetBotMode.HEDGE,
+        fast_period=params.get("fast_period", 10),
+        slow_period=params.get("slow_period", 30),
+        rsi_period=params.get("rsi_period", 14),
+        rsi_oversold=params.get("rsi_oversold", 30),
+        rsi_overbought=params.get("rsi_overbought", 70),
+        boll_period=params.get("boll_period", 20),
+        boll_std_dev=float(params.get("boll_std_dev", 2.0)),
+    )
+
+    try:
+        response = await start_testnet_bot(request, raw_request_data=req.model_dump())
+        return {
+            "success": True,
+            "bot_id": getattr(response, "bot_id", None),
+            "bot_name": getattr(response, "bot_name", request.bot_name),
+            "error": getattr(response, "friendly_error", None) or getattr(response, "error", None),
+        }
+    except Exception as e:
+        logger.error(f"Testnet bot creation from optimization failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
