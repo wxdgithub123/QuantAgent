@@ -1,0 +1,77 @@
+# ── Secrets & Environment ────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# ── Python ───────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.cache/
+.tox/
+.nox/
+.ipynb_checkpoints/
+.coverage
+coverage.xml
+htmlcov/
+
+# ── Cython compiled objects ──────────────────────────────────────────────
+*.cpp
+!hummingbot/core/cpp/*.cpp
+!hummingbot/hummingbot/core/cpp/*.cpp
+
+# ── Python virtualenv ────────────────────────────────────────────────────
+venv/
+env/
+.venv/
+
+# ── Node / Next.js ───────────────────────────────────────────────────────
+node_modules/
+.next/
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+*.tsbuildinfo
+
+# ── Build & Distribution ─────────────────────────────────────────────────
+dist/
+build/
+*.whl
+
+# ── IDE & Editor ─────────────────────────────────────────────────────────
+.idea/
+.vscode/
+.claude/
+.cursor/
+.agents/
+.history/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Logs ─────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Temp & Backup ───────────────────────────────────────────────────────
+*.tmp
+*.bak
+*.backup
+
+# ── Misc ─────────────────────────────────────────────────────────────────
+*.srl
+portfolio_value.csv
+/grvt
+certs/

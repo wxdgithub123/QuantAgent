@@ -1,0 +1,24 @@
+# Dockerfile.hummingbot-api
+# 在 hummingbot/hummingbot-api:latest 基础上：
+# 1. 安装 docker-cli（允许容器内调用 Docker socket 创建 Bot 子容器）
+# 2. 修正 BOTS_PATH 指向镜像内置的 bots 目录
+# 3. 修正 DATABASE_URL 指向 hummingbot 自己的 postgres 服务名（hummingbot-postgres）
+#    注意：docker-compose 网络中存在两个 postgres：
+#    - quantagent-postgres（QuantAgent 用，user=quantagent）— 不能混用
+#    - hummingbot-postgres（Hummingbot 用，user=hbot）— 本服务应连接这个
+FROM hummingbot/hummingbot-api:latest
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 安装 docker-cli（socket 已在 docker-compose.yml 中挂载）
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends docker-cli && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
+
+# 修正 BOTS_PATH：指向镜像内置 bots 源码目录
+ENV BOTS_PATH=/hummingbot-api
+
+# 修正 DATABASE_URL：必须指向 hummingbot-postgres（hummingbot 自己创建的 postgres 容器）
+# 不能指向 quantagent-postgres（那是 QuantAgent 的 DB，用户名不匹配）
+ENV DATABASE_URL=postgresql+asyncpg://hbot:hummingbot-api@hummingbot-postgres:5432/hummingbot_api
