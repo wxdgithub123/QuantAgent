@@ -51,7 +51,6 @@ build/
 
 # ── IDE & Editor ─────────────────────────────────────────────────────────
 .idea/
-.vscode/
 .claude/
 .cursor/
 .agents/
