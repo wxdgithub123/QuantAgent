@@ -90,7 +90,7 @@ services:
       - BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}
       - BINANCE_TESTNET=true
       - SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT
-      - BINANCE_PROXY=http://host.docker.internal:7897
+      - BINANCE_PROXY=${BINANCE_PROXY:-}
     depends_on:
       nats:
         condition: service_healthy
@@ -135,45 +135,46 @@ services:
     networks:
       - quantagent-network
 
-  # Hummingbot API (FastAPI)
-  # 使用自定义镜像（包含 docker.io CLI 和正确的 BOTS_PATH）
-  # 构建命令：docker build -f Dockerfile.hummingbot-api -t hummingbot-api-fixed:latest .
+  # Hummingbot API (FastAPI) — 可选，仅在需要 Paper Bot 功能时启用
+  # 构建：docker compose build hummingbot-api
   hummingbot-api:
-    image: hummingbot-api-fixed:v9
+    build:
+      context: .
+      dockerfile: Dockerfile.hummingbot-api
     container_name: hummingbot-api
     restart: unless-stopped
     ports:
       - "8000:8000"
+    profiles:
+      - hummingbot   # 仅在显式指定 profile 时启动: docker compose --profile hummingbot up
     volumes:
       # Docker socket — 允许容器内创建 Bot 子容器（必须）
       - /var/run/docker.sock:/var/run/docker.sock
       # Hummingbot 数据目录（Bot 实例状态）
       - ./hummingbot_data:/home/hummingbot/data
-      # bots 目录：直接写到宿主机挂载路径 /home/hummingbot/data/bots（绕过 Docker Desktop 同步延迟）
-      # BOTS_HOST_PATH 用于 Bot 容器 volume source（必须是宿主机可访问路径）
+      # bots 目录
       - ./hummingbot_data/bots:/hummingbot-api/bots
     environment:
-      - BOTS_HOST_PATH=A:/project/Hummingbot/quantagent/QuantAgent-main/hummingbot_data/bots
+      # BOTS_HOST_PATH: 宿主机上 hummingbot_data/bots 的绝对路径（必填）
+      # 例如 Linux: /home/user/QuantAgent/hummingbot_data/bots
+      # 例如 macOS: /Users/xxx/QuantAgent/hummingbot_data/bots
+      # 例如 Windows: A:/project/Hummingbot/hummingbot_data/bots
+      - BOTS_HOST_PATH=${BOTS_HOST_PATH}
       - DOCKER_HOST=unix:///var/run/docker.sock
       - BROKER_HOST=mosquitto
       - BROKER_PORT=1883
       - BROKER_USERNAME=admin
       - BROKER_PASSWORD=password
       - DOCKER_NETWORK=quantagent-main_quantagent-network
-      # Proxy — pass through to bot containers for Binance API access
-      - HTTP_PROXY=http://host.docker.internal:7897
-      - HTTPS_PROXY=http://host.docker.internal:7897
+      # Proxy（可选）— 如需科学上网访问 Binance，在这里配置
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
       - NO_PROXY=localhost,127.0.0.1,mosquitto,hummingbot-postgres
     depends_on:
       hummingbot-postgres:
         condition: service_healthy
       mosquitto:
         condition: service_healthy
-    # healthcheck:
-    #   test: ["CMD-SHELL", "curl -f http://localhost:8000/ || exit 1"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
     networks:
       - quantagent-network
 
@@ -197,16 +198,15 @@ services:
       - HOST=0.0.0.0
       - PORT=8000
       - BINANCE_PRIVATE_KEY_PATH=/app/Private_key.pem
-      # 代理仅用于外部 API，Ollama 本地服务不走代理
-      - HTTP_PROXY=http://host.docker.internal:7897
-      - HTTPS_PROXY=http://host.docker.internal:7897
-      # Ollama 使用 host.docker.internal 访问宿主机
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
-      - LLM_PROVIDER=ollama
+      # 代理（可选）— 如需科学上网访问 Binance/CoinGecko，在这里配置
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      # Ollama 使用 host.docker.internal 访问宿主机（可选，AI 分析功能需要）
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
       - OPENBB_FRED_API_KEY=${OPENBB_FRED_API_KEY:-}
       # 禁用 Ollama 请求的代理
-      - OLLAMA_NO_PROXY=true
-      - NO_PROXY=host.docker.internal,host-gateway,ollama,192.168.10.239,localhost,127.0.0.1,host.docker.internal:11434,backend,postgres,redis,nats,clickhouse,frontend,gateway,hummingbot-api,172.19.0.0/16
+      - NO_PROXY=host.docker.internal,host-gateway,ollama,localhost,127.0.0.1,host.docker.internal:11434,backend,postgres,redis,nats,clickhouse,frontend,gateway,hummingbot-api,172.19.0.0/16
       # CORS 配置，允许前端访问 (逗号分隔)
       - CORS_ORIGINS=http://frontend:3000,http://localhost:3002
       # Hummingbot API 集成（只读）
