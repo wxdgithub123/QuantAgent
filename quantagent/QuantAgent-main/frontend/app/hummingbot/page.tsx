@@ -9,7 +9,7 @@ import { usePaperBotWebSocket } from "@/hooks/usePaperBotWebSocket";
 import {
   RefreshCw, Wifi, WifiOff, Server, Container, Plug, Bot, AlertTriangle,
   CheckCircle, XCircle, ArrowLeft, Activity, BarChart, History, BarChart3, ShoppingCart, Wallet,
-  ShieldCheck, FileJson, Copy, Check, Play, AlertCircle
+  ShieldCheck, FileJson, Copy, Check, Play, AlertCircle, Zap, Layers, Brain
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -362,7 +362,7 @@ export default function HummingbotPage() {
     }
     if (label) {
       label.textContent = wsConnected ? "WS Live" : "WS";
-      label.className = `hidden md:inline text-[10px] ${wsConnected ? "text-green-400" : "text-slate-500"}`;
+      label.className = `hidden md:inline text-[10px] ${wsConnected ? "text-green-400" : "text-muted-foreground"}`;
     }
   }, [wsConnected]);
 
@@ -633,42 +633,42 @@ export default function HummingbotPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-40">
+      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
         <div className="container mx-auto px-4 py-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Link href="/dashboard" className="text-slate-400 hover:text-slate-100 transition-colors">
+              <Link href="/dashboard" className="text-muted-foreground hover:text-foreground transition-colors">
                 <ArrowLeft className="w-5 h-5" />
               </Link>
               <div className="w-9 h-9 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-xl flex items-center justify-center">
                 <Server className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h1 className="text-lg font-bold text-slate-100">Hummingbot 管理中心</h1>
-                <p className="text-[10px] text-slate-400">Read-only Integration</p>
+                <h1 className="text-lg font-bold text-foreground">Hummingbot 管理中心</h1>
+                <p className="text-[10px] text-muted-foreground">Read-only Integration</p>
               </div>
             </div>
             <div className="flex items-center gap-3">
               {/* Navigation */}
               <nav className="hidden md:flex items-center gap-1 mr-4">
-                <Link href="/dashboard" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                <Link href="/dashboard" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
                   仪表盘
                 </Link>
-                <Link href="/trades" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                <Link href="/trades" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
                   交易流水
                 </Link>
-                <Link href="/analytics" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                <Link href="/analytics" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
                   性能分析
                 </Link>
-                <Link href="/backtest" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                <Link href="/backtest" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
                   回测
                 </Link>
-                <Link href="/replay" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                <Link href="/replay" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
                   历史回放
                 </Link>
-                <Link href="/terminal" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                <Link href="/terminal" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
                   终端
                 </Link>
                 <Link href="/hummingbot" className="px-2 py-1 text-xs text-cyan-400 bg-cyan-500/10 rounded border border-cyan-500/20 font-medium">
@@ -677,6 +677,8 @@ export default function HummingbotPage() {
                 <Link href="/hummingbot-testnet" className="px-2 py-1 text-xs text-orange-400 hover:bg-orange-500/10 rounded border border-orange-500/20 hover:border-orange-500/40 font-medium">
                   <span className="flex items-center gap-1"><Server className="w-3 h-3" /> Testnet</span>
                 </Link>
+                <Link href="/signals" className="px-2 py-1 text-xs text-muted-foreground hover:bg-secondary rounded flex items-center gap-1"><Layers className="w-3 h-3" /> 因子/信号</Link>
+                <Link href="/decisions" className="px-2 py-1 text-xs text-muted-foreground hover:bg-secondary rounded flex items-center gap-1"><Brain className="w-3 h-3" /> 决策中心</Link>
               </nav>
               <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20">
                 <Server className="w-3 h-3 mr-1" />
@@ -689,7 +691,7 @@ export default function HummingbotPage() {
                   className="w-2 h-2 rounded-full bg-slate-600"
                   title="实时推送状态"
                 />
-                <span id="ws-label" className="text-[10px] text-slate-500 hidden md:inline">WS</span>
+                <span id="ws-label" className="text-[10px] text-muted-foreground hidden md:inline">WS</span>
               </div>
               <Button
                 size="sm"
@@ -740,11 +742,11 @@ export default function HummingbotPage() {
         {/* Stop Paper Bot Confirmation Dialog */}
         {showStopDialog && selectedPaperBot && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 max-w-md w-full mx-4">
-              <h3 className="text-lg font-bold text-slate-100 mb-4">确认停止 Hummingbot Paper Bot？</h3>
+            <div className="bg-card border border-border rounded-xl p-6 max-w-md w-full mx-4">
+              <h3 className="text-lg font-bold text-foreground mb-4">确认停止 Hummingbot Paper Bot？</h3>
               <div className="space-y-3 mb-6">
-                <p className="text-slate-300 text-sm">当前操作仅停止 Paper Bot：</p>
-                <ul className="text-slate-400 text-xs space-y-1 ml-4">
+                <p className="text-foreground/80 text-sm">当前操作仅停止 Paper Bot：</p>
+                <ul className="text-muted-foreground text-xs space-y-1 ml-4">
                   <li>• 使用虚拟资金</li>
                   <li>• 不会执行真实交易</li>
                   <li>• 不会撤单</li>
@@ -759,7 +761,7 @@ export default function HummingbotPage() {
                   variant="outline"
                   onClick={() => setShowStopDialog(false)}
                   disabled={stopping}
-                  className="text-slate-300"
+                  className="text-foreground/80"
                 >
                   取消
                 </Button>
@@ -787,7 +789,7 @@ export default function HummingbotPage() {
 
         {/* Last Refresh Time */}
         {lastRefresh && (
-          <div className="mb-4 text-xs text-slate-500 flex items-center gap-1">
+          <div className="mb-4 text-xs text-muted-foreground flex items-center gap-1">
             <RefreshCw className="w-3 h-3" />
             最后刷新: {lastRefresh.toLocaleTimeString()}
           </div>
@@ -796,9 +798,9 @@ export default function HummingbotPage() {
         {/* Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* API 连接状态 */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 flex items-center gap-2 text-base">
+              <CardTitle className="text-foreground flex items-center gap-2 text-base">
                 <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${status?.connected ? "bg-green-500/10 border border-green-500/20" : "bg-red-500/10 border border-red-500/20"}`}>
                   {status?.connected ? (
                     <Wifi className="w-4 h-4 text-green-400" />
@@ -811,14 +813,14 @@ export default function HummingbotPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               {loading && !status ? (
-                <div className="flex items-center justify-center py-8 text-slate-500 text-sm">
+                <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
                   <RefreshCw className="w-4 h-4 animate-spin mr-2" /> 加载中...
                 </div>
               ) : (
                 <>
                   {/* Connection Status */}
-                  <div className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <span className="text-slate-400 text-sm">连接状态</span>
+                  <div className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <span className="text-muted-foreground text-sm">连接状态</span>
                     <Badge
                       variant="outline"
                       className={
@@ -840,17 +842,17 @@ export default function HummingbotPage() {
                   </div>
 
                   {/* API URL */}
-                  <div className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <span className="text-slate-400 text-sm">API 地址</span>
-                    <span className="text-slate-300 text-xs font-mono">
+                  <div className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <span className="text-muted-foreground text-sm">API 地址</span>
+                    <span className="text-foreground/80 text-xs font-mono">
                       {status?.source === "hummingbot-api" ? "http://localhost:8000" : "—"}
                     </span>
                   </div>
 
                   {/* Timestamp */}
-                  <div className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <span className="text-slate-400 text-sm">响应时间</span>
-                    <span className="text-slate-300 text-xs">
+                  <div className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <span className="text-muted-foreground text-sm">响应时间</span>
+                    <span className="text-foreground/80 text-xs">
                       {status?.timestamp
                         ? new Date(status.timestamp).toLocaleTimeString()
                         : "—"}
@@ -868,9 +870,9 @@ export default function HummingbotPage() {
 
                   {/* Data Preview */}
                   {status?.data && (
-                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <p className="text-slate-400 text-xs mb-2">数据预览:</p>
-                      <pre className="text-slate-300 text-xs overflow-x-auto max-h-32">
+                    <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                      <p className="text-muted-foreground text-xs mb-2">数据预览:</p>
+                      <pre className="text-foreground/80 text-xs overflow-x-auto max-h-32">
                         {JSON.stringify(status.data, null, 2)}
                       </pre>
                     </div>
@@ -881,9 +883,9 @@ export default function HummingbotPage() {
           </Card>
 
           {/* Docker 状态 */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 flex items-center gap-2 text-base">
+              <CardTitle className="text-foreground flex items-center gap-2 text-base">
                 <div className="w-8 h-8 bg-blue-500/10 rounded-lg flex items-center justify-center border border-blue-500/20">
                   <Container className="w-4 h-4 text-blue-400" />
                 </div>
@@ -892,7 +894,7 @@ export default function HummingbotPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               {loading && !docker ? (
-                <div className="flex items-center justify-center py-8 text-slate-500 text-sm">
+                <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
                   <RefreshCw className="w-4 h-4 animate-spin mr-2" /> 加载中...
                 </div>
               ) : docker?.error ? (
@@ -903,16 +905,16 @@ export default function HummingbotPage() {
               ) : (
                 <>
                   {/* Active Containers Count */}
-                  <div className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <span className="text-slate-400 text-sm">活跃容器数量</span>
+                  <div className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <span className="text-muted-foreground text-sm">活跃容器数量</span>
                     <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20">
                       {getActiveContainersCount(docker?.data?.active_containers)} 个
                     </Badge>
                   </div>
 
                   {/* Docker Reachable */}
-                  <div className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <span className="text-slate-400 text-sm">Docker 可达性</span>
+                  <div className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <span className="text-muted-foreground text-sm">Docker 可达性</span>
                     <Badge
                       variant="outline"
                       className={
@@ -927,9 +929,9 @@ export default function HummingbotPage() {
 
                   {/* Raw Data */}
                   {docker?.data && (
-                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <p className="text-slate-400 text-xs mb-2">原始数据:</p>
-                      <pre className="text-slate-300 text-xs overflow-x-auto max-h-40">
+                    <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                      <p className="text-muted-foreground text-xs mb-2">原始数据:</p>
+                      <pre className="text-foreground/80 text-xs overflow-x-auto max-h-40">
                         {JSON.stringify(docker.data, null, 2)}
                       </pre>
                     </div>
@@ -940,9 +942,9 @@ export default function HummingbotPage() {
           </Card>
 
           {/* Connectors */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 flex items-center gap-2 text-base">
+              <CardTitle className="text-foreground flex items-center gap-2 text-base">
                 <div className="w-8 h-8 bg-purple-500/10 rounded-lg flex items-center justify-center border border-purple-500/20">
                   <Plug className="w-4 h-4 text-purple-400" />
                 </div>
@@ -951,7 +953,7 @@ export default function HummingbotPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               {loading && !connectors ? (
-                <div className="flex items-center justify-center py-8 text-slate-500 text-sm">
+                <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
                   <RefreshCw className="w-4 h-4 animate-spin mr-2" /> 加载中...
                 </div>
               ) : connectors?.error ? (
@@ -962,8 +964,8 @@ export default function HummingbotPage() {
               ) : (
                 <>
                   {/* Connectors Count */}
-                  <div className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <span className="text-slate-400 text-sm">支持的 Connectors</span>
+                  <div className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <span className="text-muted-foreground text-sm">支持的 Connectors</span>
                     <Badge variant="outline" className="bg-purple-500/10 text-purple-400 border-purple-500/20">
                       {getConnectorsCount(connectors?.data)} 个
                     </Badge>
@@ -971,14 +973,14 @@ export default function HummingbotPage() {
 
                   {/* Connector List */}
                   {getConnectorsList(connectors?.data).length > 0 ? (
-                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <p className="text-slate-400 text-xs mb-2">Connector 列表 (前10个):</p>
+                    <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                      <p className="text-muted-foreground text-xs mb-2">Connector 列表 (前10个):</p>
                       <div className="flex flex-wrap gap-2">
                         {getConnectorsList(connectors?.data).map((connector, idx) => (
                           <Badge
                             key={idx}
                             variant="outline"
-                            className="bg-slate-700/50 text-slate-300 border-slate-600/50 text-xs"
+                            className="bg-secondary/50 text-foreground/80 border-slate-600/50 text-xs"
                           >
                             {connector}
                           </Badge>
@@ -986,16 +988,16 @@ export default function HummingbotPage() {
                       </div>
                     </div>
                   ) : (
-                    <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center text-slate-500 text-sm">
+                    <div className="p-4 bg-secondary/50 rounded-lg border border-border/50 text-center text-muted-foreground text-sm">
                       暂无 Connector 数据
                     </div>
                   )}
 
                   {/* Raw Data */}
                   {connectors?.data && (
-                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <p className="text-slate-400 text-xs mb-2">原始数据:</p>
-                      <pre className="text-slate-300 text-xs overflow-x-auto max-h-40">
+                    <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                      <p className="text-muted-foreground text-xs mb-2">原始数据:</p>
+                      <pre className="text-foreground/80 text-xs overflow-x-auto max-h-40">
                         {JSON.stringify(connectors.data, null, 2)}
                       </pre>
                     </div>
@@ -1006,9 +1008,9 @@ export default function HummingbotPage() {
           </Card>
 
           {/* Portfolio / 实盘资产 */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 flex items-center gap-2 text-base">
+              <CardTitle className="text-foreground flex items-center gap-2 text-base">
                 <div className="w-8 h-8 bg-green-500/10 rounded-lg flex items-center justify-center border border-green-500/20">
                   <Bot className="w-4 h-4 text-green-400" />
                 </div>
@@ -1017,7 +1019,7 @@ export default function HummingbotPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               {loading && !portfolio ? (
-                <div className="flex items-center justify-center py-8 text-slate-500 text-sm">
+                <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
                   <RefreshCw className="w-4 h-4 animate-spin mr-2" /> 加载中...
                 </div>
               ) : portfolio?.error ? (
@@ -1027,8 +1029,8 @@ export default function HummingbotPage() {
               ) : (
                 <>
                   {/* Accounts */}
-                  <div className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <span className="text-slate-400 text-sm">账户列表</span>
+                  <div className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <span className="text-muted-foreground text-sm">账户列表</span>
                     <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/20">
                       {portfolio?.data?.accounts?.length || 0} 个
                     </Badge>
@@ -1036,8 +1038,8 @@ export default function HummingbotPage() {
 
                   {/* Account List */}
                   {portfolio?.data?.accounts && portfolio.data.accounts.length > 0 ? (
-                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <p className="text-slate-400 text-xs mb-2">账户:</p>
+                    <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                      <p className="text-muted-foreground text-xs mb-2">账户:</p>
                       <div className="flex flex-wrap gap-2">
                         {portfolio.data.accounts.map((account: string, idx: number) => (
                           <Badge
@@ -1051,18 +1053,18 @@ export default function HummingbotPage() {
                       </div>
                     </div>
                   ) : (
-                    <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
-                      <Bot className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                      <p className="text-slate-400 text-sm">暂无实盘账户资产数据</p>
-                      <p className="text-slate-500 text-xs mt-1">请先在 Hummingbot 中配置交易所账户。</p>
+                    <div className="p-4 bg-secondary/50 rounded-lg border border-border/50 text-center">
+                      <Bot className="w-8 h-8 text-muted-foreground/50 mx-auto mb-2" />
+                      <p className="text-muted-foreground text-sm">暂无实盘账户资产数据</p>
+                      <p className="text-muted-foreground text-xs mt-1">请先在 Hummingbot 中配置交易所账户。</p>
                     </div>
                   )}
 
                   {/* Portfolio State Summary */}
                   {portfolio?.data?.portfolio_state && Object.keys(portfolio.data.portfolio_state).length > 0 ? (
-                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <p className="text-slate-400 text-xs mb-2">Portfolio 状态 (数据来源: {portfolio.data.source || "—"}):</p>
-                      <pre className="text-slate-300 text-xs overflow-x-auto max-h-40">
+                    <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                      <p className="text-muted-foreground text-xs mb-2">Portfolio 状态 (数据来源: {portfolio.data.source || "—"}):</p>
+                      <pre className="text-foreground/80 text-xs overflow-x-auto max-h-40">
                         {JSON.stringify(portfolio.data.portfolio_state, null, 2)}
                       </pre>
                     </div>
@@ -1070,9 +1072,9 @@ export default function HummingbotPage() {
 
                   {/* Raw Data */}
                   {portfolio?.data && (
-                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <p className="text-slate-400 text-xs mb-2">原始数据:</p>
-                      <pre className="text-slate-300 text-xs overflow-x-auto max-h-40">
+                    <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                      <p className="text-muted-foreground text-xs mb-2">原始数据:</p>
+                      <pre className="text-foreground/80 text-xs overflow-x-auto max-h-40">
                         {JSON.stringify(portfolio.data, null, 2)}
                       </pre>
                     </div>
@@ -1083,9 +1085,9 @@ export default function HummingbotPage() {
           </Card>
 
           {/* Bots */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 flex items-center gap-2 text-base">
+              <CardTitle className="text-foreground flex items-center gap-2 text-base">
                 <div className="w-8 h-8 bg-cyan-500/10 rounded-lg flex items-center justify-center border border-cyan-500/20">
                   <Bot className="w-4 h-4 text-cyan-400" />
                 </div>
@@ -1094,7 +1096,7 @@ export default function HummingbotPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               {loading && !bots ? (
-                <div className="flex items-center justify-center py-8 text-slate-500 text-sm">
+                <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
                   <RefreshCw className="w-4 h-4 animate-spin mr-2" /> 加载中...
                 </div>
               ) : bots?.error ? (
@@ -1110,22 +1112,22 @@ export default function HummingbotPage() {
               ) : (
                 <>
                   {/* Bots Count */}
-                  <div className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <span className="text-slate-400 text-sm">Bot 数量</span>
+                  <div className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <span className="text-muted-foreground text-sm">Bot 数量</span>
                     <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20">
                       {getBotsCount(bots?.data)} 个
                     </Badge>
                   </div>
 
                   {/* Bots Status */}
-                  <div className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <span className="text-slate-400 text-sm">Bots 状态</span>
+                  <div className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <span className="text-muted-foreground text-sm">Bots 状态</span>
                     <Badge
                       variant="outline"
                       className={
                         getBotsCount(bots?.data) > 0
                           ? "bg-green-500/10 text-green-400 border-green-500/20"
-                          : "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                          : "bg-slate-500/10 text-muted-foreground border-muted-foreground/20"
                       }
                     >
                       {getBotsCount(bots?.data) > 0 ? "有运行中的 Bot" : "暂无运行中的 Hummingbot Bot"}
@@ -1134,10 +1136,10 @@ export default function HummingbotPage() {
 
                   {/* Empty state for no bots */}
                   {getBotsCount(bots?.data) === 0 && !bots?.error && (
-                    <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
-                      <Bot className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                      <p className="text-slate-400 text-sm">暂无运行中的 Hummingbot Bot</p>
-                      <p className="text-slate-500 text-xs mt-1">请先在 Hummingbot 中启动 Bot。</p>
+                    <div className="p-4 bg-secondary/50 rounded-lg border border-border/50 text-center">
+                      <Bot className="w-8 h-8 text-muted-foreground/50 mx-auto mb-2" />
+                      <p className="text-muted-foreground text-sm">暂无运行中的 Hummingbot Bot</p>
+                      <p className="text-muted-foreground text-xs mt-1">请先在 Hummingbot 中启动 Bot。</p>
                     </div>
                   )}
 
@@ -1152,14 +1154,14 @@ export default function HummingbotPage() {
 
                   {/* Docker Containers Fallback List */}
                   {bots?.data?.source === "docker-containers" && bots?.data?.containers_fallback?.containers?.length > 0 && (
-                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <p className="text-slate-400 text-xs mb-2">Hummingbot 相关容器:</p>
+                    <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                      <p className="text-muted-foreground text-xs mb-2">Hummingbot 相关容器:</p>
                       <div className="space-y-2">
                         {bots.data.containers_fallback.containers.map((container: { container_name: string; status: string; image: string; source: string }, idx: number) => (
-                          <div key={idx} className="flex items-center justify-between p-2 bg-slate-900/50 rounded-lg">
+                          <div key={idx} className="flex items-center justify-between p-2 bg-card/50 rounded-lg">
                             <div>
-                              <p className="text-slate-300 text-xs font-medium">{container.container_name}</p>
-                              <p className="text-slate-500 text-[10px]">{container.image}</p>
+                              <p className="text-foreground/80 text-xs font-medium">{container.container_name}</p>
+                              <p className="text-muted-foreground text-[10px]">{container.image}</p>
                             </div>
                             <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20 text-[10px]">
                               {container.status}
@@ -1172,9 +1174,9 @@ export default function HummingbotPage() {
 
                   {/* Raw Data */}
                   {bots?.data && bots?.data?.source !== "docker-containers" && (
-                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <p className="text-slate-400 text-xs mb-2">原始数据:</p>
-                      <pre className="text-slate-300 text-xs overflow-x-auto max-h-40">
+                    <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                      <p className="text-muted-foreground text-xs mb-2">原始数据:</p>
+                      <pre className="text-foreground/80 text-xs overflow-x-auto max-h-40">
                         {JSON.stringify(bots.data, null, 2)}
                       </pre>
                     </div>
@@ -1185,9 +1187,9 @@ export default function HummingbotPage() {
           </Card>
 
           {/* 实盘订单 */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 flex items-center gap-2 text-base">
+              <CardTitle className="text-foreground flex items-center gap-2 text-base">
                 <div className="w-8 h-8 bg-orange-500/10 rounded-lg flex items-center justify-center border border-orange-500/20">
                   <ShoppingCart className="w-4 h-4 text-orange-400" />
                 </div>
@@ -1196,7 +1198,7 @@ export default function HummingbotPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               {loading && !orders ? (
-                <div className="flex items-center justify-center py-8 text-slate-500 text-sm">
+                <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
                   <RefreshCw className="w-4 h-4 animate-spin mr-2" /> 加载中...
                 </div>
               ) : orders?.error ? (
@@ -1206,8 +1208,8 @@ export default function HummingbotPage() {
               ) : (
                 <>
                   {/* Orders Count */}
-                  <div className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <span className="text-slate-400 text-sm">活跃订单</span>
+                  <div className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <span className="text-muted-foreground text-sm">活跃订单</span>
                     <Badge variant="outline" className="bg-orange-500/10 text-orange-400 border-orange-500/20">
                       {(() => {
                         const activeOrders = orders?.data?.active_orders;
@@ -1221,9 +1223,9 @@ export default function HummingbotPage() {
 
                   {/* Data Source */}
                   {orders?.data?.source && (
-                    <div className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <span className="text-slate-400 text-sm">数据来源</span>
-                      <Badge variant="outline" className="bg-slate-700/50 text-slate-300 border-slate-600/50">
+                    <div className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg border border-border/50">
+                      <span className="text-muted-foreground text-sm">数据来源</span>
+                      <Badge variant="outline" className="bg-secondary/50 text-foreground/80 border-slate-600/50">
                         {orders.data.source === "orders_active" ? "活跃订单" : "历史订单"}
                       </Badge>
                     </div>
@@ -1234,16 +1236,16 @@ export default function HummingbotPage() {
                     const activeOrders = orders?.data?.active_orders || orders?.data?.history_orders;
                     if (!activeOrders || (Array.isArray(activeOrders) && activeOrders.length === 0)) {
                       return (
-                        <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
-                          <ShoppingCart className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                          <p className="text-slate-400 text-sm">暂无实盘订单</p>
+                        <div className="p-4 bg-secondary/50 rounded-lg border border-border/50 text-center">
+                          <ShoppingCart className="w-8 h-8 text-muted-foreground/50 mx-auto mb-2" />
+                          <p className="text-muted-foreground text-sm">暂无实盘订单</p>
                         </div>
                       );
                     }
                     if (!Array.isArray(activeOrders)) {
                       return (
-                        <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                          <pre className="text-slate-300 text-xs overflow-x-auto max-h-60">
+                        <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                          <pre className="text-foreground/80 text-xs overflow-x-auto max-h-60">
                             {JSON.stringify(activeOrders, null, 2)}
                           </pre>
                         </div>
@@ -1253,33 +1255,33 @@ export default function HummingbotPage() {
                       <div className="overflow-x-auto">
                         <table className="w-full text-xs">
                           <thead>
-                            <tr className="border-b border-slate-700">
-                              <th className="text-left py-2 px-2 text-slate-400">交易所</th>
-                              <th className="text-left py-2 px-2 text-slate-400">交易对</th>
-                              <th className="text-left py-2 px-2 text-slate-400">方向</th>
-                              <th className="text-left py-2 px-2 text-slate-400">类型</th>
-                              <th className="text-right py-2 px-2 text-slate-400">价格</th>
-                              <th className="text-right py-2 px-2 text-slate-400">数量</th>
-                              <th className="text-left py-2 px-2 text-slate-400">状态</th>
+                            <tr className="border-b border-border">
+                              <th className="text-left py-2 px-2 text-muted-foreground">交易所</th>
+                              <th className="text-left py-2 px-2 text-muted-foreground">交易对</th>
+                              <th className="text-left py-2 px-2 text-muted-foreground">方向</th>
+                              <th className="text-left py-2 px-2 text-muted-foreground">类型</th>
+                              <th className="text-right py-2 px-2 text-muted-foreground">价格</th>
+                              <th className="text-right py-2 px-2 text-muted-foreground">数量</th>
+                              <th className="text-left py-2 px-2 text-muted-foreground">状态</th>
                             </tr>
                           </thead>
                           <tbody>
                             {activeOrders.slice(0, 10).map((order: Record<string, unknown>, idx: number) => (
-                              <tr key={idx} className="border-b border-slate-800 hover:bg-slate-800/30">
-                                <td className="py-2 px-2 text-slate-300">{String(order.exchange || order.connector || "-")}</td>
-                                <td className="py-2 px-2 text-slate-300">{String(order.symbol || order.trading_pair || order.tradingPair || "-")}</td>
+                              <tr key={idx} className="border-b border-border hover:bg-secondary/30">
+                                <td className="py-2 px-2 text-foreground/80">{String(order.exchange || order.connector || "-")}</td>
+                                <td className="py-2 px-2 text-foreground/80">{String(order.symbol || order.trading_pair || order.tradingPair || "-")}</td>
                                 <td className={`py-2 px-2 ${order.side === "BUY" ? "text-green-400" : "text-red-400"}`}>
                                   {String(order.side || "-")}
                                 </td>
-                                <td className="py-2 px-2 text-slate-300">{String(order.order_type || order.type || order.orderType || "-")}</td>
-                                <td className="py-2 px-2 text-right text-slate-300">{order.price ? String(order.price) : "-"}</td>
-                                <td className="py-2 px-2 text-right text-slate-300">{order.amount || order.quantity || order.amount_string ? String(order.amount || order.quantity || order.amount_string) : "-"}</td>
+                                <td className="py-2 px-2 text-foreground/80">{String(order.order_type || order.type || order.orderType || "-")}</td>
+                                <td className="py-2 px-2 text-right text-foreground/80">{order.price ? String(order.price) : "-"}</td>
+                                <td className="py-2 px-2 text-right text-foreground/80">{order.amount || order.quantity || order.amount_string ? String(order.amount || order.quantity || order.amount_string) : "-"}</td>
                                 <td className="py-2 px-2">
                                   <Badge variant="outline" className={`text-[10px] ${
                                     order.status === "FILLED" ? "bg-green-500/10 text-green-400 border-green-500/20" :
                                     order.status === "CANCELLED" || order.status === "CANCELED" ? "bg-red-500/10 text-red-400 border-red-500/20" :
                                     order.status === "NEW" || order.status === "OPEN" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
-                                    "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                                    "bg-slate-500/10 text-muted-foreground border-muted-foreground/20"
                                   }`}>
                                     {String(order.status || "-")}
                                   </Badge>
@@ -1289,7 +1291,7 @@ export default function HummingbotPage() {
                           </tbody>
                         </table>
                         {activeOrders.length > 10 && (
-                          <p className="text-slate-500 text-xs mt-2 text-center">显示前 10 条，共 {activeOrders.length} 条</p>
+                          <p className="text-muted-foreground text-xs mt-2 text-center">显示前 10 条，共 {activeOrders.length} 条</p>
                         )}
                       </div>
                     );
@@ -1300,9 +1302,9 @@ export default function HummingbotPage() {
           </Card>
 
           {/* 实盘持仓 */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 flex items-center gap-2 text-base">
+              <CardTitle className="text-foreground flex items-center gap-2 text-base">
                 <div className="w-8 h-8 bg-emerald-500/10 rounded-lg flex items-center justify-center border border-emerald-500/20">
                   <Wallet className="w-4 h-4 text-emerald-400" />
                 </div>
@@ -1311,7 +1313,7 @@ export default function HummingbotPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               {loading && !positions ? (
-                <div className="flex items-center justify-center py-8 text-slate-500 text-sm">
+                <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
                   <RefreshCw className="w-4 h-4 animate-spin mr-2" /> 加载中...
                 </div>
               ) : positions?.error ? (
@@ -1321,8 +1323,8 @@ export default function HummingbotPage() {
               ) : (
                 <>
                   {/* Positions Count */}
-                  <div className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <span className="text-slate-400 text-sm">持仓数量</span>
+                  <div className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <span className="text-muted-foreground text-sm">持仓数量</span>
                     <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20">
                       {(() => {
                         const posData = positions?.data?.positions;
@@ -1337,16 +1339,16 @@ export default function HummingbotPage() {
                     const posData = positions?.data?.positions;
                     if (!posData || (Array.isArray(posData) && posData.length === 0)) {
                       return (
-                        <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
-                          <Wallet className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                          <p className="text-slate-400 text-sm">暂无实盘持仓</p>
+                        <div className="p-4 bg-secondary/50 rounded-lg border border-border/50 text-center">
+                          <Wallet className="w-8 h-8 text-muted-foreground/50 mx-auto mb-2" />
+                          <p className="text-muted-foreground text-sm">暂无实盘持仓</p>
                         </div>
                       );
                     }
                     if (!Array.isArray(posData)) {
                       return (
-                        <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                          <pre className="text-slate-300 text-xs overflow-x-auto max-h-60">
+                        <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                          <pre className="text-foreground/80 text-xs overflow-x-auto max-h-60">
                             {JSON.stringify(posData, null, 2)}
                           </pre>
                         </div>
@@ -1356,14 +1358,14 @@ export default function HummingbotPage() {
                       <div className="overflow-x-auto">
                         <table className="w-full text-xs">
                           <thead>
-                            <tr className="border-b border-slate-700">
-                              <th className="text-left py-2 px-2 text-slate-400">交易所</th>
-                              <th className="text-left py-2 px-2 text-slate-400">交易对</th>
-                              <th className="text-left py-2 px-2 text-slate-400">方向</th>
-                              <th className="text-right py-2 px-2 text-slate-400">数量</th>
-                              <th className="text-right py-2 px-2 text-slate-400">入场价</th>
-                              <th className="text-right py-2 px-2 text-slate-400">标记价</th>
-                              <th className="text-right py-2 px-2 text-slate-400">未实现盈亏</th>
+                            <tr className="border-b border-border">
+                              <th className="text-left py-2 px-2 text-muted-foreground">交易所</th>
+                              <th className="text-left py-2 px-2 text-muted-foreground">交易对</th>
+                              <th className="text-left py-2 px-2 text-muted-foreground">方向</th>
+                              <th className="text-right py-2 px-2 text-muted-foreground">数量</th>
+                              <th className="text-right py-2 px-2 text-muted-foreground">入场价</th>
+                              <th className="text-right py-2 px-2 text-muted-foreground">标记价</th>
+                              <th className="text-right py-2 px-2 text-muted-foreground">未实现盈亏</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1371,15 +1373,15 @@ export default function HummingbotPage() {
                               const pnl = pos.unrealized_pnl || pos.unrealizedPnl || pos.pnl;
                               const isProfit = typeof pnl === "number" && pnl >= 0;
                               return (
-                                <tr key={idx} className="border-b border-slate-800 hover:bg-slate-800/30">
-                                  <td className="py-2 px-2 text-slate-300">{String(pos.exchange || pos.connector || "-")}</td>
-                                  <td className="py-2 px-2 text-slate-300">{String(pos.symbol || pos.trading_pair || pos.tradingPair || "-")}</td>
+                                <tr key={idx} className="border-b border-border hover:bg-secondary/30">
+                                  <td className="py-2 px-2 text-foreground/80">{String(pos.exchange || pos.connector || "-")}</td>
+                                  <td className="py-2 px-2 text-foreground/80">{String(pos.symbol || pos.trading_pair || pos.tradingPair || "-")}</td>
                                   <td className={`py-2 px-2 ${pos.side === "LONG" || pos.side === "BUY" ? "text-green-400" : "text-red-400"}`}>
                                     {String(pos.side || pos.position_side || "-")}
                                   </td>
-                                  <td className="py-2 px-2 text-right text-slate-300">{pos.amount || pos.quantity || String(pos.amount || 0)}</td>
-                                  <td className="py-2 px-2 text-right text-slate-300">{pos.entry_price || pos.entryPrice ? String(pos.entry_price || pos.entryPrice) : "-"}</td>
-                                  <td className="py-2 px-2 text-right text-slate-300">{pos.mark_price || pos.markPrice ? String(pos.mark_price || pos.markPrice) : "-"}</td>
+                                  <td className="py-2 px-2 text-right text-foreground/80">{pos.amount || pos.quantity || String(pos.amount || 0)}</td>
+                                  <td className="py-2 px-2 text-right text-foreground/80">{pos.entry_price || pos.entryPrice ? String(pos.entry_price || pos.entryPrice) : "-"}</td>
+                                  <td className="py-2 px-2 text-right text-foreground/80">{pos.mark_price || pos.markPrice ? String(pos.mark_price || pos.markPrice) : "-"}</td>
                                   <td className={`py-2 px-2 text-right ${isProfit ? "text-green-400" : "text-red-400"}`}>
                                     {pnl !== undefined ? String(pnl) : "-"}
                                   </td>
@@ -1389,7 +1391,7 @@ export default function HummingbotPage() {
                           </tbody>
                         </table>
                         {posData.length > 10 && (
-                          <p className="text-slate-500 text-xs mt-2 text-center">显示前 10 条，共 {posData.length} 条</p>
+                          <p className="text-muted-foreground text-xs mt-2 text-center">显示前 10 条，共 {posData.length} 条</p>
                         )}
                       </div>
                     );
@@ -1401,9 +1403,9 @@ export default function HummingbotPage() {
         </div>
 
         {/* Additional Info */}
-        <div className="mt-6 p-4 bg-slate-900/50 border border-slate-800 rounded-xl">
-          <h3 className="text-slate-300 text-sm font-semibold mb-3">集成说明</h3>
-          <ul className="text-slate-400 text-xs space-y-2">
+        <div className="mt-6 p-4 bg-card/50 border border-border rounded-xl">
+          <h3 className="text-foreground/80 text-sm font-semibold mb-3">集成说明</h3>
+          <ul className="text-muted-foreground text-xs space-y-2">
             <li className="flex items-start gap-2">
               <span className="text-cyan-400">1.</span>
               <span>本模块通过 QuantAgent 后端代理访问 Hummingbot API，不直接暴露认证信息。</span>
@@ -1601,13 +1603,13 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
     <div className="mb-8">
       {/* Section Header */}
       <div className="mb-4">
-        <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
+        <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
           <div className="w-8 h-8 bg-green-500/10 rounded-lg flex items-center justify-center border border-green-500/20">
             <Play className="w-4 h-4 text-green-400" />
           </div>
           低频 Paper Bot 策略验证
         </h2>
-        <p className="text-slate-400 text-xs mt-1 ml-10">
+        <p className="text-muted-foreground text-xs mt-1 ml-10">
           用于验证低频交易策略的有效性，使用虚拟资金模拟运行，不执行真实交易。
         </p>
       </div>
@@ -1632,15 +1634,15 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
       </div>
 
       {/* Form Card */}
-      <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50 mb-6">
+      <Card className="bg-card border-border mb-6">
         <CardHeader className="pb-2">
-          <CardTitle className="text-slate-100 text-base">配置参数</CardTitle>
+          <CardTitle className="text-foreground text-base">配置参数</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {/* Bot Name */}
             <div className="space-y-1">
-              <Label htmlFor="bot_name" className="text-slate-300 text-xs">
+              <Label htmlFor="bot_name" className="text-foreground/80 text-xs">
                 Bot 名称 <span className="text-red-400">*</span>
               </Label>
               <Input
@@ -1648,7 +1650,7 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                 placeholder="paper_signal_btc_001"
                 value={formData.bot_name}
                 onChange={e => updateField("bot_name", e.target.value)}
-                className={`bg-slate-800 border-slate-700 text-slate-100 text-sm ${
+                className={`bg-secondary border-border text-foreground text-sm ${
                   errors.bot_name ? "border-red-500" : ""
                 }`}
               />
@@ -1659,12 +1661,12 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
 
             {/* Paper Connector - NEW */}
             <div className="space-y-1">
-              <Label htmlFor="connector" className="text-slate-300 text-xs">
+              <Label htmlFor="connector" className="text-foreground/80 text-xs">
                 Connector <span className="text-red-400">*</span>
               </Label>
               {paperConnectorsLoading ? (
-                <div className="h-9 bg-slate-800 border border-slate-700 rounded-md flex items-center">
-                  <RefreshCw className="w-4 h-4 animate-spin text-slate-500 ml-3" />
+                <div className="h-9 bg-secondary border border-border rounded-md flex items-center">
+                  <RefreshCw className="w-4 h-4 animate-spin text-muted-foreground ml-3" />
                 </div>
               ) : paperConnectors && !paperConnectors.available ? (
                 <div className="h-9 px-3 bg-red-500/10 border border-red-500/30 rounded-md flex items-center text-red-400 text-xs">
@@ -1676,7 +1678,7 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                   id="connector"
                   value={formData.connector}
                   onChange={e => updateField("connector", e.target.value)}
-                  className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                  className="w-full h-9 px-3 bg-secondary border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
                 >
                   {(paperConnectors?.paper_connectors || ["binance"]).map(c => (
                     <option key={c} value={c}>{c}</option>
@@ -1690,14 +1692,14 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
 
             {/* Strategy Type */}
             <div className="space-y-1">
-              <Label htmlFor="strategy_type" className="text-slate-300 text-xs">
+              <Label htmlFor="strategy_type" className="text-foreground/80 text-xs">
                 策略类型 <span className="text-red-400">*</span>
               </Label>
               <select
                 id="strategy_type"
                 value={formData.strategy_type}
                 onChange={e => updateField("strategy_type", e.target.value)}
-                className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                className="w-full h-9 px-3 bg-secondary border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
               >
                 <option value="low_frequency_signal">低频信号策略</option>
                 <option value="position_executor">仓位执行器</option>
@@ -1706,14 +1708,14 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
 
             {/* Signal Type */}
             <div className="space-y-1">
-              <Label htmlFor="signal_type" className="text-slate-300 text-xs">
+              <Label htmlFor="signal_type" className="text-foreground/80 text-xs">
                 信号类型 <span className="text-red-400">*</span>
               </Label>
               <select
                 id="signal_type"
                 value={formData.signal_type}
                 onChange={e => updateField("signal_type", e.target.value)}
-                className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                className="w-full h-9 px-3 bg-secondary border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
               >
                 <option value="bollinger">Bollinger Bands</option>
                 <option value="supertrend">SuperTrend</option>
@@ -1723,14 +1725,14 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
 
             {/* Timeframe */}
             <div className="space-y-1">
-              <Label htmlFor="timeframe" className="text-slate-300 text-xs">
+              <Label htmlFor="timeframe" className="text-foreground/80 text-xs">
                 K线周期 <span className="text-red-400">*</span>
               </Label>
               <select
                 id="timeframe"
                 value={formData.timeframe}
                 onChange={e => updateField("timeframe", e.target.value)}
-                className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                className="w-full h-9 px-3 bg-secondary border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
               >
                 <option value="15m">15 分钟</option>
                 <option value="1h">1 小时</option>
@@ -1739,14 +1741,14 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
 
             {/* Trading Pair */}
             <div className="space-y-1">
-              <Label htmlFor="trading_pair" className="text-slate-300 text-xs">
+              <Label htmlFor="trading_pair" className="text-foreground/80 text-xs">
                 交易对 <span className="text-red-400">*</span>
               </Label>
               <select
                 id="trading_pair"
                 value={formData.trading_pair}
                 onChange={e => updateField("trading_pair", e.target.value)}
-                className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                className="w-full h-9 px-3 bg-secondary border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
               >
                 <option value="BTC-USDT">BTC-USDT</option>
                 <option value="ETH-USDT">ETH-USDT</option>
@@ -1756,7 +1758,7 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
 
             {/* Paper Initial Balance */}
             <div className="space-y-1">
-              <Label htmlFor="paper_initial_balance" className="text-slate-300 text-xs">
+              <Label htmlFor="paper_initial_balance" className="text-foreground/80 text-xs">
                 Paper 初始资金 (USDT) <span className="text-red-400">*</span>
               </Label>
               <Input
@@ -1766,13 +1768,13 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                 max={1000000}
                 value={formData.paper_initial_balance}
                 onChange={e => updateField("paper_initial_balance", Number(e.target.value))}
-                className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                className="bg-secondary border-border text-foreground text-sm"
               />
             </div>
 
             {/* Order Amount */}
             <div className="space-y-1">
-              <Label htmlFor="order_amount" className="text-slate-300 text-xs">
+              <Label htmlFor="order_amount" className="text-foreground/80 text-xs">
                 每笔订单金额 (USDT) <span className="text-red-400">*</span>
               </Label>
               <Input
@@ -1781,7 +1783,7 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                 min={1}
                 value={formData.order_amount}
                 onChange={e => updateField("order_amount", Number(e.target.value))}
-                className={`bg-slate-800 border-slate-700 text-slate-100 text-sm ${
+                className={`bg-secondary border-border text-foreground text-sm ${
                   errors.order_amount ? "border-red-500" : ""
                 }`}
               />
@@ -1792,7 +1794,7 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
 
             {/* Stop Loss */}
             <div className="space-y-1">
-              <Label htmlFor="stop_loss_pct" className="text-slate-300 text-xs">
+              <Label htmlFor="stop_loss_pct" className="text-foreground/80 text-xs">
                 止损百分比 (%)
               </Label>
               <Input
@@ -1803,13 +1805,13 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                 step={0.5}
                 value={formData.stop_loss_pct}
                 onChange={e => updateField("stop_loss_pct", Number(e.target.value))}
-                className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                className="bg-secondary border-border text-foreground text-sm"
               />
             </div>
 
             {/* Take Profit */}
             <div className="space-y-1">
-              <Label htmlFor="take_profit_pct" className="text-slate-300 text-xs">
+              <Label htmlFor="take_profit_pct" className="text-foreground/80 text-xs">
                 止盈百分比 (%)
               </Label>
               <Input
@@ -1820,13 +1822,13 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                 step={0.5}
                 value={formData.take_profit_pct}
                 onChange={e => updateField("take_profit_pct", Number(e.target.value))}
-                className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                className="bg-secondary border-border text-foreground text-sm"
               />
             </div>
 
             {/* Cooldown Minutes */}
             <div className="space-y-1">
-              <Label htmlFor="cooldown_minutes" className="text-slate-300 text-xs">
+              <Label htmlFor="cooldown_minutes" className="text-foreground/80 text-xs">
                 最小交易间隔 (分钟)
               </Label>
               <Input
@@ -1836,14 +1838,14 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                 max={1440}
                 value={formData.cooldown_minutes}
                 onChange={e => updateField("cooldown_minutes", Number(e.target.value))}
-                className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                className="bg-secondary border-border text-foreground text-sm"
               />
-              <p className="text-slate-500 text-[10px]">默认 60 分钟，禁止高频交易</p>
+              <p className="text-muted-foreground text-[10px]">默认 60 分钟，禁止高频交易</p>
             </div>
 
             {/* Max Trades Per Day */}
             <div className="space-y-1">
-              <Label htmlFor="max_trades_per_day" className="text-slate-300 text-xs">
+              <Label htmlFor="max_trades_per_day" className="text-foreground/80 text-xs">
                 每日最大交易次数
               </Label>
               <Input
@@ -1853,13 +1855,13 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                 max={24}
                 value={formData.max_trades_per_day}
                 onChange={e => updateField("max_trades_per_day", Number(e.target.value))}
-                className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                className="bg-secondary border-border text-foreground text-sm"
               />
             </div>
 
             {/* Max Runtime */}
             <div className="space-y-1">
-              <Label htmlFor="max_runtime_minutes" className="text-slate-300 text-xs">
+              <Label htmlFor="max_runtime_minutes" className="text-foreground/80 text-xs">
                 最大运行时间 (分钟) <span className="text-red-400">*</span>
               </Label>
               <Input
@@ -1869,14 +1871,14 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                 max={10080}
                 value={formData.max_runtime_minutes}
                 onChange={e => updateField("max_runtime_minutes", Number(e.target.value))}
-                className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                className="bg-secondary border-border text-foreground text-sm"
               />
             </div>
 
             {/* Leverage (Perpetual Only) */}
             {formData.connector?.includes("perpetual") && (
               <div className="space-y-1">
-                <Label htmlFor="leverage" className="text-slate-300 text-xs">
+                <Label htmlFor="leverage" className="text-foreground/80 text-xs">
                   杠杆倍数 <span className="text-red-400">*</span>
                 </Label>
                 <Input
@@ -1886,42 +1888,42 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                   max={125}
                   value={formData.leverage}
                   onChange={e => updateField("leverage", Number(e.target.value))}
-                  className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                  className="bg-secondary border-border text-foreground text-sm"
                 />
-                <p className="text-slate-500 text-[10px]">1-125x，建议不超过 10x</p>
+                <p className="text-muted-foreground text-[10px]">1-125x，建议不超过 10x</p>
               </div>
             )}
 
             {/* Position Mode (Perpetual Only) */}
             {formData.connector?.includes("perpetual") && (
               <div className="space-y-1">
-                <Label htmlFor="position_mode" className="text-slate-300 text-xs">
+                <Label htmlFor="position_mode" className="text-foreground/80 text-xs">
                   持仓模式
                 </Label>
                 <select
                   id="position_mode"
                   value={formData.position_mode}
                   onChange={e => updateField("position_mode", e.target.value as "HEDGE" | "ONEWAY")}
-                  className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                  className="w-full h-9 px-3 bg-secondary border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
                 >
                   <option value="ONEWAY">单向模式</option>
                   <option value="HEDGE">双向模式 (Hedge)</option>
                 </select>
-                <p className="text-slate-500 text-[10px]">Hedge 模式可同时持有多空仓位</p>
+                <p className="text-muted-foreground text-[10px]">Hedge 模式可同时持有多空仓位</p>
               </div>
             )}
 
             {/* Margin Coin (Perpetual Only) */}
             {formData.connector?.includes("perpetual") && (
               <div className="space-y-1">
-                <Label htmlFor="margin_coin" className="text-slate-300 text-xs">
+                <Label htmlFor="margin_coin" className="text-foreground/80 text-xs">
                   保证金币种
                 </Label>
                 <select
                   id="margin_coin"
                   value={formData.margin_coin}
                   onChange={e => updateField("margin_coin", e.target.value)}
-                  className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                  className="w-full h-9 px-3 bg-secondary border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
                 >
                   <option value="USDT">USDT-M 永续</option>
                   <option value="USDC">USDC-M 永续</option>
@@ -1950,7 +1952,7 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
               )}
             </Button>
             {loading && (
-              <p className="text-slate-400 text-xs">正在生成配置预览...</p>
+              <p className="text-muted-foreground text-xs">正在生成配置预览...</p>
             )}
           </div>
         </CardContent>
@@ -1958,10 +1960,10 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
 
       {/* Preview Result */}
       {previewResult && (
-        <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+        <Card className="bg-card border-border">
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+              <CardTitle className="text-foreground text-base flex items-center gap-2">
                 <FileJson className="w-4 h-4 text-cyan-400" />
                 Paper Bot 配置预览
                 {previewResult.valid ? (
@@ -2057,19 +2059,19 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                 )}
 
                 {/* JSON Preview */}
-                <div className="p-4 bg-slate-950 rounded-lg border border-slate-800 overflow-x-auto">
-                  <pre className="text-slate-300 text-xs font-mono whitespace-pre-wrap">
+                <div className="p-4 bg-background rounded-lg border border-border overflow-x-auto">
+                  <pre className="text-foreground/80 text-xs font-mono whitespace-pre-wrap">
                     {JSON.stringify(previewResult.data.config_preview, null, 2)}
                   </pre>
                 </div>
 
                 {/* Notes */}
                 {previewResult.data.config_preview.notes && (
-                  <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <p className="text-slate-400 text-xs mb-2 font-semibold">说明：</p>
+                  <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <p className="text-muted-foreground text-xs mb-2 font-semibold">说明：</p>
                     <ul className="space-y-1">
                       {previewResult.data.config_preview.notes.map((note, i) => (
-                        <li key={i} className="text-slate-400 text-xs flex items-start gap-2">
+                        <li key={i} className="text-muted-foreground text-xs flex items-start gap-2">
                           <span className="text-cyan-400">•</span>
                           {note}
                         </li>
@@ -2085,11 +2087,11 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
 
       {/* Start Result */}
       {startResult && (
-        <Card className={`bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50 ${
+        <Card className={`bg-card border-border ${
           startResult.local_record_created ? "border-blue-500/30" : "border-red-500/30"
         }`}>
           <CardHeader className="pb-2">
-            <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+            <CardTitle className="text-foreground text-base flex items-center gap-2">
               <Play className={`w-4 h-4 ${startResult.local_record_created ? "text-blue-400" : "text-red-400"}`} />
               Paper Bot 启动结果
               {startResult.local_record_created && startResult.remote_started && !startResult.remote_confirmed && (
@@ -2135,21 +2137,21 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
               <div className="space-y-4">
                 {/* Status Info */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <p className="text-slate-400 text-xs">Paper Bot ID</p>
-                    <p className="text-slate-100 text-xs font-mono mt-1">{startResult.data.paper_bot_id}</p>
+                  <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <p className="text-muted-foreground text-xs">Paper Bot ID</p>
+                    <p className="text-foreground text-xs font-mono mt-1">{startResult.data.paper_bot_id}</p>
                   </div>
-                  <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <p className="text-slate-400 text-xs">Bot 名称</p>
-                    <p className="text-slate-100 text-xs mt-1">{startResult.data.bot_name}</p>
+                  <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <p className="text-muted-foreground text-xs">Bot 名称</p>
+                    <p className="text-foreground text-xs mt-1">{startResult.data.bot_name}</p>
                   </div>
-                  <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <p className="text-slate-400 text-xs">策略类型</p>
-                    <p className="text-slate-100 text-xs mt-1">{startResult.data.strategy_type}</p>
+                  <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <p className="text-muted-foreground text-xs">策略类型</p>
+                    <p className="text-foreground text-xs mt-1">{startResult.data.strategy_type}</p>
                   </div>
-                  <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <p className="text-slate-400 text-xs">交易对</p>
-                    <p className="text-slate-100 text-xs mt-1">{startResult.data.trading_pair}</p>
+                  <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <p className="text-muted-foreground text-xs">交易对</p>
+                    <p className="text-foreground text-xs mt-1">{startResult.data.trading_pair}</p>
                   </div>
                 </div>
 
@@ -2161,7 +2163,7 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                       startResult.data.local_status === "submitted" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
                       startResult.data.local_status === "start_failed" ? "bg-red-500/10 text-red-400 border-red-500/20" :
                       startResult.data.local_status === "running" ? "bg-green-500/10 text-green-400 border-green-500/20" :
-                      "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                      "bg-slate-500/10 text-muted-foreground border-muted-foreground/20"
                     }
                   >
                     本地状态: {startResult.data.local_status}
@@ -2181,7 +2183,7 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                     className={
                       startResult.data.remote_started
                         ? "bg-blue-500/10 text-blue-400 border-blue-500/20"
-                        : "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                        : "bg-slate-500/10 text-muted-foreground border-muted-foreground/20"
                     }
                   >
                     远端请求: {startResult.data.remote_started ? "已处理" : "未处理"}
@@ -2191,7 +2193,7 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                     className={
                       startResult.data.remote_confirmed
                         ? "bg-green-500/10 text-green-400 border-green-500/20"
-                        : "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                        : "bg-slate-500/10 text-muted-foreground border-muted-foreground/20"
                     }
                   >
                     远端已确认: {String(startResult.data.remote_confirmed)}
@@ -2239,9 +2241,9 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
                 )}
 
                 {/* Started At */}
-                <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                  <p className="text-slate-400 text-xs">创建时间</p>
-                  <p className="text-slate-100 text-xs mt-1">
+                <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                  <p className="text-muted-foreground text-xs">创建时间</p>
+                  <p className="text-foreground text-xs mt-1">
                     {new Date(startResult.data.started_at).toLocaleString()}
                   </p>
                 </div>
@@ -2254,11 +2256,11 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
       {/* Confirmation Dialog */}
       {showConfirmDialog && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-bold text-slate-100 mb-4">确认启动 Hummingbot Paper Bot？</h3>
+          <div className="bg-card border border-border rounded-xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-bold text-foreground mb-4">确认启动 Hummingbot Paper Bot？</h3>
             <div className="space-y-3 mb-6">
-              <p className="text-slate-300 text-sm">当前仅启动 Paper Bot：</p>
-              <ul className="text-slate-400 text-xs space-y-1 ml-4">
+              <p className="text-foreground/80 text-sm">当前仅启动 Paper Bot：</p>
+              <ul className="text-muted-foreground text-xs space-y-1 ml-4">
                 <li>• 使用虚拟资金</li>
                 <li>• 不连接真实交易所账户</li>
                 <li>• 不执行真实交易</li>
@@ -2271,7 +2273,7 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
               <Button
                 variant="outline"
                 onClick={() => setShowConfirmDialog(false)}
-                className="text-slate-300"
+                className="text-foreground/80"
               >
                 取消
               </Button>
@@ -2338,13 +2340,13 @@ function PaperBotMonitorSection({
       {/* Section Header */}
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
+          <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
             <div className="w-8 h-8 bg-blue-500/10 rounded-lg flex items-center justify-center border border-blue-500/20">
               <Activity className="w-4 h-4 text-blue-400" />
             </div>
             Hummingbot Paper Bot 运行监控
           </h2>
-          <p className="text-slate-400 text-xs mt-1 ml-10">
+          <p className="text-muted-foreground text-xs mt-1 ml-10">
             当前仅展示 Paper Bot 运行状态和模拟数据，不执行真实交易。
           </p>
         </div>
@@ -2360,9 +2362,9 @@ function PaperBotMonitorSection({
       </div>
 
       {/* Paper Bot 列表 */}
-      <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50 mb-6">
+      <Card className="bg-card border-border mb-6">
         <CardHeader className="pb-2">
-          <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+          <CardTitle className="text-foreground text-base flex items-center gap-2">
             <Bot className="w-4 h-4 text-blue-400" />
             Paper Bot 列表
             {paperBots?.bots && (
@@ -2374,50 +2376,50 @@ function PaperBotMonitorSection({
         </CardHeader>
         <CardContent>
           {paperBotsLoading && !paperBots ? (
-            <div className="flex items-center justify-center py-8 text-slate-500 text-sm">
+            <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
               <RefreshCw className="w-4 h-4 animate-spin mr-2" /> 加载中...
             </div>
           ) : !paperBots?.bots || paperBots.bots.length === 0 ? (
-            <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
-              <Bot className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-              <p className="text-slate-400 text-sm">当前还没有真正运行的 Hummingbot Paper Bot。</p>
-              <p className="text-slate-500 text-xs mt-1">请先生成配置预览，并在下一步启动 Paper Bot。</p>
+            <div className="p-4 bg-secondary/50 rounded-lg border border-border/50 text-center">
+              <Bot className="w-8 h-8 text-muted-foreground/50 mx-auto mb-2" />
+              <p className="text-muted-foreground text-sm">当前还没有真正运行的 Hummingbot Paper Bot。</p>
+              <p className="text-muted-foreground text-xs mt-1">请先生成配置预览，并在下一步启动 Paper Bot。</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="border-b border-slate-700">
-                    <th className="text-left py-2 px-3 text-slate-400">Bot 名称</th>
-                    <th className="text-left py-2 px-3 text-slate-400">策略类型</th>
-                    <th className="text-left py-2 px-3 text-slate-400">交易对</th>
-                    <th className="text-left py-2 px-3 text-slate-400">运行状态</th>
-                    <th className="text-left py-2 px-3 text-slate-400">远端确认</th>
-                    <th className="text-left py-2 px-3 text-slate-400">数据读取</th>
-                    <th className="text-left py-2 px-3 text-slate-400">运行时长</th>
-                    <th className="text-left py-2 px-3 text-slate-400">启动时间</th>
-                    <th className="text-left py-2 px-3 text-slate-400">操作</th>
+                  <tr className="border-b border-border">
+                    <th className="text-left py-2 px-3 text-muted-foreground">Bot 名称</th>
+                    <th className="text-left py-2 px-3 text-muted-foreground">策略类型</th>
+                    <th className="text-left py-2 px-3 text-muted-foreground">交易对</th>
+                    <th className="text-left py-2 px-3 text-muted-foreground">运行状态</th>
+                    <th className="text-left py-2 px-3 text-muted-foreground">远端确认</th>
+                    <th className="text-left py-2 px-3 text-muted-foreground">数据读取</th>
+                    <th className="text-left py-2 px-3 text-muted-foreground">运行时长</th>
+                    <th className="text-left py-2 px-3 text-muted-foreground">启动时间</th>
+                    <th className="text-left py-2 px-3 text-muted-foreground">操作</th>
                   </tr>
                 </thead>
                 <tbody>
                   {paperBots.bots.map((bot) => (
                     <tr
                       key={bot.paper_bot_id}
-                      className={`border-b border-slate-800 hover:bg-slate-800/30 cursor-pointer ${
+                      className={`border-b border-border hover:bg-secondary/30 cursor-pointer ${
                         selectedPaperBot?.paper_bot_id === bot.paper_bot_id ? "bg-blue-500/10" : ""
                       }`}
                       onClick={() => onSelectPaperBot(bot)}
                     >
-                      <td className="py-2 px-3 text-slate-300 font-mono">{bot.bot_name}</td>
-                      <td className="py-2 px-3 text-slate-300">{bot.strategy_type}</td>
-                      <td className="py-2 px-3 text-slate-300">{bot.trading_pair}</td>
+                      <td className="py-2 px-3 text-foreground/80 font-mono">{bot.bot_name}</td>
+                      <td className="py-2 px-3 text-foreground/80">{bot.strategy_type}</td>
+                      <td className="py-2 px-3 text-foreground/80">{bot.trading_pair}</td>
                       <td className="py-2 px-3">
                         <Badge
                           variant="outline"
                           className={
                             bot.can_fetch_runtime_data ? "bg-green-500/10 text-green-400 border-green-500/20" :
                             bot.remote_status === "deployed" ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
-                            bot.remote_status === "not_detected" ? "bg-slate-500/10 text-slate-400 border-slate-500/20" :
+                            bot.remote_status === "not_detected" ? "bg-slate-500/10 text-muted-foreground border-muted-foreground/20" :
                             "bg-red-500/10 text-red-400 border-red-500/20"
                           }
                         >
@@ -2433,7 +2435,7 @@ function PaperBotMonitorSection({
                           className={
                             bot.remote_status === "running" ? "bg-green-500/10 text-green-400 border-green-500/20" :
                             bot.remote_status === "deployed" ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
-                            "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                            "bg-slate-500/10 text-muted-foreground border-muted-foreground/20"
                           }
                         >
                           {bot.remote_status === "running" ? "已确认" :
@@ -2441,7 +2443,7 @@ function PaperBotMonitorSection({
                            bot.remote_status === "not_detected" ? "未检测" :
                            bot.remote_status || "-"}
                           {bot.matched_by && bot.matched_by !== "none" && (
-                            <span className="text-slate-400 ml-1">via {bot.matched_by}</span>
+                            <span className="text-muted-foreground ml-1">via {bot.matched_by}</span>
                           )}
                         </Badge>
                       </td>
@@ -2450,16 +2452,16 @@ function PaperBotMonitorSection({
                           variant="outline"
                           className={
                             bot.can_fetch_runtime_data ? "bg-green-500/10 text-green-400 border-green-500/20" :
-                            "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                            "bg-slate-500/10 text-muted-foreground border-muted-foreground/20"
                           }
                         >
                           {bot.can_fetch_runtime_data ? "可读取" : "不可读"}
                         </Badge>
                       </td>
-                      <td className="py-2 px-3 text-slate-300">
+                      <td className="py-2 px-3 text-foreground/80">
                         {formatRuntime(bot.runtime_seconds)}
                       </td>
-                      <td className="py-2 px-3 text-slate-400">
+                      <td className="py-2 px-3 text-muted-foreground">
                         {bot.started_at ? new Date(bot.started_at).toLocaleString() : "-"}
                       </td>
                       <td className="py-2 px-3">
@@ -2488,9 +2490,9 @@ function PaperBotMonitorSection({
       {selectedPaperBot && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* 详情卡片 */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+              <CardTitle className="text-foreground text-base flex items-center gap-2">
                 <Bot className="w-4 h-4 text-blue-400" />
                 Paper Bot 详情
               </CardTitle>
@@ -2499,27 +2501,27 @@ function PaperBotMonitorSection({
               {paperBotDetail ? (
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
-                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <p className="text-slate-400 text-xs">Paper Bot ID</p>
-                      <p className="text-slate-100 text-xs font-mono mt-1">
+                    <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                      <p className="text-muted-foreground text-xs">Paper Bot ID</p>
+                      <p className="text-foreground text-xs font-mono mt-1">
                         {(paperBotDetail as Record<string, unknown>)?.paper_bot_id as string || "-"}
                       </p>
                     </div>
-                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <p className="text-slate-400 text-xs">Bot 名称</p>
-                      <p className="text-slate-100 text-xs mt-1">
+                    <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                      <p className="text-muted-foreground text-xs">Bot 名称</p>
+                      <p className="text-foreground text-xs mt-1">
                         {(paperBotDetail as Record<string, unknown>)?.bot_name as string || "-"}
                       </p>
                     </div>
-                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <p className="text-slate-400 text-xs">策略类型</p>
-                      <p className="text-slate-100 text-xs mt-1">
+                    <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                      <p className="text-muted-foreground text-xs">策略类型</p>
+                      <p className="text-foreground text-xs mt-1">
                         {(paperBotDetail as Record<string, unknown>)?.strategy_type as string || "-"}
                       </p>
                     </div>
-                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <p className="text-slate-400 text-xs">交易对</p>
-                      <p className="text-slate-100 text-xs mt-1">
+                    <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                      <p className="text-muted-foreground text-xs">交易对</p>
+                      <p className="text-foreground text-xs mt-1">
                         {(paperBotDetail as Record<string, unknown>)?.trading_pair as string || "-"}
                       </p>
                     </div>
@@ -2543,7 +2545,7 @@ function PaperBotMonitorSection({
                           : (paperBotDetail as Record<string, unknown>)?.remote_status === "deployed"
                           ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
                           : (paperBotDetail as Record<string, unknown>)?.remote_status === "not_detected"
-                          ? "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                          ? "bg-slate-500/10 text-muted-foreground border-muted-foreground/20"
                           : "bg-red-500/10 text-red-400 border-red-500/20"
                       }
                     >
@@ -2562,7 +2564,7 @@ function PaperBotMonitorSection({
                           ? "bg-green-500/10 text-green-400 border-green-500/20"
                           : (paperBotDetail as Record<string, unknown>)?.remote_status === "deployed"
                           ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
-                          : "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                          : "bg-slate-500/10 text-muted-foreground border-muted-foreground/20"
                       }
                     >
                       远端确认: {(paperBotDetail as Record<string, unknown>)?.remote_status === "running"
@@ -2571,38 +2573,38 @@ function PaperBotMonitorSection({
                         ? "已部署"
                         : "未检测"}
                       {(paperBotDetail as Record<string, unknown>)?.matched_by && (paperBotDetail as Record<string, unknown>)?.matched_by !== "none" && (
-                        <span className="text-slate-400 ml-1">via {(paperBotDetail as Record<string, unknown>)?.matched_by}</span>
+                        <span className="text-muted-foreground ml-1">via {(paperBotDetail as Record<string, unknown>)?.matched_by}</span>
                       )}
                     </Badge>
                   </div>
 
                   {/* 对账信息 */}
-                  <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                    <p className="text-slate-400 text-xs mb-2 font-semibold">对账信息</p>
+                  <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                    <p className="text-muted-foreground text-xs mb-2 font-semibold">对账信息</p>
                     <div className="grid grid-cols-2 gap-2 text-[10px]">
                       <div>
-                        <span className="text-slate-500">can_fetch_data: </span>
-                        <span className={(paperBotDetail as Record<string, unknown>)?.can_fetch_runtime_data ? "text-green-400" : "text-slate-400"}>
+                        <span className="text-muted-foreground">can_fetch_data: </span>
+                        <span className={(paperBotDetail as Record<string, unknown>)?.can_fetch_runtime_data ? "text-green-400" : "text-muted-foreground"}>
                           {String((paperBotDetail as Record<string, unknown>)?.can_fetch_runtime_data ?? false)}
                         </span>
                       </div>
                       <div>
-                        <span className="text-slate-500">matched_remote_bot: </span>
-                        <span className={(paperBotDetail as Record<string, unknown>)?.matched_remote_bot ? "text-green-400" : "text-slate-400"}>
+                        <span className="text-muted-foreground">matched_remote_bot: </span>
+                        <span className={(paperBotDetail as Record<string, unknown>)?.matched_remote_bot ? "text-green-400" : "text-muted-foreground"}>
                           {String((paperBotDetail as Record<string, unknown>)?.matched_remote_bot ?? false)}
                         </span>
                       </div>
                       <div>
-                        <span className="text-slate-500">matched_by: </span>
-                        <span className="text-slate-300">{(paperBotDetail as Record<string, unknown>)?.matched_by as string || "-"}</span>
+                        <span className="text-muted-foreground">matched_by: </span>
+                        <span className="text-foreground/80">{(paperBotDetail as Record<string, unknown>)?.matched_by as string || "-"}</span>
                       </div>
                       <div>
-                        <span className="text-slate-500">hummingbot_bot_id: </span>
-                        <span className="text-slate-300">{(paperBotDetail as Record<string, unknown>)?.hummingbot_bot_id as string || "-"}</span>
+                        <span className="text-muted-foreground">hummingbot_bot_id: </span>
+                        <span className="text-foreground/80">{(paperBotDetail as Record<string, unknown>)?.hummingbot_bot_id as string || "-"}</span>
                       </div>
                       <div className="col-span-2">
-                        <span className="text-slate-500">last_remote_check: </span>
-                        <span className="text-slate-300">
+                        <span className="text-muted-foreground">last_remote_check: </span>
+                        <span className="text-foreground/80">
                           {(paperBotDetail as Record<string, unknown>)?.last_remote_check_at
                             ? new Date((paperBotDetail as Record<string, unknown>)?.last_remote_check_at as string).toLocaleTimeString()
                             : "-"}
@@ -2638,8 +2640,8 @@ function PaperBotMonitorSection({
                   {/* 不可停止提示 - can_fetch_runtime_data=false */}
                   {(paperBotDetail as Record<string, unknown>)?.mode === "paper" &&
                    (paperBotDetail as Record<string, unknown>)?.can_fetch_runtime_data !== true && (
-                    <div className="mt-3 p-3 bg-slate-800/50 rounded-lg border border-slate-700/50 space-y-1">
-                      <p className="text-slate-400 text-[10px]">
+                    <div className="mt-3 p-3 bg-secondary/50 rounded-lg border border-border/50 space-y-1">
+                      <p className="text-muted-foreground text-[10px]">
                         当前 Paper Bot 尚未在 Hummingbot active_bots 中确认运行，无法停止。
                       </p>
                       {(paperBotDetail as Record<string, unknown>)?.matched_by === "bot_runs" && (
@@ -2692,16 +2694,16 @@ function PaperBotMonitorSection({
 
                   {/* Config Preview */}
                   {(paperBotDetail as Record<string, unknown>)?.config && (
-                    <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <p className="text-slate-400 text-xs mb-2">配置预览</p>
-                      <pre className="text-slate-300 text-[10px] font-mono overflow-x-auto max-h-40">
+                    <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                      <p className="text-muted-foreground text-xs mb-2">配置预览</p>
+                      <pre className="text-foreground/80 text-[10px] font-mono overflow-x-auto max-h-40">
                         {JSON.stringify((paperBotDetail as Record<string, unknown>)?.config, null, 2)}
                       </pre>
                     </div>
                   )}
                 </div>
               ) : (
-                <div className="flex items-center justify-center py-8 text-slate-500 text-sm">
+                <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
                   <RefreshCw className="w-4 h-4 animate-spin mr-2" /> 加载中...
                 </div>
               )}
@@ -2709,9 +2711,9 @@ function PaperBotMonitorSection({
           </Card>
 
           {/* 模拟订单卡片 */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+              <CardTitle className="text-foreground text-base flex items-center gap-2">
                 <ShoppingCart className="w-4 h-4 text-orange-400" />
                 Paper Bot 模拟订单（只读）
               </CardTitle>
@@ -2723,9 +2725,9 @@ function PaperBotMonitorSection({
                 </div>
               )}
               {!paperBotOrders?.data?.orders || paperBotOrders.data.orders.length === 0 ? (
-                <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
-                  <ShoppingCart className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                  <p className="text-slate-400 text-sm">
+                <div className="p-4 bg-secondary/50 rounded-lg border border-border/50 text-center">
+                  <ShoppingCart className="w-8 h-8 text-muted-foreground/50 mx-auto mb-2" />
+                  <p className="text-muted-foreground text-sm">
                     {paperBotOrders?.data?.filter_note
                       ? paperBotOrders.data.filter_note
                       : "当前 Paper Bot 尚未被 Hummingbot 远端确认运行，因此暂无模拟订单。"}
@@ -2735,27 +2737,27 @@ function PaperBotMonitorSection({
                 <div className="overflow-x-auto max-h-60">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="border-b border-slate-700">
-                        <th className="text-left py-1 px-2 text-slate-400">交易对</th>
-                        <th className="text-left py-1 px-2 text-slate-400">方向</th>
-                        <th className="text-left py-1 px-2 text-slate-400">类型</th>
-                        <th className="text-right py-1 px-2 text-slate-400">价格</th>
-                        <th className="text-right py-1 px-2 text-slate-400">数量</th>
-                        <th className="text-left py-1 px-2 text-slate-400">状态</th>
+                      <tr className="border-b border-border">
+                        <th className="text-left py-1 px-2 text-muted-foreground">交易对</th>
+                        <th className="text-left py-1 px-2 text-muted-foreground">方向</th>
+                        <th className="text-left py-1 px-2 text-muted-foreground">类型</th>
+                        <th className="text-right py-1 px-2 text-muted-foreground">价格</th>
+                        <th className="text-right py-1 px-2 text-muted-foreground">数量</th>
+                        <th className="text-left py-1 px-2 text-muted-foreground">状态</th>
                       </tr>
                     </thead>
                     <tbody>
                       {paperBotOrders.data.orders.slice(0, 10).map((order, idx) => (
-                        <tr key={idx} className="border-b border-slate-800">
-                          <td className="py-1 px-2 text-slate-300">{String(order.symbol || order.trading_pair || "-")}</td>
+                        <tr key={idx} className="border-b border-border">
+                          <td className="py-1 px-2 text-foreground/80">{String(order.symbol || order.trading_pair || "-")}</td>
                           <td className={`py-1 px-2 ${order.side === "BUY" ? "text-green-400" : "text-red-400"}`}>
                             {String(order.side || "-")}
                           </td>
-                          <td className="py-1 px-2 text-slate-300">{String(order.order_type || order.type || "-")}</td>
-                          <td className="py-1 px-2 text-right text-slate-300">{order.price ? String(order.price) : "-"}</td>
-                          <td className="py-1 px-2 text-right text-slate-300">{String(order.amount || order.quantity || "-")}</td>
+                          <td className="py-1 px-2 text-foreground/80">{String(order.order_type || order.type || "-")}</td>
+                          <td className="py-1 px-2 text-right text-foreground/80">{order.price ? String(order.price) : "-"}</td>
+                          <td className="py-1 px-2 text-right text-foreground/80">{String(order.amount || order.quantity || "-")}</td>
                           <td className="py-1 px-2">
-                            <Badge variant="outline" className="text-[10px] bg-slate-700/50 text-slate-300 border-slate-600/50">
+                            <Badge variant="outline" className="text-[10px] bg-secondary/50 text-foreground/80 border-slate-600/50">
                               {String(order.status || "-")}
                             </Badge>
                           </td>
@@ -2769,9 +2771,9 @@ function PaperBotMonitorSection({
           </Card>
 
           {/* 模拟持仓卡片 */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+              <CardTitle className="text-foreground text-base flex items-center gap-2">
                 <Wallet className="w-4 h-4 text-emerald-400" />
                 Paper Bot 模拟持仓（只读）
               </CardTitle>
@@ -2783,9 +2785,9 @@ function PaperBotMonitorSection({
                 </div>
               )}
               {!paperBotPositions?.data?.positions || paperBotPositions.data.positions.length === 0 ? (
-                <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 text-center">
-                  <Wallet className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                  <p className="text-slate-400 text-sm">
+                <div className="p-4 bg-secondary/50 rounded-lg border border-border/50 text-center">
+                  <Wallet className="w-8 h-8 text-muted-foreground/50 mx-auto mb-2" />
+                  <p className="text-muted-foreground text-sm">
                     {paperBotPositions?.data?.filter_note
                       ? paperBotPositions.data.filter_note
                       : "当前 Paper Bot 尚未被 Hummingbot 远端确认运行，因此暂无模拟持仓。"}
@@ -2795,12 +2797,12 @@ function PaperBotMonitorSection({
                 <div className="overflow-x-auto max-h-60">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="border-b border-slate-700">
-                        <th className="text-left py-1 px-2 text-slate-400">交易对</th>
-                        <th className="text-left py-1 px-2 text-slate-400">方向</th>
-                        <th className="text-right py-1 px-2 text-slate-400">数量</th>
-                        <th className="text-right py-1 px-2 text-slate-400">开仓价</th>
-                        <th className="text-right py-1 px-2 text-slate-400">浮动盈亏</th>
+                      <tr className="border-b border-border">
+                        <th className="text-left py-1 px-2 text-muted-foreground">交易对</th>
+                        <th className="text-left py-1 px-2 text-muted-foreground">方向</th>
+                        <th className="text-right py-1 px-2 text-muted-foreground">数量</th>
+                        <th className="text-right py-1 px-2 text-muted-foreground">开仓价</th>
+                        <th className="text-right py-1 px-2 text-muted-foreground">浮动盈亏</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2808,13 +2810,13 @@ function PaperBotMonitorSection({
                         const pnl = pos.unrealized_pnl || pos.unrealizedPnl || pos.pnl;
                         const isProfit = typeof pnl === "number" && pnl >= 0;
                         return (
-                          <tr key={idx} className="border-b border-slate-800">
-                            <td className="py-1 px-2 text-slate-300">{String(pos.symbol || pos.trading_pair || "-")}</td>
+                          <tr key={idx} className="border-b border-border">
+                            <td className="py-1 px-2 text-foreground/80">{String(pos.symbol || pos.trading_pair || "-")}</td>
                             <td className={`py-1 px-2 ${pos.side === "LONG" || pos.side === "BUY" ? "text-green-400" : "text-red-400"}`}>
                               {String(pos.side || "-")}
                             </td>
-                            <td className="py-1 px-2 text-right text-slate-300">{String(pos.amount || pos.quantity || "-")}</td>
-                            <td className="py-1 px-2 text-right text-slate-300">{pos.entry_price ? String(pos.entry_price) : "-"}</td>
+                            <td className="py-1 px-2 text-right text-foreground/80">{String(pos.amount || pos.quantity || "-")}</td>
+                            <td className="py-1 px-2 text-right text-foreground/80">{pos.entry_price ? String(pos.entry_price) : "-"}</td>
                             <td className={`py-1 px-2 text-right ${isProfit ? "text-green-400" : "text-red-400"}`}>
                               {pnl !== undefined ? String(pnl) : "-"}
                             </td>
@@ -2829,26 +2831,26 @@ function PaperBotMonitorSection({
           </Card>
 
           {/* 日志卡片 */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+              <CardTitle className="text-foreground text-base flex items-center gap-2">
                 <BarChart3 className="w-4 h-4 text-purple-400" />
                 Paper Bot 日志（只读）
               </CardTitle>
             </CardHeader>
             <CardContent>
               {!paperBotLogs?.data?.logs_available ? (
-                <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                <div className="p-4 bg-secondary/50 rounded-lg border border-border/50">
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
-                    <p className="text-slate-400 text-xs">
+                    <p className="text-muted-foreground text-xs">
                       {paperBotLogs?.data?.message || "当前 Hummingbot API 版本暂未提供 Paper Bot 日志接口，请通过 docker compose logs 查看。"}
                     </p>
                   </div>
                 </div>
               ) : (
-                <div className="p-4 bg-slate-950 rounded-lg border border-slate-800 max-h-60 overflow-y-auto">
-                  <pre className="text-slate-300 text-[10px] font-mono whitespace-pre-wrap">
+                <div className="p-4 bg-background rounded-lg border border-border max-h-60 overflow-y-auto">
+                  <pre className="text-foreground/80 text-[10px] font-mono whitespace-pre-wrap">
                     {paperBotLogs.data.lines?.slice(0, 50).join("\n") || "暂无日志数据"}
                   </pre>
                 </div>

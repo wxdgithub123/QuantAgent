@@ -1,0 +1,34 @@
+FROM hummingbot/hummingbot:latest
+
+USER root
+
+# 安装 proxychains4
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends proxychains4 && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
+
+# proxychains 配置模板（启动时替换代理 IP）
+RUN printf 'dynamic_chain\ntcp_read_time_out 15000\ntcp_connect_time_out 8000\nlocalnet 127.0.0.0/8\nlocalnet 10.0.0.0/8\nlocalnet 172.16.0.0/12\nlocalnet 192.168.0.0/16\n\n[ProxyList]\nhttp PROXY_IP_PLACEHOLDER 7897\n' \
+    > /etc/proxychains4.conf.template
+
+# Monkey-patch 文件（放到 site-packages，通过 sitecustomize.py 自动加载）
+# 修复 PaperTradeExchange 的三个问题：
+#   1. executor_base 访问 trading_rules → 代理到底层 connector
+#   2. market_data_provider 访问 trading_rules → 代理到底层 connector
+#   3. get_connector_class 不支持 _paper_trade 后缀 → 映射到真实 connector
+COPY hummingbot_paper_trade_patch.py /opt/conda/envs/hummingbot/lib/python3.13/site-packages/
+
+# sitecustomize.py — Python 启动时自动导入
+# 必须先将 /home/hummingbot 加入 sys.path，否则 sitecustomize 运行太早，hummingbot 包还找不到
+RUN printf 'import sys\nsys.path.insert(0, "/home/hummingbot")\ntry:\n    import hummingbot_paper_trade_patch\nexcept Exception:\n    pass\n' \
+    > /opt/conda/envs/hummingbot/lib/python3.13/site-packages/sitecustomize.py
+
+# 启动脚本
+RUN printf '#!/bin/bash\nPROXY_IP=$(getent ahostsv4 host.docker.internal | awk '"'"'{print $1; exit}'"'"')\nif [ -z "$PROXY_IP" ]; then\n  echo "ERROR: Cannot resolve host.docker.internal, proxy disabled"\n  exec /bin/bash -lc "conda activate hummingbot && ./bin/hummingbot_quickstart.py 2>> ./logs/errors.log"\nelse\n  echo "Proxy IP: $PROXY_IP"\n  sed "s/PROXY_IP_PLACEHOLDER/$PROXY_IP/" /etc/proxychains4.conf.template > /etc/proxychains4.conf\n  exec proxychains4 -q /bin/bash -lc "conda activate hummingbot && ./bin/hummingbot_quickstart.py 2>> ./logs/errors.log"\nfi\n' \
+    > /home/hummingbot/start_with_proxy.sh && \
+    chmod +x /home/hummingbot/start_with_proxy.sh
+
+WORKDIR /home/hummingbot
+
+CMD ["/bin/bash", "/home/hummingbot/start_with_proxy.sh"]

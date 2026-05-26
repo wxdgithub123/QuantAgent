@@ -60,9 +60,18 @@ class CoordinationResult:
 class CoordinatorAgent:
     """
     Orchestrates all specialist agents and produces a unified trading decision.
+
+    Set ``use_tradingagents=True`` to delegate to TradingAgents multi-round
+    debate instead of the default 3-agent parallel voting.  If TradingAgents
+    is not installed, the system falls back silently.
     """
 
-    def __init__(self, provider_name: Optional[str] = None):
+    def __init__(
+        self,
+        provider_name: Optional[str] = None,
+        use_tradingagents: bool = False,
+    ):
+        self.use_tradingagents = use_tradingagents
         self.trend_agent    = TrendAgent(provider_name)
         self.mr_agent       = MeanReversionAgent(provider_name)
         self.risk_agent     = RiskAgent(provider_name)
@@ -78,7 +87,42 @@ class CoordinatorAgent:
         """
         Run all agents concurrently, aggregate their signals, and produce
         a final trading decision with narrative summary.
+
+        When ``self.use_tradingagents=True`` and TradingAgents is available,
+        delegates to the multi-round debate pipeline.  Otherwise uses the
+        existing 3-agent parallel voting with confidence-weighted aggregation.
         """
+        # ── TradingAgents path (optional multi-round debate) ───────────────
+        if self.use_tradingagents:
+            from app.agents.tradingagents_adapter import (
+                tradingagents_adapter,
+                _TA_AVAILABLE,
+            )
+
+            if _TA_AVAILABLE:
+                try:
+                    market_data = await self._gather_market_context(symbol, interval)
+                    macro_context = await self._load_macro_context(symbol)
+                    signal_events = await self._load_recent_signals(symbol)
+
+                    result = await tradingagents_adapter.run_analysis(
+                        symbol=symbol,
+                        market_data=market_data,
+                        signal_events=signal_events,
+                        macro_context=macro_context,
+                    )
+                    if result is not None:
+                        logger.info(
+                            f"[coordinator] TradingAgents result: "
+                            f"{result.final_signal.value} conf={result.confidence}"
+                        )
+                        return result
+                except Exception as e:
+                    logger.warning(
+                        f"[coordinator] TradingAgents failed, falling back: {e}"
+                    )
+            else:
+                logger.debug("[coordinator] TradingAgents not installed, using fallback")
         # Step 1: Run all agents in parallel
         trend_sig, mr_sig, risk_sig = await asyncio.gather(
             self.trend_agent.run(symbol, interval),
@@ -152,7 +196,7 @@ class CoordinatorAgent:
         # Step 4: Synthesize narrative via LLM
         summary = await self._synthesize_summary(signals, final_signal, vote_breakdown, symbol)
 
-        return CoordinationResult(
+        result = CoordinationResult(
             symbol=symbol,
             final_signal=final_signal,
             confidence=round(final_confidence, 3),
@@ -161,6 +205,35 @@ class CoordinatorAgent:
             vote_breakdown=vote_breakdown,
             risk_veto=risk_veto,
         )
+        await self._persist_result(result)
+        return result
+
+    @staticmethod
+    async def _persist_result(result: CoordinationResult) -> None:
+        """Persist coordination result to DB for audit/history."""
+        try:
+            from app.services.database import get_db
+            from sqlalchemy import text
+
+            async with get_db() as session:
+                await session.execute(text("""
+                    INSERT INTO coordination_history
+                        (symbol, timestamp, final_signal, confidence, vote_breakdown, risk_veto, summary, agent_signals)
+                    VALUES
+                        (:symbol, :timestamp, :final_signal, :confidence, :vote_breakdown, :risk_veto, :summary, :agent_signals)
+                """), {
+                    "symbol": result.symbol,
+                    "timestamp": result.timestamp,
+                    "final_signal": result.final_signal.value,
+                    "confidence": result.confidence,
+                    "vote_breakdown": result.vote_breakdown,
+                    "risk_veto": result.risk_veto,
+                    "summary": result.summary[:5000] if result.summary else "",
+                    "agent_signals": result.agent_signals,
+                })
+                await session.commit()
+        except Exception:
+            pass  # never let persistence failure break coordination
 
     async def coordinate_stream(
         self,
@@ -269,3 +342,69 @@ class CoordinatorAgent:
             f"中性 {vote_breakdown.get('neutral',0):.0%}"
         )
         return "\n".join(lines)
+
+    # ── TradingAgents data gathering helpers ────────────────────────────────
+
+    async def _gather_market_context(
+        self, symbol: str, interval: str
+    ) -> Dict[str, Any]:
+        """Collect market data that TradingAgents analysts need."""
+        try:
+            from app.services.binance_service import binance_service
+
+            klines = await binance_service.get_klines(symbol, interval, limit=50)
+            ticker = await binance_service.get_ticker(symbol)
+            return {
+                "symbol": symbol,
+                "interval": interval,
+                "klines": [k.model_dump() for k in klines] if klines else [],
+                "ticker": ticker.model_dump() if ticker else {},
+            }
+        except Exception as e:
+            logger.debug(f"Market context gather failed: {e}")
+            return {"symbol": symbol, "interval": interval}
+
+    async def _load_macro_context(
+        self, symbol: str
+    ) -> Dict[str, Any]:
+        """Load macro analysis context for TradingAgents."""
+        try:
+            from app.services.macro_analysis_service import macro_analysis_service
+
+            return await macro_analysis_service.get_macro_score(symbol)
+        except Exception as e:
+            logger.debug(f"Macro context load failed: {e}")
+            return {}
+
+    async def _load_recent_signals(
+        self, symbol: str, limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        """Load recent signal events from the database for TradingAgents context."""
+        try:
+            from app.models.db_models import SignalEventDB
+            from app.services.database import get_db
+            from sqlalchemy import desc
+
+            async with get_db() as session:
+                from sqlalchemy import select
+
+                stmt = (
+                    select(SignalEventDB)
+                    .where(SignalEventDB.symbol == symbol)
+                    .order_by(desc(SignalEventDB.timestamp))
+                    .limit(limit)
+                )
+                result = await session.execute(stmt)
+                rows = result.scalars().all()
+                return [
+                    {
+                        "type": r.signal_type,
+                        "confidence": r.confidence,
+                        "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+                        "source": r.source_strategy,
+                    }
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.debug(f"Signal history load failed: {e}")
+            return []

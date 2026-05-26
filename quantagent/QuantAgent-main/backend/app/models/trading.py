@@ -20,15 +20,34 @@ class OrderStatus(str, Enum):
     REJECTED = "REJECTED"
 
 class BarData(BaseModel):
-    """K-line data model"""
+    """K-line bar with three-time semantics (anti-future-looking compliance).
+
+    event_time     — when the bar occurred on the exchange (candle open time)
+    available_time — when our system received/ingested this bar
+    as_of_time     — knowledge cutoff for historical / replay analysis (optional)
+    """
+
     symbol: str
-    datetime: datetime
+    datetime: datetime  # Candle open time (canonical)
+    event_time: Optional[datetime] = None  # Defaults to datetime if not set
+    available_time: Optional[datetime] = None  # Set on ingestion
+    as_of_time: Optional[datetime] = None  # For historical replay
+
     open: float
     high: float
     low: float
     close: float
     volume: float
+    quote_volume: Optional[float] = None
+    trades: Optional[int] = None
     interval: str
+
+    def model_post_init(self, __context):
+        """Ensure event_time defaults to datetime if not provided."""
+        if self.event_time is None:
+            self.event_time = self.datetime
+        if self.available_time is None:
+            self.available_time = self.datetime
 
 class TickData(BaseModel):
     """Tick data model"""

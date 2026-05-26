@@ -1,0 +1,258 @@
+"""
+Pipeline DuckDB Store — Parquet-backed storage for macro indicators and news.
+Extends the existing DuckDB service pattern with new tables.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import threading
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+_conn_lock = threading.Lock()
+_conn = None
+
+
+def _get_conn():
+    global _conn
+    if _conn is not None:
+        return _conn
+    with _conn_lock:
+        if _conn is not None:
+            return _conn
+        try:
+            import duckdb
+            db_path = str(Path("data/pipeline/pipeline.db").resolve())
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+            _conn = duckdb.connect(db_path)
+            _conn.execute("PRAGMA threads=2")
+            logger.info(f"Pipeline DuckDB connected: {db_path}")
+            return _conn
+        except ImportError:
+            logger.warning("duckdb not installed")
+            return None
+        except Exception as e:
+            logger.error(f"Pipeline DuckDB init failed: {e}")
+            return None
+
+
+class PipelineStore:
+    """Persistent storage for macro indicators and news articles."""
+
+    _instance: Optional["PipelineStore"] = None
+
+    @classmethod
+    def get_instance(cls) -> "PipelineStore":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        self._tables_created = False
+
+    @property
+    def available(self) -> bool:
+        return _get_conn() is not None
+
+    def _ensure_tables(self):
+        if self._tables_created:
+            return
+        conn = _get_conn()
+        if conn is None:
+            return
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS macro_indicators (
+                indicator   VARCHAR NOT NULL,
+                value       DOUBLE  NOT NULL,
+                source      VARCHAR NOT NULL,
+                timestamp   TIMESTAMP NOT NULL,
+                ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (indicator, timestamp)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS news_articles (
+                id           BIGINT PRIMARY KEY DEFAULT (ABS(CAST(XXHASH64(url) AS BIGINT))),
+                title        VARCHAR NOT NULL,
+                source       VARCHAR NOT NULL,
+                url          VARCHAR NOT NULL,
+                summary      VARCHAR,
+                published_at TIMESTAMP NOT NULL,
+                symbols      VARCHAR[],
+                ingested_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            )
+        """)
+        self._tables_created = True
+        logger.info("Pipeline DuckDB tables ready")
+
+    # ── Macro ─────────────────────────────────────────────────────────
+
+    def upsert_macro(self, snapshots: List[Any]) -> int:
+        """Insert or skip macro snapshots. Returns count written."""
+        if not snapshots:
+            return 0
+        self._ensure_tables()
+        conn = _get_conn()
+        if conn is None:
+            return 0
+
+        rows = [{
+            "indicator": s.indicator,
+            "value": s.value,
+            "source": s.source,
+            "timestamp": s.timestamp,
+            "ingested_at": datetime.utcnow(),
+        } for s in snapshots]
+
+        df = pd.DataFrame(rows)
+        written = 0
+        try:
+            # INSERT OR IGNORE via left-anti join
+            existing = conn.sql("SELECT indicator, timestamp FROM macro_indicators").df()
+            if not existing.empty:
+                merged = df.merge(existing, on=["indicator", "timestamp"], how="left", indicator=True)
+                new_rows = merged[merged["_merge"] == "left_only"].drop(columns=["_merge"])
+            else:
+                new_rows = df
+
+            if not new_rows.empty:
+                conn.sql("INSERT INTO macro_indicators SELECT * FROM new_rows")
+                written = len(new_rows)
+            return written
+        except Exception as e:
+            logger.error(f"Macro upsert failed: {e}")
+            return 0
+
+    def query_macro(
+        self,
+        indicator: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 1000,
+    ) -> List[Dict[str, Any]]:
+        """Query macro indicators, optionally filtered."""
+        self._ensure_tables()
+        conn = _get_conn()
+        if conn is None:
+            return []
+
+        try:
+            conditions = ["1=1"]
+            if indicator:
+                conditions.append(f"indicator = '{indicator}'")
+            if start:
+                conditions.append(f"timestamp >= '{start.isoformat()}'")
+            if end:
+                conditions.append(f"timestamp <= '{end.isoformat()}'")
+            where = " AND ".join(conditions)
+            result = conn.sql(
+                f"SELECT indicator, value, source, timestamp FROM macro_indicators WHERE {where} ORDER BY timestamp DESC LIMIT {limit}"
+            )
+            return result.df().to_dict(orient="records")
+        except Exception as e:
+            logger.error(f"Macro query failed: {e}")
+            return []
+
+    def latest_macro(self) -> Dict[str, Any]:
+        """Return the latest value for each indicator."""
+        self._ensure_tables()
+        conn = _get_conn()
+        if conn is None:
+            return {}
+        try:
+            result = conn.sql("""
+                SELECT indicator, value, timestamp, source
+                FROM macro_indicators m1
+                WHERE timestamp = (SELECT MAX(timestamp) FROM macro_indicators m2 WHERE m2.indicator = m1.indicator)
+                ORDER BY indicator
+            """)
+            df = result.df()
+            out: Dict[str, Any] = {}
+            for _, row in df.iterrows():
+                out[row["indicator"]] = {
+                    "value": float(row["value"]),
+                    "date": str(row["timestamp"]),
+                    "source": row["source"],
+                }
+            return out
+        except Exception as e:
+            logger.error(f"Latest macro failed: {e}")
+            return {}
+
+    def macro_time_series(self, indicator: str, limit: int = 200) -> List[Dict[str, Any]]:
+        """Return time series for one indicator (for charts)."""
+        return self.query_macro(indicator=indicator, limit=limit)
+
+    # ── News ──────────────────────────────────────────────────────────
+
+    def upsert_news(self, articles: List[Any]) -> int:
+        """Insert new articles, skip duplicates by URL hash. Returns count written."""
+        if not articles:
+            return 0
+        self._ensure_tables()
+        conn = _get_conn()
+        if conn is None:
+            return 0
+
+        rows = []
+        for a in articles:
+            rows.append({
+                "title": a.title,
+                "source": a.source,
+                "url": a.url,
+                "summary": (a.summary or "")[:2000],
+                "published_at": a.published_at,
+                "symbols": a.symbols or [],
+                "ingested_at": a.ingested_at or datetime.utcnow(),
+            })
+
+        df = pd.DataFrame(rows)
+        written = 0
+        try:
+            # Deduplicate by URL
+            existing_urls = conn.sql("SELECT url FROM news_articles").df()
+            if not existing_urls.empty:
+                new_rows = df[~df["url"].isin(existing_urls["url"])]
+            else:
+                new_rows = df
+
+            if not new_rows.empty:
+                conn.sql("INSERT INTO news_articles SELECT * FROM new_rows")
+                written = len(new_rows)
+            return written
+        except Exception as e:
+            logger.error(f"News upsert failed: {e}")
+            return 0
+
+    def query_news(
+        self,
+        symbol: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """Query recent news, optionally filtered by symbol."""
+        self._ensure_tables()
+        conn = _get_conn()
+        if conn is None:
+            return []
+
+        try:
+            base = "SELECT title, source, url, summary, published_at, symbols FROM news_articles"
+            if symbol:
+                base += f" WHERE list_contains(symbols, '{symbol.upper()}')"
+            base += f" ORDER BY published_at DESC LIMIT {limit} OFFSET {offset}"
+            result = conn.sql(base)
+            return result.df().to_dict(orient="records")
+        except Exception as e:
+            logger.error(f"News query failed: {e}")
+            return []
+
+
+pipeline_store = PipelineStore.get_instance()

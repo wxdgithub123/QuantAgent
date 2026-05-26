@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   ArrowLeft, RefreshCw, Download, TrendingUp, TrendingDown,
   BarChart3, Clock, DollarSign, Filter, AlertTriangle,
-  Activity, BarChart, History, Server
+  Activity, BarChart, History, Server, Zap, Layers, Brain
 } from "lucide-react";
 
 const API_BASE = ""; // 客户端请求强制使用相对路径，通过 Next.js rewrites 转发到后端
@@ -112,52 +112,54 @@ export default function TradesPage() {
     : 0;
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-40">
+      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
         <div className="container mx-auto px-4 py-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Link href="/dashboard" className="text-slate-400 hover:text-slate-100 transition-colors">
+              <Link href="/dashboard" className="text-muted-foreground hover:text-foreground transition-colors">
                 <ArrowLeft className="w-5 h-5" />
               </Link>
               <div className="w-9 h-9 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center">
                 <BarChart3 className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h1 className="text-lg font-bold text-slate-100">交易流水</h1>
-                <p className="text-[10px] text-slate-400">Trade Pairs & History</p>
+                <h1 className="text-lg font-bold text-foreground">交易流水</h1>
+                <p className="text-[10px] text-muted-foreground">Trade Pairs & History</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
               {/* Navigation */}
               <nav className="hidden md:flex items-center gap-1 mr-4">
-                <Link href="/dashboard" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                <Link href="/dashboard" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
                   仪表盘
                 </Link>
                 <Link href="/trades" className="px-2 py-1 text-xs text-blue-400 bg-blue-500/10 rounded border border-blue-500/20 font-medium">
                   交易流水
                 </Link>
-                <Link href="/analytics" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                <Link href="/analytics" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
                   性能分析
                 </Link>
-                <Link href="/backtest" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                <Link href="/backtest" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
                   回测
                 </Link>
-                <Link href="/replay" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                <Link href="/replay" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
                   历史回放
                 </Link>
-                <Link href="/terminal" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                <Link href="/terminal" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
                   终端
                 </Link>
                 <Link href="/hummingbot" className="px-2 py-1 text-xs text-cyan-400 hover:text-cyan-100 rounded hover:bg-cyan-500/10">
                   <span className="flex items-center gap-1"><Server className="w-3 h-3" /> Hummingbot</span>
                 </Link>
+                <Link href="/signals" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary flex items-center gap-1"><Layers className="w-3 h-3" /> 因子/信号</Link>
+                <Link href="/decisions" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary flex items-center gap-1"><Brain className="w-3 h-3" /> 决策中心</Link>
               </nav>
-              <Button variant="ghost" size="sm" className="h-8 text-xs text-slate-400 hover:text-slate-100" onClick={fetchPairs}>
+              <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-foreground" onClick={fetchPairs}>
                 <RefreshCw className="w-3 h-3 mr-1" /> 刷新
               </Button>
-              <Button variant="outline" size="sm" className="h-8 text-xs border-slate-700 text-slate-300 hover:bg-slate-800" onClick={handleExportCSV}>
+              <Button variant="outline" size="sm" className="h-8 text-xs border-border text-foreground/80 hover:bg-secondary" onClick={handleExportCSV}>
                 <Download className="w-3 h-3 mr-1" /> 导出CSV
               </Button>
               <Link href="/analytics">
@@ -173,43 +175,43 @@ export default function TradesPage() {
       <main className="container mx-auto px-4 py-6 space-y-6">
         {/* Summary Cards */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
-              <p className="text-xs text-slate-400">总交易数</p>
-              <p className="text-2xl font-bold text-slate-100">{pairs.length}</p>
-              <p className="text-xs text-slate-500 mt-1">
+              <p className="text-xs text-muted-foreground">总交易数</p>
+              <p className="text-2xl font-bold text-foreground">{pairs.length}</p>
+              <p className="text-xs text-muted-foreground mt-1">
                 {openPairs.length} 持仓 / {closedPairs.length} 已平仓
               </p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
-              <p className="text-xs text-slate-400">总盈亏</p>
+              <p className="text-xs text-muted-foreground">总盈亏</p>
               <p className={`text-2xl font-bold ${totalPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
                 {totalPnl >= 0 ? "+" : ""}{formatMoney(totalPnl)}
               </p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
-              <p className="text-xs text-slate-400">胜率</p>
+              <p className="text-xs text-muted-foreground">胜率</p>
               <p className="text-2xl font-bold text-purple-400">{winRate.toFixed(1)}%</p>
-              <p className="text-xs text-slate-500 mt-1">{winCount} / {closedPairs.length}</p>
+              <p className="text-xs text-muted-foreground mt-1">{winCount} / {closedPairs.length}</p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
-              <p className="text-xs text-slate-400">平均持仓</p>
+              <p className="text-xs text-muted-foreground">平均持仓</p>
               <p className="text-2xl font-bold text-blue-400">{avgHolding.toFixed(1)}h</p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
-              <p className="text-xs text-slate-400">总费用</p>
+              <p className="text-xs text-muted-foreground">总费用</p>
               <p className="text-2xl font-bold text-yellow-400">
                 ${closedPairs.reduce((s, p) => s + (p.holding_costs || 0), 0).toFixed(2)}
               </p>
@@ -219,7 +221,7 @@ export default function TradesPage() {
 
         {/* Filters */}
         <div className="flex items-center gap-3">
-          <Filter className="w-4 h-4 text-slate-500" />
+          <Filter className="w-4 h-4 text-muted-foreground" />
           <Tabs value={statusFilter} onValueChange={setStatusFilter}>
             <TabsList>
               <TabsTrigger value="all">全部</TabsTrigger>
@@ -232,14 +234,14 @@ export default function TradesPage() {
             placeholder="筛选交易对..."
             value={symbolFilter}
             onChange={e => setSymbolFilter(e.target.value.toUpperCase())}
-            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-blue-500 w-40"
+            className="bg-secondary border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-blue-500 w-40"
           />
         </div>
 
         {/* Trade Pairs Table */}
-        <Card className="bg-gradient-to-br from-slate-900 to-slate-800/30 border-slate-700/50">
+        <Card className="bg-card border-border/50">
           <CardHeader className="pb-3">
-            <CardTitle className="text-slate-100 text-base">
+            <CardTitle className="text-foreground text-base">
               交易对列表
               <Badge variant="outline" className="ml-2 text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20">
                 {pairs.length}
@@ -251,17 +253,17 @@ export default function TradesPage() {
               <div className="flex flex-col items-center justify-center py-16 text-red-400">
                 <AlertTriangle className="w-12 h-12 mb-3 opacity-50" />
                 <p className="font-medium">连接失败</p>
-                <p className="text-xs text-slate-500 mt-1">{error}</p>
+                <p className="text-xs text-muted-foreground mt-1">{error}</p>
               </div>
             ) : loading ? (
-              <div className="flex items-center justify-center py-12 text-slate-500">
+              <div className="flex items-center justify-center py-12 text-muted-foreground">
                 <RefreshCw className="w-5 h-5 animate-spin mr-2" /> 加载中...
               </div>
             ) : pairs.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+              <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
                 <BarChart3 className="w-12 h-12 mb-3 opacity-30" />
                 <p>暂无交易记录</p>
-                <p className="text-xs text-slate-600 mt-1">完成交易后，配对记录将自动显示</p>
+                <p className="text-xs text-muted-foreground/50 mt-1">完成交易后，配对记录将自动显示</p>
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -284,7 +286,7 @@ export default function TradesPage() {
                   <TableBody>
                     {pairs.map(pair => (
                       <TableRow key={pair.pair_id}>
-                        <TableCell className="font-mono text-xs text-slate-400">
+                        <TableCell className="font-mono text-xs text-muted-foreground">
                           {pair.pair_id.slice(0, 8)}...
                         </TableCell>
                         <TableCell className="font-medium">{pair.symbol}</TableCell>
@@ -308,14 +310,14 @@ export default function TradesPage() {
                         <TableCell className="font-mono text-sm">
                           {pair.exit_price ? formatMoney(pair.exit_price) : "-"}
                         </TableCell>
-                        <TableCell className="text-xs text-slate-400">{formatTime(pair.entry_time)}</TableCell>
-                        <TableCell className="text-xs text-slate-400">
+                        <TableCell className="text-xs text-muted-foreground">{formatTime(pair.entry_time)}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
                           {pair.exit_time ? formatTime(pair.exit_time) : "-"}
                         </TableCell>
                         <TableCell>
                           {pair.holding_hours != null ? (
-                            <span className="flex items-center gap-1 text-xs text-slate-300">
-                              <Clock className="w-3 h-3 text-slate-500" />
+                            <span className="flex items-center gap-1 text-xs text-foreground/80">
+                              <Clock className="w-3 h-3 text-muted-foreground" />
                               {pair.holding_hours.toFixed(1)}h
                             </span>
                           ) : "-"}
@@ -337,7 +339,7 @@ export default function TradesPage() {
                             variant="outline"
                             className={pair.status === "OPEN"
                               ? "bg-blue-500/10 text-blue-400 border-blue-500/20"
-                              : "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                              : "bg-slate-500/10 text-muted-foreground border-muted-foreground/20"
                             }
                           >
                             {pair.status === "OPEN" ? "持仓中" : "已平仓"}
@@ -351,7 +353,7 @@ export default function TradesPage() {
                 {/* Pagination */}
                 {pairs.length > 0 && (
                   <div className="flex items-center justify-between mt-4 px-2">
-                    <div className="text-xs text-slate-400">
+                    <div className="text-xs text-muted-foreground">
                       显示 {(page - 1) * pageSize + 1} - {Math.min(page * pageSize, totalCount)} 条，共 {totalCount} 条
                     </div>
                     <div className="flex items-center gap-2">
@@ -364,7 +366,7 @@ export default function TradesPage() {
                       >
                         上一页
                       </Button>
-                      <span className="text-xs text-slate-400 px-2">
+                      <span className="text-xs text-muted-foreground px-2">
                         第 {page} / {Math.max(1, Math.ceil(totalCount / pageSize))} 页
                       </span>
                       <Button

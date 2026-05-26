@@ -898,3 +898,115 @@ async def compare_prices_multi_exchange(symbol: str):
         "spread_percent": round(spread, 4),
         "exchanges": list(prices.keys())
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# L1 Data Overview — aggregate all data sources for the overview page
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@router.get("/macro")
+async def get_macro_data() -> Dict[str, Any]:
+    """Return latest macro economic indicators from pipeline storage (DuckDB)."""
+    from app.pipeline.storage.duckdb_store import pipeline_store
+
+    latest = pipeline_store.latest_macro()
+
+    # If pipeline hasn't run yet, trigger a manual fetch
+    if not latest:
+        logger.info("[macro] Pipeline store empty, triggering live fetch...")
+        from app.pipeline.adapters.macro_adapter import macro_adapter
+        try:
+            snapshots = await macro_adapter.fetch_all()
+            if snapshots:
+                pipeline_store.upsert_macro(snapshots)
+                latest = pipeline_store.latest_macro()
+        except Exception as e:
+            logger.warning(f"[macro] Live fetch fallback failed: {e}")
+
+    return {"indicators": latest, "source": "duckdb"}
+
+
+@router.get("/macro/{indicator}/series")
+async def get_macro_series(
+    indicator: str,
+    limit: int = Query(200, ge=1, le=1000),
+) -> List[Dict[str, Any]]:
+    """Return time series for a single macro indicator (for charting)."""
+    from app.pipeline.storage.duckdb_store import pipeline_store
+    return pipeline_store.macro_time_series(indicator=indicator, limit=limit)
+
+
+@router.get("/news")
+async def get_market_news(
+    symbol: str = Query("BTC", description="Symbol: BTC, ETH, SOL, etc."),
+    limit: int = Query(15, ge=1, le=50),
+) -> Dict[str, Any]:
+    """Return crypto-related news headlines from pipeline storage (DuckDB)."""
+    from app.pipeline.storage.duckdb_store import pipeline_store
+
+    articles = pipeline_store.query_news(symbol=symbol.upper(), limit=limit)
+
+    # If pipeline hasn't run yet, trigger a manual fetch
+    if not articles:
+        logger.info(f"[news] Pipeline store empty for {symbol}, triggering live fetch...")
+        from app.pipeline.adapters.news_adapter import news_adapter
+        try:
+            raw = await news_adapter.fetch_all(symbols=[symbol.upper()], limit=limit)
+            if raw:
+                pipeline_store.upsert_news(raw)
+                articles = pipeline_store.query_news(symbol=symbol.upper(), limit=limit)
+        except Exception as e:
+            logger.warning(f"[news] Live fetch fallback failed: {e}")
+
+    # Remap DuckDB field names to match frontend expectations
+    remapped = []
+    for a in articles:
+        sym = (a.get("symbols") or [symbol.upper()])[0] if a.get("symbols") else symbol.upper()
+        remapped.append({
+            "title": a.get("title", ""),
+            "source": a.get("source", ""),
+            "url": a.get("url", ""),
+            "summary": a.get("summary", ""),
+            "date": str(a.get("published_at", "")),
+            "symbol": sym,
+        })
+
+    return {"symbol": symbol.upper(), "articles": remapped, "total": len(remapped), "source": "duckdb"}
+
+
+@router.get("/overview")
+async def get_l1_overview() -> Dict[str, Any]:
+    """Aggregate L1 data: top tickers, macro indicators, recent news."""
+    tickers = []
+    for sym in ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"]:
+        try:
+            tk = await binance_service.get_ticker(sym)
+            tickers.append({
+                "symbol": sym,
+                "price": tk.price,
+                "change_24h_pct": round(tk.change_percent, 2),
+                "volume": tk.volume,
+            })
+        except Exception:
+            pass
+
+    from app.pipeline.storage.duckdb_store import pipeline_store
+    raw_headlines = pipeline_store.query_news(limit=12)
+
+    # Remap DuckDB field names
+    headlines = []
+    for a in raw_headlines:
+        headlines.append({
+            "title": a.get("title", ""),
+            "source": a.get("source", ""),
+            "url": a.get("url", ""),
+            "date": str(a.get("published_at", "")),
+            "symbol": (a.get("symbols") or ["BTC"])[0],
+        })
+
+    return {
+        "tickers": tickers,
+        "headlines": headlines,
+        "updated": datetime.utcnow().isoformat(),
+    }

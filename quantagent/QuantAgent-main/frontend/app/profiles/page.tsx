@@ -108,7 +108,7 @@ function colorRiskLevel(level: string): string {
     aggressive: "bg-orange-500/20 text-orange-400 border-orange-500/30",
     ultra_aggressive: "bg-red-500/20 text-red-400 border-red-500/30",
   };
-  return colors[level] || "bg-slate-500/20 text-slate-400 border-slate-500/30";
+  return colors[level] || "bg-slate-500/20 text-muted-foreground border-slate-500/30";
 }
 
 // ─── Profile Card Component ──────────────────────────────────────────────────
@@ -123,8 +123,8 @@ interface ProfileCardProps {
 function ProfileCard({ profile, onSelect, onCompare, isSelected }: ProfileCardProps) {
   return (
     <div 
-      className={`relative bg-slate-800/50 border rounded-xl p-4 transition-all hover:border-slate-600 hover:bg-slate-800/70 ${
-        isSelected ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-700'
+      className={`relative bg-secondary/50 border rounded-xl p-4 transition-all hover:border-slate-600 hover:bg-secondary/70 ${
+        isSelected ? 'border-blue-500 ring-1 ring-blue-500' : 'border-border'
       }`}
     >
       {/* Header */}
@@ -136,44 +136,44 @@ function ProfileCard({ profile, onSelect, onCompare, isSelected }: ProfileCardPr
               <span className="ml-1">{profile.risk_level_name}</span>
             </Badge>
           </div>
-          <h4 className="text-slate-100 font-semibold text-sm">
+          <h4 className="text-foreground font-semibold text-sm">
             {profile.strategy_type_name}
           </h4>
-          <p className="text-slate-400 text-xs">{profile.profile_id}</p>
+          <p className="text-muted-foreground text-xs">{profile.profile_id}</p>
         </div>
         <div className="text-right">
           <div className={`text-lg font-bold ${colorReturn(profile.total_return)}`}>
             {profile.total_return >= 0 ? '+' : ''}{fmt(profile.total_return)}%
           </div>
-          <div className="text-slate-500 text-xs">总收益</div>
+          <div className="text-muted-foreground text-xs">总收益</div>
         </div>
       </div>
 
       {/* Metrics Grid */}
       <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
-        <div className="bg-slate-900/50 rounded-lg p-2">
-          <div className="text-slate-400">年化收益</div>
+        <div className="bg-card/50 rounded-lg p-2">
+          <div className="text-muted-foreground">年化收益</div>
           <div className={`font-semibold ${colorReturn(profile.annual_return)}`}>
             {profile.annual_return >= 0 ? '+' : ''}{fmt(profile.annual_return)}%
           </div>
         </div>
-        <div className="bg-slate-900/50 rounded-lg p-2">
-          <div className="text-slate-400">最大回撤</div>
+        <div className="bg-card/50 rounded-lg p-2">
+          <div className="text-muted-foreground">最大回撤</div>
           <div className="text-red-400 font-semibold">-{fmt(profile.max_drawdown)}%</div>
         </div>
-        <div className="bg-slate-900/50 rounded-lg p-2">
-          <div className="text-slate-400">夏普比率</div>
+        <div className="bg-card/50 rounded-lg p-2">
+          <div className="text-muted-foreground">夏普比率</div>
           <div className="text-blue-400 font-semibold">{fmt(profile.sharpe_ratio)}</div>
         </div>
-        <div className="bg-slate-900/50 rounded-lg p-2">
-          <div className="text-slate-400">胜率</div>
+        <div className="bg-card/50 rounded-lg p-2">
+          <div className="text-muted-foreground">胜率</div>
           <div className="text-cyan-400 font-semibold">{fmt(profile.win_rate)}%</div>
         </div>
       </div>
 
       {/* Params Preview */}
-      <div className="text-xs text-slate-400 mb-3">
-        <span className="text-slate-500">参数:</span> {profile.params_display.map(p => `${p.label}=${p.value}`).join(", ")}
+      <div className="text-xs text-muted-foreground mb-3">
+        <span className="text-muted-foreground">参数:</span> {profile.params_display.map(p => `${p.label}=${p.value}`).join(", ")}
       </div>
 
       {/* Actions */}
@@ -191,7 +191,7 @@ function ProfileCard({ profile, onSelect, onCompare, isSelected }: ProfileCardPr
           size="sm" 
           variant="outline"
           onClick={() => onCompare(profile)}
-          className="border-slate-600 hover:bg-slate-700"
+          className="border-slate-600 hover:bg-secondary"
         >
           <GitCompare className="w-3 h-3" />
         </Button>
@@ -228,10 +228,10 @@ function CompareModal({ profiles, onClose }: CompareModalProps) {
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-5xl max-h-[90vh] overflow-auto">
-        <div className="sticky top-0 bg-slate-900 border-b border-slate-700 p-4 flex items-center justify-between">
-          <h2 className="text-xl font-bold text-slate-100">策略方案对比</h2>
-          <Button variant="ghost" onClick={onClose} className="text-slate-400 hover:text-slate-100">
+      <div className="bg-card border border-border rounded-2xl w-full max-w-5xl max-h-[90vh] overflow-auto">
+        <div className="sticky top-0 bg-card border-b border-border p-4 flex items-center justify-between">
+          <h2 className="text-xl font-bold text-foreground">策略方案对比</h2>
+          <Button variant="ghost" onClick={onClose} className="text-muted-foreground hover:text-foreground">
             <XCircle className="w-5 h-5" />
           </Button>
         </div>
@@ -241,10 +241,10 @@ function CompareModal({ profiles, onClose }: CompareModalProps) {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-slate-700">
-                  <th className="text-left py-2 px-3 text-slate-400">指标</th>
+                <tr className="border-b border-border">
+                  <th className="text-left py-2 px-3 text-muted-foreground">指标</th>
                   {profiles.map(p => (
-                    <th key={p.profile_id} className="text-right py-2 px-3 text-slate-100">
+                    <th key={p.profile_id} className="text-right py-2 px-3 text-foreground">
                       {p.profile_id.split('_').slice(0, 2).join(' ')}
                     </th>
                   ))}
@@ -261,8 +261,8 @@ function CompareModal({ profiles, onClose }: CompareModalProps) {
                   { label: '盈亏比', key: 'profit_factor' },
                   { label: '交易次数', key: 'total_trades' },
                 ].map(row => (
-                  <tr key={row.key} className="border-b border-slate-800">
-                    <td className="py-2 px-3 text-slate-400">{row.label}</td>
+                  <tr key={row.key} className="border-b border-border">
+                    <td className="py-2 px-3 text-muted-foreground">{row.label}</td>
                     {profiles.map(p => {
                       const val = p[row.key as keyof Profile] as number | string;
                       const display = row.suffix ? `${val}${row.suffix}` : val;
@@ -271,7 +271,7 @@ function CompareModal({ profiles, onClose }: CompareModalProps) {
                         <td key={p.profile_id} className={`py-2 px-3 text-right font-medium ${
                           row.color ? colorReturn(val as number) : 
                           row.negative && isPositive ? 'text-red-400' : 
-                          'text-slate-100'
+                          'text-foreground'
                         }`}>
                           {display}
                         </td>
@@ -284,8 +284,8 @@ function CompareModal({ profiles, onClose }: CompareModalProps) {
           </div>
 
           {/* Bar Chart */}
-          <div className="bg-slate-800/50 rounded-xl p-4">
-            <h3 className="text-slate-100 font-semibold mb-4">收益与风险对比</h3>
+          <div className="bg-secondary/50 rounded-xl p-4">
+            <h3 className="text-foreground font-semibold mb-4">收益与风险对比</h3>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData}>
@@ -306,8 +306,8 @@ function CompareModal({ profiles, onClose }: CompareModalProps) {
           </div>
 
           {/* Radar Chart */}
-          <div className="bg-slate-800/50 rounded-xl p-4">
-            <h3 className="text-slate-100 font-semibold mb-4">综合能力雷达图</h3>
+          <div className="bg-secondary/50 rounded-xl p-4">
+            <h3 className="text-foreground font-semibold mb-4">综合能力雷达图</h3>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <RadarChart data={radarData}>
@@ -403,29 +403,29 @@ export default function StrategyProfilesPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="text-slate-400">加载策略配置方案中...</div>
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-muted-foreground">加载策略配置方案中...</div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-red-400">错误: {error}</div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
+    <div className="min-h-screen bg-background text-foreground">
       {/* Header */}
-      <div className="bg-slate-900/80 border-b border-slate-800 sticky top-0 z-10 backdrop-blur-md">
+      <div className="bg-card/80 border-b border-border sticky top-0 z-10 backdrop-blur-md">
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-slate-100">策略配置方案库</h1>
-              <p className="text-slate-400 text-sm mt-1">
+              <h1 className="text-2xl font-bold text-foreground">策略配置方案库</h1>
+              <p className="text-muted-foreground text-sm mt-1">
                 预设 {profilesResponse?.total || 0} 个策略方案，覆盖 5 种风险等级
               </p>
             </div>
@@ -433,7 +433,7 @@ export default function StrategyProfilesPage() {
             {/* Filters */}
             <div className="flex items-center gap-3">
               <Select value={selectedRiskLevel} onValueChange={setSelectedRiskLevel}>
-                <SelectTrigger className="w-36 bg-slate-800 border-slate-700">
+                <SelectTrigger className="w-36 bg-secondary border-border">
                   <SelectValue placeholder="风险等级" />
                 </SelectTrigger>
                 <SelectContent>
@@ -447,7 +447,7 @@ export default function StrategyProfilesPage() {
               </Select>
               
               <Select value={selectedStrategy} onValueChange={setSelectedStrategy}>
-                <SelectTrigger className="w-40 bg-slate-800 border-slate-700">
+                <SelectTrigger className="w-40 bg-secondary border-border">
                   <SelectValue placeholder="策略类型" />
                 </SelectTrigger>
                 <SelectContent>
@@ -511,7 +511,7 @@ export default function StrategyProfilesPage() {
                     {RISK_LEVEL_ICONS[group.risk_level]}
                     <span className="ml-1 font-semibold">{group.risk_level_name}</span>
                   </Badge>
-                  <span className="text-slate-400 text-sm">{RISK_LEVEL_DESCRIPTIONS[group.risk_level]}</span>
+                  <span className="text-muted-foreground text-sm">{RISK_LEVEL_DESCRIPTIONS[group.risk_level]}</span>
                 </div>
                 
                 {/* Profiles Grid */}
@@ -545,7 +545,7 @@ export default function StrategyProfilesPage() {
         )}
 
         {filteredProfiles.length === 0 && (
-          <div className="text-center py-12 text-slate-400">
+          <div className="text-center py-12 text-muted-foreground">
             没有找到匹配的策略配置方案
           </div>
         )}

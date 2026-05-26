@@ -11,7 +11,7 @@ import {
   ArrowLeft, RefreshCw, TrendingUp, TrendingDown,
   BarChart3, PieChart as PieChartIcon, Activity, DollarSign, Target,
   Zap, AlertTriangle, Clock, Wallet, ChevronDown, ChevronRight,
-  BarChart as BarChartIcon, History, Server
+  BarChart as BarChartIcon, History, Server, Layers, Brain
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -504,7 +504,7 @@ function AnalyticsContent() {
     if (v == null) return showNA ? "N/A" : "0";
     return v.toFixed(decimals);
   };
-  const getValueColor = (v: number | null | undefined, positiveColor = "text-green-400", negativeColor = "text-red-400", neutralColor = "text-slate-400") => {
+  const getValueColor = (v: number | null | undefined, positiveColor = "text-green-400", negativeColor = "text-red-400", neutralColor = "text-muted-foreground") => {
     if (v == null) return neutralColor;
     if (v > 0) return positiveColor;
     if (v < 0) return negativeColor;
@@ -537,42 +537,42 @@ function AnalyticsContent() {
   }));
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-40">
+      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
         <div className="container mx-auto px-4 py-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Link href="/dashboard" className="text-slate-400 hover:text-slate-100 transition-colors">
+              <Link href="/dashboard" className="text-muted-foreground hover:text-foreground transition-colors">
                 <ArrowLeft className="w-5 h-5" />
               </Link>
               <div className="w-9 h-9 bg-gradient-to-br from-purple-500 to-pink-600 rounded-xl flex items-center justify-center">
                 <BarChart3 className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h1 className="text-lg font-bold text-slate-100">性能分析</h1>
-                <p className="text-[10px] text-slate-400">Performance Analytics</p>
+                <h1 className="text-lg font-bold text-foreground">性能分析</h1>
+                <p className="text-[10px] text-muted-foreground">Performance Analytics</p>
               </div>
             </div>
             <div className="flex items-center gap-3 flex-wrap">
               {/* Navigation */}
               <nav className="hidden lg:flex items-center gap-1 mr-4">
-                <Link href="/dashboard" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                <Link href="/dashboard" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
                   仪表盘
                 </Link>
-                <Link href="/trades" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                <Link href="/trades" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
                   交易流水
                 </Link>
                 <Link href="/analytics" className="px-2 py-1 text-xs text-purple-400 bg-purple-500/10 rounded border border-purple-500/20 font-medium">
                   性能分析
                 </Link>
-                <Link href="/backtest" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                <Link href="/backtest" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
                   回测
                 </Link>
-                <Link href="/replay" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                <Link href="/replay" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
                   历史回放
                 </Link>
-                <Link href="/terminal" className="px-2 py-1 text-xs text-slate-400 hover:text-slate-100 rounded hover:bg-slate-800">
+                <Link href="/terminal" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
                   终端
                 </Link>
                 <Link href="/hummingbot" className="px-2 py-1 text-xs text-cyan-400 hover:text-cyan-100 rounded hover:bg-cyan-500/10">
@@ -581,12 +581,14 @@ function AnalyticsContent() {
                 <Link href="/hummingbot-testnet" className="px-2 py-1 text-xs text-orange-400 hover:text-orange-100 rounded hover:bg-orange-500/10">
                   <span className="flex items-center gap-1"><Server className="w-3 h-3" /> Testnet</span>
                 </Link>
+                <Link href="/signals" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary flex items-center gap-1"><Layers className="w-3 h-3" /> 因子/信号</Link>
+                <Link href="/decisions" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary flex items-center gap-1"><Brain className="w-3 h-3" /> 决策中心</Link>
               </nav>
               {/* 回放会话选择器 - Session Selector */}
               <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-400 hidden sm:inline">查看会话:</span>
+                <span className="text-xs text-muted-foreground hidden sm:inline">查看会话:</span>
                 <select 
-                  className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded p-1.5 min-w-[200px] max-w-[320px]"
+                  className="bg-secondary border border-border text-foreground/90 text-xs rounded p-1.5 min-w-[200px] max-w-[320px]"
                   value={selectedSessionId || ""}
                   onChange={(e) => setSelectedSessionId(e.target.value || null)}
                 >
@@ -620,11 +622,11 @@ function AnalyticsContent() {
               >
                 {showMockData ? "隐藏演示数据" : "显示演示数据"}
               </button>
-              <Button variant="ghost" size="sm" className="h-8 text-xs text-slate-400 hover:text-slate-100" onClick={fetchData}>
+              <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-foreground" onClick={fetchData}>
                 <RefreshCw className={`w-3 h-3 mr-1 ${loading ? "animate-spin" : ""}`} /> 刷新
               </Button>
               <Link href="/replay">
-                <Button variant="ghost" size="sm" className="h-8 text-xs text-slate-400 hover:text-slate-100">
+                <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-foreground">
                   <Clock className="w-3 h-3 mr-1" /> 历史回放
                 </Button>
               </Link>
@@ -650,9 +652,9 @@ function AnalyticsContent() {
               )}
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-gray-400">
-              <div>策略: <span className="text-slate-200">{selectedSessionInfo.strategy_type?.toUpperCase()}</span></div>
-              <div>币种: <span className="text-slate-200">{selectedSessionInfo.symbol}</span></div>
-              <div>周期: <span className="text-slate-200">{selectedSessionInfo.params?.interval || '1h'}</span></div>
+              <div>策略: <span className="text-foreground/90">{selectedSessionInfo.strategy_type?.toUpperCase()}</span></div>
+              <div>币种: <span className="text-foreground/90">{selectedSessionInfo.symbol}</span></div>
+              <div>周期: <span className="text-foreground/90">{selectedSessionInfo.params?.interval || '1h'}</span></div>
               <div>初始资金: <span className="text-green-400">${selectedSessionInfo.initial_capital?.toLocaleString()}</span></div>
             </div>
             <div className="mt-2 text-xs text-gray-500">
@@ -670,151 +672,151 @@ function AnalyticsContent() {
 
         {/* Core Metrics Cards */}
         {selectedSessionId && sessionLoading && !sessionMetrics ? (
-          <div className="flex items-center justify-center py-10 text-slate-500">
+          <div className="flex items-center justify-center py-10 text-muted-foreground">
             <RefreshCw className="w-5 h-5 animate-spin mr-2" />
             <span className="text-sm">加载会话指标中...</span>
           </div>
         ) : (
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
-                <Target className="w-4 h-4 text-slate-500" />
-                <p className="text-xs text-slate-400">总收益率</p>
+                <Target className="w-4 h-4 text-muted-foreground" />
+                <p className="text-xs text-muted-foreground">总收益率</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.total_return == null ? "text-slate-400" : (activeMetrics.total_return >= 0 ? "text-green-400" : "text-red-400")}`}>
+              <p className={`text-2xl font-bold ${activeMetrics?.total_return == null ? "text-muted-foreground" : (activeMetrics.total_return >= 0 ? "text-green-400" : "text-red-400")}`}>
                 {formatPct(activeMetrics?.total_return, true)}
               </p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
-                <TrendingUp className="w-4 h-4 text-slate-500" />
-                <p className="text-xs text-slate-400">年化收益率</p>
+                <TrendingUp className="w-4 h-4 text-muted-foreground" />
+                <p className="text-xs text-muted-foreground">年化收益率</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.annualized_return == null ? "text-slate-400" : (activeMetrics.annualized_return >= 0 ? "text-green-400" : "text-red-400")}`}>
+              <p className={`text-2xl font-bold ${activeMetrics?.annualized_return == null ? "text-muted-foreground" : (activeMetrics.annualized_return >= 0 ? "text-green-400" : "text-red-400")}`}>
                 {formatPct(activeMetrics?.annualized_return, true)}
               </p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
                 <Zap className="w-4 h-4 text-blue-400" />
-                <p className="text-xs text-slate-400">夏普比率</p>
+                <p className="text-xs text-muted-foreground">夏普比率</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.sharpe_ratio == null ? "text-slate-400" : "text-blue-400"}`}>
+              <p className={`text-2xl font-bold ${activeMetrics?.sharpe_ratio == null ? "text-muted-foreground" : "text-blue-400"}`}>
                 {activeMetrics?.sharpe_ratio != null ? activeMetrics.sharpe_ratio.toFixed(2) : "N/A"}
               </p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
                 <AlertTriangle className="w-4 h-4 text-red-400" />
-                <p className="text-xs text-slate-400">最大回撤</p>
+                <p className="text-xs text-muted-foreground">最大回撤</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.max_drawdown_pct == null ? "text-slate-400" : "text-red-400"}`}>
+              <p className={`text-2xl font-bold ${activeMetrics?.max_drawdown_pct == null ? "text-muted-foreground" : "text-red-400"}`}>
                 {activeMetrics?.max_drawdown_pct != null ? `-${Math.abs(activeMetrics.max_drawdown_pct).toFixed(2)}%` : "N/A"}
               </p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
                 <Clock className="w-4 h-4 text-amber-400" />
-                <p className="text-xs text-slate-400">回撤持续期</p>
+                <p className="text-xs text-muted-foreground">回撤持续期</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.max_drawdown_duration == null ? "text-slate-400" : "text-amber-400"}`}>
+              <p className={`text-2xl font-bold ${activeMetrics?.max_drawdown_duration == null ? "text-muted-foreground" : "text-amber-400"}`}>
                 {activeMetrics?.max_drawdown_duration != null ? `${activeMetrics.max_drawdown_duration} 天` : "N/A"}
               </p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
                 <Activity className="w-4 h-4 text-purple-400" />
-                <p className="text-xs text-slate-400">胜率</p>
+                <p className="text-xs text-muted-foreground">胜率</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.win_rate == null ? "text-slate-400" : "text-purple-400"}`}>
+              <p className={`text-2xl font-bold ${activeMetrics?.win_rate == null ? "text-muted-foreground" : "text-purple-400"}`}>
                 {activeMetrics?.win_rate != null ? `${activeMetrics.win_rate.toFixed(1)}%` : "N/A"}
               </p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
                 <DollarSign className="w-4 h-4 text-yellow-400" />
-                <p className="text-xs text-slate-400">盈亏比</p>
+                <p className="text-xs text-muted-foreground">盈亏比</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.profit_factor == null ? "text-slate-400" : "text-yellow-400"}`}>
+              <p className={`text-2xl font-bold ${activeMetrics?.profit_factor == null ? "text-muted-foreground" : "text-yellow-400"}`}>
                 {activeMetrics?.profit_factor != null ? activeMetrics.profit_factor.toFixed(2) : "N/A"}
               </p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
                 <TrendingUp className="w-4 h-4 text-cyan-400" />
-                <p className="text-xs text-slate-400">卡玛比率</p>
+                <p className="text-xs text-muted-foreground">卡玛比率</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.calmar_ratio == null ? "text-slate-400" : "text-cyan-400"}`}>
+              <p className={`text-2xl font-bold ${activeMetrics?.calmar_ratio == null ? "text-muted-foreground" : "text-cyan-400"}`}>
                 {activeMetrics?.calmar_ratio != null ? activeMetrics.calmar_ratio.toFixed(2) : "N/A"}
               </p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
                 <TrendingDown className="w-4 h-4 text-indigo-400" />
-                <p className="text-xs text-slate-400">Sortino 比率</p>
+                <p className="text-xs text-muted-foreground">Sortino 比率</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.sortino_ratio == null ? "text-slate-400" : "text-indigo-400"}`}>
+              <p className={`text-2xl font-bold ${activeMetrics?.sortino_ratio == null ? "text-muted-foreground" : "text-indigo-400"}`}>
                 {activeMetrics?.sortino_ratio != null ? activeMetrics.sortino_ratio.toFixed(2) : "N/A"}
               </p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
                 <Activity className="w-4 h-4 text-pink-400" />
-                <p className="text-xs text-slate-400">波动率</p>
+                <p className="text-xs text-muted-foreground">波动率</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.volatility == null ? "text-slate-400" : "text-pink-400"}`}>
+              <p className={`text-2xl font-bold ${activeMetrics?.volatility == null ? "text-muted-foreground" : "text-pink-400"}`}>
                 {activeMetrics?.volatility != null ? `${activeMetrics.volatility.toFixed(2)}%` : "N/A"}
               </p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
                 <BarChart3 className="w-4 h-4 text-orange-400" />
-                <p className="text-xs text-slate-400">交易次数</p>
+                <p className="text-xs text-muted-foreground">交易次数</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.total_trades == null ? "text-slate-400" : "text-slate-100"}`}>
+              <p className={`text-2xl font-bold ${activeMetrics?.total_trades == null ? "text-muted-foreground" : "text-foreground"}`}>
                 {activeMetrics?.total_trades ?? "N/A"}
               </p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
                 <Wallet className="w-4 h-4 text-green-400" />
-                <p className="text-xs text-slate-400">当前权益</p>
+                <p className="text-xs text-muted-foreground">当前权益</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.final_equity == null ? "text-slate-400" : "text-green-400"}`}>
+              <p className={`text-2xl font-bold ${activeMetrics?.final_equity == null ? "text-muted-foreground" : "text-green-400"}`}>
                 {formatMoney(activeMetrics?.final_equity, true)}
               </p>
             </CardContent>
@@ -849,10 +851,10 @@ function AnalyticsContent() {
         )}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Equity Curve Chart */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/30 border-slate-700/50">
+          <Card className="bg-card border-border/50">
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+                <CardTitle className="text-foreground text-base flex items-center gap-2">
                   <TrendingUp className="w-4 h-4 text-green-400" />
                   权益曲线
                   {selectedSessionId && sessionEquityData ? (
@@ -869,7 +871,7 @@ function AnalyticsContent() {
             </CardHeader>
             <CardContent className="h-[300px]">
               {loading || sessionLoading ? (
-                <div className="flex items-center justify-center h-full text-slate-500">
+                <div className="flex items-center justify-center h-full text-muted-foreground">
                   <RefreshCw className="w-5 h-5 animate-spin mr-2" /> 加载中...
                 </div>
               ) : selectedSessionId && sessionEquityData?.normalized_replay?.length > 0 ? (
@@ -929,10 +931,10 @@ function AnalyticsContent() {
                   </LineChart>
                 </ResponsiveContainer>
               ) : chartData.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-slate-500 text-sm space-y-2">
+                <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-sm space-y-2">
                   <BarChart3 className="w-12 h-12 opacity-30" />
                   <p>暂无权益数据</p>
-                  <p className="text-xs text-slate-600">
+                  <p className="text-xs text-muted-foreground/50">
                     请先在 <Link href="/dashboard" className="text-blue-400 hover:underline">仪表盘</Link> 进行模拟交易
                   </p>
                 </div>
@@ -962,9 +964,9 @@ function AnalyticsContent() {
           </Card>
 
           {/* Drawdown Chart */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/30 border-slate-700/50">
+          <Card className="bg-card border-border/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+              <CardTitle className="text-foreground text-base flex items-center gap-2">
                 <TrendingDown className="w-4 h-4 text-red-400" />
                 回撤曲线
                 {selectedSessionId && sessionEquityData && (
@@ -976,7 +978,7 @@ function AnalyticsContent() {
             </CardHeader>
             <CardContent className="h-[300px]">
               {loading || sessionLoading ? (
-                <div className="flex items-center justify-center h-full text-slate-500">
+                <div className="flex items-center justify-center h-full text-muted-foreground">
                   <RefreshCw className="w-5 h-5 animate-spin mr-2" /> 加载中...
                 </div>
               ) : (() => {
@@ -998,10 +1000,10 @@ function AnalyticsContent() {
                 const hasDrawdownData = drawdownChartData.length > 0 && drawdownChartData.some((d: any) => d.drawdown !== 0);
                 
                 return !hasDrawdownData ? (
-                  <div className="flex flex-col items-center justify-center h-full text-slate-500 text-sm space-y-2">
+                  <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-sm space-y-2">
                     <TrendingDown className="w-12 h-12 opacity-30" />
                     <p>暂无回撤数据</p>
-                    <p className="text-xs text-slate-600">
+                    <p className="text-xs text-muted-foreground/50">
                       开始交易后将在此显示回撤曲线
                     </p>
                   </div>
@@ -1027,9 +1029,9 @@ function AnalyticsContent() {
 
         {/* 交易记录区域 - Session Trades Table */}
         {selectedSessionId && sessionTrades.length > 0 ? (
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/30 border-slate-700/50">
+          <Card className="bg-card border-border/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+              <CardTitle className="text-foreground text-base flex items-center gap-2">
                 <Activity className="w-4 h-4 text-cyan-400" />
                 交易记录
                 <Badge variant="outline" className="text-[10px] bg-cyan-500/10 text-cyan-400 border-cyan-500/20">
@@ -1052,7 +1054,7 @@ function AnalyticsContent() {
                   </thead>
                   <tbody>
                     {sessionTrades.slice(0, 50).map((trade, idx) => (
-                      <tr key={trade.trade_id || idx} className="border-b border-gray-800 hover:bg-slate-800/30">
+                      <tr key={trade.trade_id || idx} className="border-b border-gray-800 hover:bg-secondary/30">
                         <td className="py-2 text-gray-300">{safeFormatDate(trade.created_at)}</td>
                         <td className={`py-2 font-medium ${trade.side === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
                           {trade.side}
@@ -1078,29 +1080,29 @@ function AnalyticsContent() {
                 </table>
               </div>
               {sessionTrades.length > 50 && (
-                <p className="text-xs text-slate-500 text-center mt-3">
+                <p className="text-xs text-muted-foreground text-center mt-3">
                   显示前 50 条记录，共 {sessionTrades.length} 笔交易
                 </p>
               )}
             </CardContent>
           </Card>
         ) : selectedSessionId ? (
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/30 border-slate-700/50">
+          <Card className="bg-card border-border/50">
             <CardContent className="py-8">
-              <div className="flex flex-col items-center justify-center text-slate-500 gap-2">
+              <div className="flex flex-col items-center justify-center text-muted-foreground gap-2">
                 <Activity className="w-8 h-8 opacity-40" />
                 <p className="text-sm">暂无交易记录</p>
-                <p className="text-xs text-slate-600">该回放会话尚未产生交易</p>
+                <p className="text-xs text-muted-foreground/50">该回放会话尚未产生交易</p>
               </div>
             </CardContent>
           </Card>
         ) : (
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/30 border-slate-700/50">
+          <Card className="bg-card border-border/50">
             <CardContent className="py-8">
-              <div className="flex flex-col items-center justify-center text-slate-500 gap-2">
+              <div className="flex flex-col items-center justify-center text-muted-foreground gap-2">
                 <Activity className="w-8 h-8 opacity-40" />
                 <p className="text-sm">请选择回放会话查看交易明细</p>
-                <p className="text-xs text-slate-600">在页面顶部的「查看会话」下拉框中选择一个已完成的回放会话</p>
+                <p className="text-xs text-muted-foreground/50">在页面顶部的「查看会话」下拉框中选择一个已完成的回放会话</p>
               </div>
             </CardContent>
           </Card>
@@ -1109,20 +1111,20 @@ function AnalyticsContent() {
         {/* Strategy Attribution & Comparison Row */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Profit Attribution Pie Chart */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/30 border-slate-700/50">
+          <Card className="bg-card border-border/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+              <CardTitle className="text-foreground text-base flex items-center gap-2">
                 <PieChartIcon className="w-4 h-4 text-purple-400" />
                 策略收益归因 (Attribution)
               </CardTitle>
             </CardHeader>
             <CardContent className="h-[300px]">
               {loading ? (
-                <div className="flex items-center justify-center h-full text-slate-500">
+                <div className="flex items-center justify-center h-full text-muted-foreground">
                   <RefreshCw className="w-5 h-5 animate-spin mr-2" /> 加载中...
                 </div>
               ) : attribution.length === 0 ? (
-                <div className="flex items-center justify-center h-full text-slate-500 text-sm">
+                <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
                   暂无归因数据，需要完成至少一笔交易
                 </div>
               ) : (
@@ -1156,11 +1158,11 @@ function AnalyticsContent() {
                   {attribution.slice(0, 8).map((entry, index) => (
                     <div key={entry.strategy_id} className="flex items-center gap-1 text-[10px]">
                       <div className="w-2 h-2 rounded-full" style={{ backgroundColor: STRATEGY_COLORS[index % STRATEGY_COLORS.length] }} />
-                      <span className="text-slate-400">{entry.strategy_id}</span>
+                      <span className="text-muted-foreground">{entry.strategy_id}</span>
                     </div>
                   ))}
                   {attribution.length > 8 && (
-                    <span className="text-slate-500 text-[10px]">+{attribution.length - 8} 更多</span>
+                    <span className="text-muted-foreground text-[10px]">+{attribution.length - 8} 更多</span>
                   )}
                 </div>
               )}
@@ -1168,20 +1170,20 @@ function AnalyticsContent() {
           </Card>
 
           {/* Strategy Comparison Bar Chart */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/30 border-slate-700/50">
+          <Card className="bg-card border-border/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+              <CardTitle className="text-foreground text-base flex items-center gap-2">
                 <Activity className="w-4 h-4 text-blue-400" />
                 模拟盘 vs 回测表现对比
               </CardTitle>
             </CardHeader>
             <CardContent className="h-[300px]">
               {loading ? (
-                <div className="flex items-center justify-center h-full text-slate-500">
+                <div className="flex items-center justify-center h-full text-muted-foreground">
                   <RefreshCw className="w-5 h-5 animate-spin mr-2" /> 加载中...
                 </div>
               ) : comparison.length === 0 ? (
-                <div className="flex items-center justify-center h-full text-slate-500 text-sm">
+                <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
                   暂无对比数据
                 </div>
               ) : (
@@ -1208,17 +1210,17 @@ function AnalyticsContent() {
         </div>
 
         {/* Strategy Attribution Detail - 增强归因分析 */}
-        <Card className="bg-gradient-to-br from-slate-900 to-slate-800/30 border-slate-700/50">
+        <Card className="bg-card border-border/50">
           <CardHeader className="pb-2 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-            <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+            <CardTitle className="text-foreground text-base flex items-center gap-2">
               <Target className="w-4 h-4 text-orange-400" />
               增强归因分析 (Enhanced Attribution)
             </CardTitle>
             <div className="flex items-center gap-3 flex-wrap">
               <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-400 hidden sm:inline">数据模式:</span>
+                <span className="text-xs text-muted-foreground hidden sm:inline">数据模式:</span>
                 <select 
-                  className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded p-1.5"
+                  className="bg-secondary border border-border text-foreground/90 text-xs rounded p-1.5"
                   value={attrMode}
                   onChange={(e) => {
                     setAttrMode(e.target.value);
@@ -1235,9 +1237,9 @@ function AnalyticsContent() {
               
               {attrMode === "historical_replay" && (
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-400">回放会话:</span>
+                  <span className="text-xs text-muted-foreground">回放会话:</span>
                   <select 
-                    className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded p-1.5 max-w-[200px]"
+                    className="bg-secondary border border-border text-foreground/90 text-xs rounded p-1.5 max-w-[200px]"
                     value={attrSessionId}
                     onChange={(e) => setAttrSessionId(e.target.value)}
                   >
@@ -1252,9 +1254,9 @@ function AnalyticsContent() {
               )}
 
               <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-400 hidden sm:inline">策略:</span>
+                <span className="text-xs text-muted-foreground hidden sm:inline">策略:</span>
                 <select 
-                  className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded p-1.5"
+                  className="bg-secondary border border-border text-foreground/90 text-xs rounded p-1.5"
                   value={selectedStrategy}
                   onChange={(e) => setSelectedStrategy(e.target.value)}
                 >
@@ -1267,7 +1269,7 @@ function AnalyticsContent() {
               <Button 
                 variant="ghost" 
                 size="sm" 
-                className="h-8 text-xs text-slate-400 hover:text-slate-100"
+                className="h-8 text-xs text-muted-foreground hover:text-foreground"
                 onClick={fetchEnhancedAttribution}
                 disabled={enhancedAttrLoading}
               >
@@ -1277,14 +1279,14 @@ function AnalyticsContent() {
           </CardHeader>
           <CardContent>
             {enhancedAttrLoading ? (
-              <div className="flex items-center justify-center h-[200px] text-slate-500">
+              <div className="flex items-center justify-center h-[200px] text-muted-foreground">
                 <RefreshCw className="w-5 h-5 animate-spin mr-2" /> 加载增强归因数据中...
               </div>
             ) : enhancedAttribution?.error ? (
-              <div className="flex flex-col items-center justify-center h-[200px] text-slate-400 gap-3">
+              <div className="flex flex-col items-center justify-center h-[200px] text-muted-foreground gap-3">
                 <AlertTriangle className="w-8 h-8 text-yellow-400 opacity-70" />
                 <p className="text-sm text-yellow-400">{enhancedAttribution.message || '归因分析暂不可用'}</p>
-                <p className="text-[10px] text-slate-500 max-w-md text-center">
+                <p className="text-[10px] text-muted-foreground max-w-md text-center">
                   {enhancedAttribution.error || '请确保已运行过相关模式的交易（回测/历史回放/模拟盘）'}
                 </p>
                 <button 
@@ -1298,20 +1300,20 @@ function AnalyticsContent() {
               <div className="space-y-4">
                 {/* 汇总统计卡片 */}
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                  <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
-                    <p className="text-[10px] text-slate-500 uppercase">总滑点影响</p>
+                  <div className="p-3 bg-secondary/30 rounded-lg border border-border/30">
+                    <p className="text-[10px] text-muted-foreground uppercase">总滑点影响</p>
                     <p className={`text-lg font-bold ${(enhancedAttribution.summary?.total_slippage_impact || 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
                       {formatMoney(enhancedAttribution.summary?.total_slippage_impact, true)}
                     </p>
                   </div>
-                  <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
-                    <p className="text-[10px] text-slate-500 uppercase">总延迟影响</p>
+                  <div className="p-3 bg-secondary/30 rounded-lg border border-border/30">
+                    <p className="text-[10px] text-muted-foreground uppercase">总延迟影响</p>
                     <p className={`text-lg font-bold ${(enhancedAttribution.summary?.total_latency_impact || 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
                       {formatMoney(enhancedAttribution.summary?.total_latency_impact, true)}
                     </p>
                   </div>
-                  <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
-                    <p className="text-[10px] text-slate-500 uppercase">平均执行质量</p>
+                  <div className="p-3 bg-secondary/30 rounded-lg border border-border/30">
+                    <p className="text-[10px] text-muted-foreground uppercase">平均执行质量</p>
                     <p className={`text-lg font-bold ${
                       (enhancedAttribution.summary?.avg_execution_quality || 0) >= 80 ? "text-green-400" : 
                       (enhancedAttribution.summary?.avg_execution_quality || 0) >= 50 ? "text-yellow-400" : "text-red-400"
@@ -1321,23 +1323,23 @@ function AnalyticsContent() {
                         : "N/A"}
                     </p>
                   </div>
-                  <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
-                    <p className="text-[10px] text-slate-500 uppercase">平均时间差</p>
-                    <p className="text-lg font-bold text-slate-300">
+                  <div className="p-3 bg-secondary/30 rounded-lg border border-border/30">
+                    <p className="text-[10px] text-muted-foreground uppercase">平均时间差</p>
+                    <p className="text-lg font-bold text-foreground/80">
                       {enhancedAttribution.summary?.avg_timing_diff != null 
                         ? `${enhancedAttribution.summary.avg_timing_diff.toFixed(1)}秒` 
                         : "N/A"}
                     </p>
                   </div>
-                  <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
-                    <p className="text-[10px] text-slate-500 uppercase">总手续费影响</p>
+                  <div className="p-3 bg-secondary/30 rounded-lg border border-border/30">
+                    <p className="text-[10px] text-muted-foreground uppercase">总手续费影响</p>
                     <p className={`text-lg font-bold ${(enhancedAttribution.summary?.total_fee_impact || 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
                       {formatMoney(enhancedAttribution.summary?.total_fee_impact, true)}
                     </p>
                   </div>
-                  <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
-                    <p className="text-[10px] text-slate-500 uppercase">交易笔数</p>
-                    <p className="text-lg font-bold text-slate-100">
+                  <div className="p-3 bg-secondary/30 rounded-lg border border-border/30">
+                    <p className="text-[10px] text-muted-foreground uppercase">交易笔数</p>
+                    <p className="text-lg font-bold text-foreground">
                       {enhancedAttribution.trades?.length ?? 0}
                     </p>
                   </div>
@@ -1347,7 +1349,7 @@ function AnalyticsContent() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs text-left">
                     <thead>
-                      <tr className="text-slate-500 border-b border-slate-800">
+                      <tr className="text-muted-foreground border-b border-border">
                         <th className="pb-2 font-medium whitespace-nowrap">时间</th>
                         <th className="pb-2 font-medium">品种</th>
                         <th className="pb-2 font-medium text-right">价格差异</th>
@@ -1358,10 +1360,10 @@ function AnalyticsContent() {
                         <th className="pb-2 font-medium text-right">时间差</th>
                       </tr>
                     </thead>
-                    <tbody className="text-slate-300">
+                    <tbody className="text-foreground/80">
                       {enhancedAttribution.trades?.slice(0, 20).map((t: any, idx: number) => (
-                        <tr key={idx} className="border-b border-slate-800/50 hover:bg-slate-800/20">
-                          <td className="py-2 text-slate-400 whitespace-nowrap">
+                        <tr key={idx} className="border-b border-border/50 hover:bg-secondary/20">
+                          <td className="py-2 text-muted-foreground whitespace-nowrap">
                             {t.timestamp ? safeFormatDate(t.timestamp) : "-"}
                           </td>
                           <td className="py-2">
@@ -1394,18 +1396,18 @@ function AnalyticsContent() {
                                 {t.execution_quality.toFixed(0)}%
                               </Badge>
                             ) : (
-                              <span className="text-slate-500">N/A</span>
+                              <span className="text-muted-foreground">N/A</span>
                             )}
                           </td>
-                          <td className="py-2 text-right font-mono text-slate-400">
+                          <td className="py-2 text-right font-mono text-muted-foreground">
                             {t.timing_diff != null ? `${t.timing_diff.toFixed(1)}秒` : "N/A"}
                           </td>
                         </tr>
                       ))}
                       {/* 汇总行 */}
                       {enhancedAttribution.summary && (
-                        <tr className="border-t-2 border-slate-700 bg-slate-800/30 font-semibold">
-                          <td className="py-3 text-slate-300" colSpan={2}>汇总</td>
+                        <tr className="border-t-2 border-border bg-secondary/30 font-semibold">
+                          <td className="py-3 text-foreground/80" colSpan={2}>汇总</td>
                           <td className={`py-3 text-right font-mono ${(enhancedAttribution.summary.total_delta_price || 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
                             {formatMoney(enhancedAttribution.summary.total_delta_price, true)}
                           </td>
@@ -1430,7 +1432,7 @@ function AnalyticsContent() {
                               平均 {enhancedAttribution.summary.avg_execution_quality?.toFixed(0) ?? "N/A"}%
                             </Badge>
                           </td>
-                          <td className="py-3 text-right font-mono text-slate-300">
+                          <td className="py-3 text-right font-mono text-foreground/80">
                             平均 {enhancedAttribution.summary.avg_timing_diff?.toFixed(1) ?? "N/A"}秒
                           </td>
                         </tr>
@@ -1440,7 +1442,7 @@ function AnalyticsContent() {
                 </div>
 
                 {enhancedAttribution.trades?.length > 20 && (
-                  <p className="text-xs text-slate-500 text-center">
+                  <p className="text-xs text-muted-foreground text-center">
                     显示前 20 条记录，共 {enhancedAttribution.trades.length} 条
                   </p>
                 )}
@@ -1449,8 +1451,8 @@ function AnalyticsContent() {
               <div className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                   {/* Waterfall Chart Simulation */}
-                  <div className="h-[300px] bg-slate-800/20 p-4 rounded-xl border border-slate-700/30">
-                    <p className="text-sm font-medium text-slate-300 mb-4">总体归因瀑布图 (Global Attribution)</p>
+                  <div className="h-[300px] bg-secondary/20 p-4 rounded-xl border border-border/30">
+                    <p className="text-sm font-medium text-foreground/80 mb-4">总体归因瀑布图 (Global Attribution)</p>
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart
                         data={[
@@ -1474,8 +1476,8 @@ function AnalyticsContent() {
                   </div>
 
                   {/* Daily Stacked Bar Chart */}
-                  <div className="h-[300px] bg-slate-800/20 p-4 rounded-xl border border-slate-700/30">
-                    <p className="text-sm font-medium text-slate-300 mb-4">每日差异时间序列堆积图 (Daily Diff)</p>
+                  <div className="h-[300px] bg-secondary/20 p-4 rounded-xl border border-border/30">
+                    <p className="text-sm font-medium text-foreground/80 mb-4">每日差异时间序列堆积图 (Daily Diff)</p>
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={strategyAttribution.daily || []}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
@@ -1494,26 +1496,26 @@ function AnalyticsContent() {
                 </div>
 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                  <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
-                    <p className="text-[10px] text-slate-500 uppercase">价格差异 (Delta Price)</p>
+                  <div className="p-3 bg-secondary/30 rounded-lg border border-border/30">
+                    <p className="text-[10px] text-muted-foreground uppercase">价格差异 (Delta Price)</p>
                     <p className={`text-lg font-bold ${(strategyAttribution.global.delta_price || 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
                       {formatMoney(strategyAttribution.global.delta_price)}
                     </p>
                   </div>
-                  <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
-                    <p className="text-[10px] text-slate-500 uppercase">成交率差异 (Delta Fill)</p>
+                  <div className="p-3 bg-secondary/30 rounded-lg border border-border/30">
+                    <p className="text-[10px] text-muted-foreground uppercase">成交率差异 (Delta Fill)</p>
                     <p className={`text-lg font-bold ${(strategyAttribution.global.delta_fill || 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
                       {formatMoney(strategyAttribution.global.delta_fill)}
                     </p>
                   </div>
-                  <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
-                    <p className="text-[10px] text-slate-500 uppercase">手续费差异 (Delta Fees)</p>
+                  <div className="p-3 bg-secondary/30 rounded-lg border border-border/30">
+                    <p className="text-[10px] text-muted-foreground uppercase">手续费差异 (Delta Fees)</p>
                     <p className={`text-lg font-bold ${(strategyAttribution.global.delta_fees || 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
                       {formatMoney(strategyAttribution.global.delta_fees)}
                     </p>
                   </div>
-                  <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
-                    <p className="text-[10px] text-slate-500 uppercase">总差异 (Delta Total)</p>
+                  <div className="p-3 bg-secondary/30 rounded-lg border border-border/30">
+                    <p className="text-[10px] text-muted-foreground uppercase">总差异 (Delta Total)</p>
                     <p className={`text-lg font-bold ${(strategyAttribution.global.delta_total || 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
                       {formatMoney(strategyAttribution.global.delta_total)}
                     </p>
@@ -1523,7 +1525,7 @@ function AnalyticsContent() {
                 <div className="overflow-x-auto">
                   <table className="w-100 text-xs text-left">
                     <thead>
-                      <tr className="text-slate-500 border-b border-slate-800">
+                      <tr className="text-muted-foreground border-b border-border">
                         <th className="pb-2 font-medium">时间 (Time)</th>
                         <th className="pb-2 font-medium">品种</th>
                         <th className="pb-2 font-medium">回测价</th>
@@ -1534,10 +1536,10 @@ function AnalyticsContent() {
                         <th className="pb-2 font-medium text-right">总差异</th>
                       </tr>
                     </thead>
-                    <tbody className="text-slate-300">
+                    <tbody className="text-foreground/80">
                       {strategyAttribution.trades?.slice(0, 15).map((t: any, idx: number) => (
-                        <tr key={idx} className="border-b border-slate-800/50 hover:bg-slate-800/20">
-                          <td className="py-2 text-slate-400 whitespace-nowrap">{safeFormatDate(t.timestamp)}</td>
+                        <tr key={idx} className="border-b border-border/50 hover:bg-secondary/20">
+                          <td className="py-2 text-muted-foreground whitespace-nowrap">{safeFormatDate(t.timestamp)}</td>
                           <td className="py-2">
                             <Badge variant="outline" className="text-blue-400 border-blue-500/20">
                               {t.symbol}
@@ -1564,7 +1566,7 @@ function AnalyticsContent() {
                 </div>
               </div>
             ) : (
-              <div className="flex items-center justify-center h-[200px] text-slate-500 text-sm">
+              <div className="flex items-center justify-center h-[200px] text-muted-foreground text-sm">
                 加载归因数据中...
               </div>
             )}
@@ -1573,52 +1575,52 @@ function AnalyticsContent() {
 
         {/* Additional Stats Row */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/30 border-slate-700/50">
+          <Card className="bg-card border-border/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 text-base">交易统计</CardTitle>
+              <CardTitle className="text-foreground text-base">交易统计</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 gap-4">
-                <div className="p-3 bg-slate-800/50 rounded-lg">
-                  <p className="text-xs text-slate-400 mb-1">盈利交易</p>
+                <div className="p-3 bg-secondary/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">盈利交易</p>
                   <p className="text-lg font-bold text-green-400">{activeMetrics?.winning_trades || 0}</p>
                 </div>
-                <div className="p-3 bg-slate-800/50 rounded-lg">
-                  <p className="text-xs text-slate-400 mb-1">亏损交易</p>
+                <div className="p-3 bg-secondary/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">亏损交易</p>
                   <p className="text-lg font-bold text-red-400">{activeMetrics?.losing_trades || 0}</p>
                 </div>
-                <div className="p-3 bg-slate-800/50 rounded-lg">
-                  <p className="text-xs text-slate-400 mb-1">平均盈利</p>
+                <div className="p-3 bg-secondary/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">平均盈利</p>
                   <p className="text-lg font-bold text-green-400">{formatMoney(activeMetrics?.avg_profit)}</p>
                 </div>
-                <div className="p-3 bg-slate-800/50 rounded-lg">
-                  <p className="text-xs text-slate-400 mb-1">平均亏损</p>
+                <div className="p-3 bg-secondary/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">平均亏损</p>
                   <p className="text-lg font-bold text-red-400">{formatMoney(activeMetrics?.avg_loss)}</p>
                 </div>
-                <div className="p-3 bg-slate-800/50 rounded-lg">
-                  <p className="text-xs text-slate-400 mb-1">最大连续盈利</p>
+                <div className="p-3 bg-secondary/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">最大连续盈利</p>
                   <p className="text-lg font-bold text-purple-400">{activeMetrics?.max_consecutive_wins || 0} 笔</p>
                 </div>
-                <div className="p-3 bg-slate-800/50 rounded-lg">
-                  <p className="text-xs text-slate-400 mb-1">最大连续亏损</p>
+                <div className="p-3 bg-secondary/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">最大连续亏损</p>
                   <p className="text-lg font-bold text-orange-400">{activeMetrics?.max_consecutive_losses || 0} 笔</p>
                 </div>
-                <div className="p-3 bg-slate-800/50 rounded-lg">
-                  <p className="text-xs text-slate-400 mb-1">Sortino比率</p>
+                <div className="p-3 bg-secondary/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">Sortino比率</p>
                   <p className="text-lg font-bold text-blue-400">{(activeMetrics?.sortino_ratio || 0).toFixed(2)}</p>
                 </div>
-                <div className="p-3 bg-slate-800/50 rounded-lg">
-                  <p className="text-xs text-slate-400 mb-1">年化波动率</p>
-                  <p className="text-lg font-bold text-slate-300">{(activeMetrics?.volatility || 0).toFixed(2)}%</p>
+                <div className="p-3 bg-secondary/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">年化波动率</p>
+                  <p className="text-lg font-bold text-foreground/80">{(activeMetrics?.volatility || 0).toFixed(2)}%</p>
                 </div>
               </div>
             </CardContent>
           </Card>
 
           {/* Portfolio Exposure */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/30 border-slate-700/50">
+          <Card className="bg-card border-border/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+              <CardTitle className="text-foreground text-base flex items-center gap-2">
                 <PieChartIcon className="w-4 h-4 text-blue-400" />
                 资产配置与风险暴露
               </CardTitle>
@@ -1626,31 +1628,31 @@ function AnalyticsContent() {
             <CardContent>
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="p-3 bg-slate-800/50 rounded-lg">
-                    <p className="text-xs text-slate-400 mb-1">总权益</p>
+                  <div className="p-3 bg-secondary/50 rounded-lg">
+                    <p className="text-xs text-muted-foreground mb-1">总权益</p>
                     <p className="text-lg font-bold text-green-400">{formatMoney(portfolio?.total_equity)}</p>
                   </div>
-                  <div className="p-3 bg-slate-800/50 rounded-lg">
-                    <p className="text-xs text-slate-400 mb-1">现金占比</p>
-                    <p className="text-lg font-bold text-slate-300">{(portfolio?.cash_pct || 100).toFixed(1)}%</p>
+                  <div className="p-3 bg-secondary/50 rounded-lg">
+                    <p className="text-xs text-muted-foreground mb-1">现金占比</p>
+                    <p className="text-lg font-bold text-foreground/80">{(portfolio?.cash_pct || 100).toFixed(1)}%</p>
                   </div>
                 </div>
 
-                <div className="p-3 bg-slate-800/50 rounded-lg">
-                  <p className="text-xs text-slate-400 mb-2">风险暴露</p>
+                <div className="p-3 bg-secondary/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-2">风险暴露</p>
                   <div className="flex items-center justify-between text-sm mb-2">
                     <span className="text-green-400">多頭: ${(portfolio?.exposure.long || 0).toFixed(2)}</span>
                     <span className="text-red-400">空頭: ${(portfolio?.exposure.short || 0).toFixed(2)}</span>
                   </div>
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-slate-400">净暴露: ${(portfolio?.exposure.net_exposure || 0).toFixed(2)}</span>
+                    <span className="text-muted-foreground">净暴露: ${(portfolio?.exposure.net_exposure || 0).toFixed(2)}</span>
                     <span className="text-blue-400">杠杆: {(portfolio?.exposure.leverage || 0).toFixed(2)}x</span>
                   </div>
                 </div>
 
                 {portfolio && portfolio.asset_allocation.length > 0 && (
-                  <div className="p-3 bg-slate-800/50 rounded-lg">
-                    <p className="text-xs text-slate-400 mb-2">持仓分布</p>
+                  <div className="p-3 bg-secondary/50 rounded-lg">
+                    <p className="text-xs text-muted-foreground mb-2">持仓分布</p>
                     <div className="space-y-2">
                       {portfolio.asset_allocation.slice(0, 5).map((asset, idx) => (
                         <div key={idx} className="flex items-center justify-between">
@@ -1664,9 +1666,9 @@ function AnalyticsContent() {
                             >
                               {asset.side}
                             </Badge>
-                            <span className="text-sm text-slate-300">{asset.symbol}</span>
+                            <span className="text-sm text-foreground/80">{asset.symbol}</span>
                           </div>
-                          <span className="text-sm text-slate-400">{asset.allocation_pct.toFixed(1)}%</span>
+                          <span className="text-sm text-muted-foreground">{asset.allocation_pct.toFixed(1)}%</span>
                         </div>
                       ))}
                     </div>
@@ -1679,10 +1681,10 @@ function AnalyticsContent() {
 
         {/* ── Replay vs Backtest Comparison Section ── */}
         <div className="space-y-6">
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/30 border-slate-700/50">
+          <Card className="bg-card border-border/50">
             <CardHeader className="pb-2 flex flex-row items-center justify-between">
               <div className="flex items-center gap-2">
-                <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+                <CardTitle className="text-foreground text-base flex items-center gap-2">
                   <Activity className="w-4 h-4 text-cyan-400" />
                   回放 vs 回测 对比分析
                 </CardTitle>
@@ -1690,9 +1692,9 @@ function AnalyticsContent() {
               </div>
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-400">选择回放会话:</span>
+                  <span className="text-xs text-muted-foreground">选择回放会话:</span>
                   <select 
-                    className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded p-1.5 min-w-[280px]"
+                    className="bg-secondary border border-border text-foreground/90 text-xs rounded p-1.5 min-w-[280px]"
                     value={selectedRbSession}
                     onChange={(e) => setSelectedRbSession(e.target.value)}
                   >
@@ -1722,22 +1724,22 @@ function AnalyticsContent() {
             </CardHeader>
             <CardContent>
               {rbComparisonLoading ? (
-                <div className="flex flex-col items-center justify-center h-[200px] text-slate-500 gap-3">
+                <div className="flex flex-col items-center justify-center h-[200px] text-muted-foreground gap-3">
                   <RefreshCw className="w-6 h-6 animate-spin" />
                   <p className="text-sm">加载对比数据中...</p>
                 </div>
               ) : rbComparison?.error ? (
-                <div className="flex flex-col items-center justify-center h-[250px] text-slate-400 gap-4">
-                  <div className="w-16 h-16 rounded-full bg-slate-800/50 flex items-center justify-center">
+                <div className="flex flex-col items-center justify-center h-[250px] text-muted-foreground gap-4">
+                  <div className="w-16 h-16 rounded-full bg-secondary/50 flex items-center justify-center">
                     <AlertTriangle className="w-8 h-8 text-orange-400" />
                   </div>
                   <div className="text-center">
-                    <p className="text-sm font-medium text-slate-300 mb-1">
+                    <p className="text-sm font-medium text-foreground/80 mb-1">
                       {rbComparison.error.includes('404') || rbComparison.error.includes('暂无') 
                         ? '暂无对比数据' 
                         : '数据加载失败'}
                     </p>
-                    <p className="text-xs text-slate-500 max-w-sm">
+                    <p className="text-xs text-muted-foreground max-w-sm">
                       {rbComparison.error.includes('404') || rbComparison.error.includes('暂无')
                         ? '请先运行历史回放后再查看对比分析'
                         : '网络连接失败，请检查后端服务是否运行'}
@@ -1746,7 +1748,7 @@ function AnalyticsContent() {
                   <Button 
                     variant="outline" 
                     size="sm" 
-                    className="h-8 text-xs border-slate-600 text-slate-400 hover:text-slate-100"
+                    className="h-8 text-xs border-slate-600 text-muted-foreground hover:text-foreground"
                     onClick={() => fetchRbComparison(selectedRbSession)}
                   >
                     <RefreshCw className="w-3 h-3 mr-1" /> 重试
@@ -1756,14 +1758,14 @@ function AnalyticsContent() {
                 <div className="space-y-4">
                   {/* Replay Session Info */}
                   {rbComparison.replay_session && (
-                    <div className="flex items-center gap-4 p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
+                    <div className="flex items-center gap-4 p-3 bg-secondary/30 rounded-lg border border-border/30">
                       <Badge variant="outline" className="bg-indigo-500/10 text-indigo-400 border-indigo-500/20">
                         历史回放
                       </Badge>
-                      <span className="text-sm text-slate-300">
+                      <span className="text-sm text-foreground/80">
                         {rbComparison.replay_session.symbol} / {rbComparison.replay_session.strategy_type}
                       </span>
-                      <span className="text-xs text-slate-500">
+                      <span className="text-xs text-muted-foreground">
                         {safeFormatDateShort(rbComparison.replay_session.start_time)} ~ {safeFormatDateShort(rbComparison.replay_session.end_time)}
                       </span>
                     </div>
@@ -1771,15 +1773,15 @@ function AnalyticsContent() {
 
                   {/* Param diff warning */}
                   {rbComparison.param_diff && Object.keys(rbComparison.param_diff).length > 0 && (
-                    <div className="mb-4 p-3 bg-slate-800/30 border border-slate-700/50 rounded-lg">
-                      <p className="text-xs font-medium text-slate-300 mb-2">参数差异说明</p>
+                    <div className="mb-4 p-3 bg-secondary/30 border border-border/50 rounded-lg">
+                      <p className="text-xs font-medium text-foreground/80 mb-2">参数差异说明</p>
                       <div className="flex flex-wrap gap-2">
                         {Object.entries(rbComparison.param_diff).map(([key, vals]: [string, any]) => {
                           const isOneSideMissing = vals.replay === "未记录" || vals.backtest === "未记录";
                           return (
                             <span key={key} className={`text-xs px-2 py-1 rounded border ${
                               isOneSideMissing 
-                                ? 'bg-slate-700/30 border-slate-600 text-slate-400'  // 柔和样式
+                                ? 'bg-secondary/30 border-slate-600 text-muted-foreground'  // 柔和样式
                                 : 'bg-red-500/10 border-red-500/20 text-red-400'     // 警告样式
                             }`}>
                               <span className="font-medium">{key}:</span>{' '}
@@ -1793,11 +1795,11 @@ function AnalyticsContent() {
 
                   {/* Equity Curve Overlay - 增强版 */}
                   {rbEquityData && (rbEquityData.replay_equity?.length > 0 || rbEquityData.backtest_equity?.length > 0) && (
-                    <div className="h-[350px] bg-slate-800/20 p-4 rounded-xl border border-slate-700/30">
-                      <p className="text-sm font-medium text-slate-300 mb-4 flex items-center gap-2">
+                    <div className="h-[350px] bg-secondary/20 p-4 rounded-xl border border-border/30">
+                      <p className="text-sm font-medium text-foreground/80 mb-4 flex items-center gap-2">
                         <TrendingUp className="w-4 h-4 text-cyan-400" />
                         权益曲线叠加对比
-                        <Badge variant="outline" className="text-[10px] bg-slate-700/50 text-slate-400 border-slate-600">
+                        <Badge variant="outline" className="text-[10px] bg-secondary/50 text-muted-foreground border-slate-600">
                           深色区域 = 回放与回测差异
                         </Badge>
                       </p>
@@ -1846,8 +1848,8 @@ function AnalyticsContent() {
                                 const backtestVal = payload.find((p: any) => p.dataKey === 'backtest_equity')?.value as number | undefined;
                                 const diff = replayVal != null && backtestVal != null ? replayVal - backtestVal : null;
                                 return (
-                                  <div className="bg-slate-800 border border-slate-700 rounded-lg p-3 text-xs">
-                                    <p className="text-slate-400 mb-2">{label}</p>
+                                  <div className="bg-secondary border border-border rounded-lg p-3 text-xs">
+                                    <p className="text-muted-foreground mb-2">{label}</p>
                                     <p className="text-blue-400">回放: {replayVal != null ? `$${replayVal.toFixed(2)}` : 'N/A'}</p>
                                     <p className="text-green-400">回测: {backtestVal != null ? `$${backtestVal.toFixed(2)}` : 'N/A'}</p>
                                     {diff != null && (
@@ -1898,7 +1900,7 @@ function AnalyticsContent() {
                   {/* Data Source Badges + Match Info */}
                   <div className="flex items-center gap-3 mb-4">
                     <DataSourceBadge source={(rbComparison.replay_session?.data_source || "REPLAY") as any} />
-                    <span className="text-xs text-slate-400">vs</span>
+                    <span className="text-xs text-muted-foreground">vs</span>
                     <DataSourceBadge source={(rbComparison.backtest_results?.[0]?.data_source || rbComparison.backtest_record?.data_source || "BACKTEST") as any} />
                     {rbComparison.match_type && (
                       <Badge variant="outline" className={`text-[10px] ${
@@ -1952,7 +1954,7 @@ function AnalyticsContent() {
                   <div className="overflow-x-auto">
                     <table className="w-full text-xs text-left">
                       <thead>
-                        <tr className="text-slate-500 border-b border-slate-800">
+                        <tr className="text-muted-foreground border-b border-border">
                           <th className="pb-2 font-medium">指标</th>
                           <th className="pb-2 font-medium text-indigo-400 text-right">回放值</th>
                           <th className="pb-2 font-medium text-emerald-400 text-right">回测值</th>
@@ -1960,7 +1962,7 @@ function AnalyticsContent() {
                           <th className="pb-2 font-medium text-center">说明</th>
                         </tr>
                       </thead>
-                      <tbody className="text-slate-300">
+                      <tbody className="text-foreground/80">
                         {(rbComparison.comparisons || []).map((row: { metric: string; label: string; replay_value: number | null; backtest_value: number | null; delta: number | null; interpretation: string }) => {
                           // 负向指标列表 - 这些指标越小越好
                           const negativeMetrics = ['max_drawdown', 'max_drawdown_pct', 'volatility', 'var_95', 'max_consecutive_losses', 'losing_trades'];
@@ -1970,7 +1972,7 @@ function AnalyticsContent() {
                           const isNotComparable = row.interpretation === '数据不可比';
                           
                           // 智能颜色标记逻辑
-                          let deltaColor = "text-slate-400";
+                          let deltaColor = "text-muted-foreground";
                           if (row.delta != null && !isNotComparable) {
                             if (isNegativeMetric) {
                               // 负向指标：delta <= 0 是好的（回放比回测小或相等）
@@ -1981,7 +1983,7 @@ function AnalyticsContent() {
                             }
                           }
                           return (
-                            <tr key={row.metric} className="border-b border-slate-800/50 hover:bg-slate-800/20">
+                            <tr key={row.metric} className="border-b border-border/50 hover:bg-secondary/20">
                               <td className="py-2 pl-0 font-medium">{row.label}</td>
                               <td className="py-2 text-indigo-400 font-mono text-right">
                                 {row.replay_value != null 
@@ -1998,7 +2000,7 @@ function AnalyticsContent() {
                                   ? `${row.delta > 0 ? '+' : ''}${row.delta.toFixed(2)}` 
                                   : "—"}
                               </td>
-                              <td className={`py-2 text-[10px] text-center ${isNotComparable ? 'text-yellow-400/70' : 'text-slate-500'}`}>{row.interpretation}</td>
+                              <td className={`py-2 text-[10px] text-center ${isNotComparable ? 'text-yellow-400/70' : 'text-muted-foreground'}`}>{row.interpretation}</td>
                             </tr>
                           );
                         })}
@@ -2008,22 +2010,22 @@ function AnalyticsContent() {
 
                   {/* Summary Cards */}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-                    <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
-                      <p className="text-[10px] text-slate-500 uppercase">最终权益</p>
+                    <div className="p-3 bg-secondary/30 rounded-lg border border-border/30">
+                      <p className="text-[10px] text-muted-foreground uppercase">最终权益</p>
                       <p className={`text-lg font-bold ${(rbComparison.replay_metrics?.final_equity || 0) >= (rbComparison.replay_session?.initial_capital || 0) ? "text-green-400" : "text-red-400"}`}>
                         ${rbComparison.replay_metrics?.final_equity?.toFixed(2) || "—"}
                       </p>
                     </div>
-                    <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
-                      <p className="text-[10px] text-slate-500 uppercase">盈利交易</p>
+                    <div className="p-3 bg-secondary/30 rounded-lg border border-border/30">
+                      <p className="text-[10px] text-muted-foreground uppercase">盈利交易</p>
                       <p className="text-lg font-bold text-green-400">{rbComparison.replay_metrics?.winning_trades || 0}</p>
                     </div>
-                    <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
-                      <p className="text-[10px] text-slate-500 uppercase">亏损交易</p>
+                    <div className="p-3 bg-secondary/30 rounded-lg border border-border/30">
+                      <p className="text-[10px] text-muted-foreground uppercase">亏损交易</p>
                       <p className="text-lg font-bold text-red-400">{rbComparison.replay_metrics?.losing_trades || 0}</p>
                     </div>
-                    <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
-                      <p className="text-[10px] text-slate-500 uppercase">时间重叠</p>
+                    <div className="p-3 bg-secondary/30 rounded-lg border border-border/30">
+                      <p className="text-[10px] text-muted-foreground uppercase">时间重叠</p>
                       <p className={`text-lg font-bold ${(rbComparison.time_overlap_pct || 0) >= 80 ? "text-green-400" : (rbComparison.time_overlap_pct || 0) >= 50 ? "text-yellow-400" : "text-red-400"}`}>
                         {rbComparison.time_overlap_pct?.toFixed(0) || "—"}%
                       </p>
@@ -2032,19 +2034,19 @@ function AnalyticsContent() {
 
                   {/* 逐笔交易对比 - 可折叠 */}
                   {rbComparison.trade_level_comparison && rbComparison.trade_level_comparison.length > 0 && (
-                    <div className="mt-4 border border-slate-700/30 rounded-lg overflow-hidden">
+                    <div className="mt-4 border border-border/30 rounded-lg overflow-hidden">
                       <button
                         onClick={() => setTradeLevelExpanded(!tradeLevelExpanded)}
-                        className="w-full flex items-center justify-between p-3 bg-slate-800/30 hover:bg-slate-800/50 transition-colors"
+                        className="w-full flex items-center justify-between p-3 bg-secondary/30 hover:bg-secondary/50 transition-colors"
                       >
-                        <span className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                        <span className="text-sm font-medium text-foreground/80 flex items-center gap-2">
                           <Activity className="w-4 h-4 text-orange-400" />
                           逐笔交易对比 ({rbComparison.trade_level_comparison.length} 笔)
                         </span>
                         {tradeLevelExpanded ? (
-                          <ChevronDown className="w-4 h-4 text-slate-400" />
+                          <ChevronDown className="w-4 h-4 text-muted-foreground" />
                         ) : (
-                          <ChevronRight className="w-4 h-4 text-slate-400" />
+                          <ChevronRight className="w-4 h-4 text-muted-foreground" />
                         )}
                       </button>
                       
@@ -2052,7 +2054,7 @@ function AnalyticsContent() {
                         <div className="p-4 overflow-x-auto">
                           <table className="w-full text-xs text-left">
                             <thead>
-                              <tr className="text-slate-500 border-b border-slate-800">
+                              <tr className="text-muted-foreground border-b border-border">
                                 <th className="pb-2 font-medium whitespace-nowrap">时间</th>
                                 <th className="pb-2 font-medium text-indigo-400 text-center" colSpan={2}>回放成交</th>
                                 <th className="pb-2 font-medium text-emerald-400 text-center" colSpan={2}>回测成交</th>
@@ -2060,7 +2062,7 @@ function AnalyticsContent() {
                                 <th className="pb-2 font-medium text-center">数量差异</th>
                                 <th className="pb-2 font-medium text-center">时间差</th>
                               </tr>
-                              <tr className="text-slate-600 border-b border-slate-800/50">
+                              <tr className="text-muted-foreground/50 border-b border-border/50">
                                 <th></th>
                                 <th className="pb-2 text-center text-indigo-300">价格</th>
                                 <th className="pb-2 text-center text-indigo-300">数量</th>
@@ -2071,10 +2073,10 @@ function AnalyticsContent() {
                                 <th></th>
                               </tr>
                             </thead>
-                            <tbody className="text-slate-300">
+                            <tbody className="text-foreground/80">
                               {rbComparison.trade_level_comparison.slice(0, 30).map((trade: any, idx: number) => (
-                                <tr key={idx} className="border-b border-slate-800/50 hover:bg-slate-800/20">
-                                  <td className="py-2 text-slate-400 whitespace-nowrap">
+                                <tr key={idx} className="border-b border-border/50 hover:bg-secondary/20">
+                                  <td className="py-2 text-muted-foreground whitespace-nowrap">
                                     {trade.replay_trade?.timestamp 
                                       ? safeFormatDate(trade.replay_trade.timestamp) 
                                       : trade.backtest_trade?.timestamp 
@@ -2094,7 +2096,7 @@ function AnalyticsContent() {
                                     {trade.backtest_trade?.quantity != null ? trade.backtest_trade.quantity.toFixed(4) : '-'}
                                   </td>
                                   <td className={`py-2 text-center font-mono font-bold ${
-                                    trade.delta_price == null ? 'text-slate-500' :
+                                    trade.delta_price == null ? 'text-muted-foreground' :
                                     trade.delta_price >= 0 ? 'text-green-400' : 'text-red-400'
                                   }`}>
                                     {trade.delta_price != null 
@@ -2102,15 +2104,15 @@ function AnalyticsContent() {
                                       : '-'}
                                   </td>
                                   <td className={`py-2 text-center font-mono ${
-                                    trade.delta_quantity == null ? 'text-slate-500' :
-                                    Math.abs(trade.delta_quantity) < 0.0001 ? 'text-slate-400' : 'text-yellow-400'
+                                    trade.delta_quantity == null ? 'text-muted-foreground' :
+                                    Math.abs(trade.delta_quantity) < 0.0001 ? 'text-muted-foreground' : 'text-yellow-400'
                                   }`}>
                                     {trade.delta_quantity != null 
                                       ? (Math.abs(trade.delta_quantity) < 0.0001 ? '≈' : trade.delta_quantity.toFixed(4))
                                       : '-'}
                                   </td>
                                   <td className={`py-2 text-center font-mono ${
-                                    trade.time_diff_seconds == null ? 'text-slate-500' :
+                                    trade.time_diff_seconds == null ? 'text-muted-foreground' :
                                     Math.abs(trade.time_diff_seconds) < 1 ? 'text-green-400' :
                                     Math.abs(trade.time_diff_seconds) < 60 ? 'text-yellow-400' : 'text-red-400'
                                   }`}>
@@ -2123,7 +2125,7 @@ function AnalyticsContent() {
                             </tbody>
                           </table>
                           {rbComparison.trade_level_comparison.length > 30 && (
-                            <p className="text-xs text-slate-500 text-center mt-2">
+                            <p className="text-xs text-muted-foreground text-center mt-2">
                               显示前 30 笔，共 {rbComparison.trade_level_comparison.length} 笔交易
                             </p>
                           )}
@@ -2154,13 +2156,13 @@ function AnalyticsContent() {
                   )}
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center h-[250px] text-slate-400 gap-4">
-                  <div className="w-16 h-16 rounded-full bg-slate-800/50 flex items-center justify-center">
+                <div className="flex flex-col items-center justify-center h-[250px] text-muted-foreground gap-4">
+                  <div className="w-16 h-16 rounded-full bg-secondary/50 flex items-center justify-center">
                     <Activity className="w-8 h-8 opacity-40" />
                   </div>
                   <div className="text-center">
-                    <p className="text-sm font-medium text-slate-300 mb-1">暂无回放数据</p>
-                    <p className="text-xs text-slate-500 max-w-sm">
+                    <p className="text-sm font-medium text-foreground/80 mb-1">暂无回放数据</p>
+                    <p className="text-xs text-muted-foreground max-w-sm">
                       请先在 <Link href="/replay" className="text-cyan-400 hover:underline">历史回放</Link> 页面运行回放后再查看对比分析
                     </p>
                   </div>
@@ -2185,7 +2187,7 @@ function AnalyticsContent() {
 
 export default function AnalyticsPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">加载中...</div>}>
+    <Suspense fallback={<div className="min-h-screen bg-background flex items-center justify-center text-muted-foreground">加载中...</div>}>
       <AnalyticsContent />
     </Suspense>
   );

@@ -136,7 +136,7 @@ class ExecutionRouter(ABC):
 
 
 class BacktestDataAdapter(DataAdapter):
-    """Fetch historical K-lines from ClickHouse for backtesting"""
+    """Fetch historical K-lines from active storage backend (ClickHouse or DuckDB)."""
 
     async def subscribe(self, symbols: List[str], interval: str, callback: Callable):
         # In backtesting, "subscription" is a sequential replay of history
@@ -146,7 +146,10 @@ class BacktestDataAdapter(DataAdapter):
     async def get_history(
         self, symbol: str, interval: str, start: datetime, end: datetime
     ) -> List[BarData]:
-        df = await clickhouse_service.get_klines_dataframe(symbol, interval, start, end)
+        from app.services.storage_factory import get_storage_service
+
+        storage = get_storage_service()
+        df = await storage.get_klines_dataframe(symbol, interval, start, end)
         if df is None:
             return []
 
@@ -156,6 +159,8 @@ class BacktestDataAdapter(DataAdapter):
                 BarData(
                     symbol=symbol,
                     datetime=dt,
+                    event_time=dt,
+                    available_time=datetime.utcnow(),
                     open=row["open"],
                     high=row["high"],
                     low=row["low"],
@@ -168,11 +173,50 @@ class BacktestDataAdapter(DataAdapter):
 
 
 class LiveDataAdapter(DataAdapter):
-    """Poll Binance for real-time K-lines (Paper/Live mode)"""
+    """Poll for real-time K-lines via OpenBB (primary) or Binance (fallback)."""
 
     def __init__(self, poll_interval: int = 10):
         self.poll_interval = poll_interval
         self.running = False
+
+    async def _fetch_latest_bars(self, symbol: str, interval: str) -> List[BarData]:
+        """Try OpenBB first, then fall back to BinanceService."""
+        try:
+            from app.services.openbb_data_service import openbb_data_service
+
+            if openbb_data_service.available:
+                bars = await openbb_data_service.get_crypto_historical(
+                    symbol, interval, limit=2
+                )
+                if bars:
+                    return bars
+        except Exception:
+            logger.debug(f"OpenBB unavailable for {symbol}, falling back to Binance")
+
+        # Fallback to binance_service
+        klines = await binance_service.get_klines(
+            symbol, timeframe=interval, limit=2
+        )
+        if not klines:
+            return []
+
+        bars = []
+        for k in klines:
+            bars.append(
+                BarData(
+                    symbol=symbol,
+                    datetime=k.timestamp,
+                    event_time=k.timestamp,
+                    available_time=datetime.utcnow(),
+                    open=k.open,
+                    high=k.high,
+                    low=k.low,
+                    close=k.close,
+                    volume=k.volume,
+                    interval=interval,
+                )
+            )
+        return bars
 
     async def subscribe(self, symbols: List[str], interval: str, callback: Callable):
         self.running = True
@@ -181,28 +225,14 @@ class LiveDataAdapter(DataAdapter):
         while self.running:
             for symbol in symbols:
                 try:
-                    # Fetch latest bar
-                    klines = await binance_service.get_klines(
-                        symbol, timeframe=interval, limit=2
-                    )
-                    if not klines:
+                    bars = await self._fetch_latest_bars(symbol, interval)
+                    if not bars:
                         continue
 
-                    latest_kline = klines[-1]
-                    if last_times[symbol] != latest_kline.timestamp:
-                        last_times[symbol] = latest_kline.timestamp
-                        bar = BarData(
-                            symbol=symbol,
-                            datetime=latest_kline.timestamp,
-                            open=latest_kline.open,
-                            high=latest_kline.high,
-                            low=latest_kline.low,
-                            close=latest_kline.close,
-                            volume=latest_kline.volume,
-                            interval=interval,
-                        )
-                        # Push to strategy
-                        await callback(bar)
+                    latest_bar = bars[-1]
+                    if last_times[symbol] != latest_bar.datetime:
+                        last_times[symbol] = latest_bar.datetime
+                        await callback(latest_bar)
                 except Exception as e:
                     logger.error(f"Error polling data for {symbol}: {e}")
 

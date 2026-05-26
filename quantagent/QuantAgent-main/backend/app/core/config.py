@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     
     # CoinGecko API
     COINGECKO_API_KEY: str = ""
+
+    # Storage backend selection: "clickhouse" (default) or "duckdb"
+    STORAGE_BACKEND: str = "clickhouse"
+    DUCKDB_DATA_DIR: str = "data/market"
     
     # Risk Management (Phase B Hot Reload)
     MAX_SINGLE_POSITION_PCT: float = 0.20
@@ -115,6 +119,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 
 # 单独加载 CORS_ORIGINS 以避免 pydantic_settings 的类型验证问题

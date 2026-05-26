@@ -20,7 +20,12 @@ class TickerData(BaseModel):
 
 
 class KlineData(BaseModel):
-    """Kline/Candlestick data model"""
+    """Raw K-line data from exchange APIs.
+
+    DEPRECATED for internal use — prefer ``BarData`` from ``app.models.trading``
+    which has three-time semantics.  Use ``to_bar_data()`` to convert.
+    """
+
     timestamp: datetime
     open: float
     high: float
@@ -29,6 +34,25 @@ class KlineData(BaseModel):
     volume: float
     quote_volume: Optional[float] = None
     trades: Optional[int] = None
+
+    def to_bar_data(self, symbol: str, interval: str) -> "BarData":
+        """Convert to unified BarData with three-time semantics."""
+        from app.models.trading import BarData
+
+        return BarData(
+            symbol=symbol,
+            datetime=self.timestamp,
+            event_time=self.timestamp,
+            available_time=datetime.utcnow(),
+            open=self.open,
+            high=self.high,
+            low=self.low,
+            close=self.close,
+            volume=self.volume,
+            quote_volume=self.quote_volume,
+            trades=self.trades,
+            interval=interval,
+        )
 
 
 class KlineResponse(BaseModel):

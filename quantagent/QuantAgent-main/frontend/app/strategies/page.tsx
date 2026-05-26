@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   BookOpen, BarChart2, TrendingUp, Activity, Brain, Terminal,
   LayoutDashboard, RefreshCw, Play, ChevronRight, Zap,
-  BarChart3, AlertTriangle, CheckCircle2, Trophy, Clock, Info, Settings2, History, Sparkles, Server
+  BarChart3, AlertTriangle, CheckCircle2, Trophy, Clock, Info, Settings2, History, Sparkles, Server, Layers
 } from "lucide-react";
 import { ScatterChart, Scatter, XAxis, YAxis, ZAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from 'recharts';
 
@@ -405,40 +405,40 @@ export default function StrategiesPage() {
     }
   };
 
-  const strategyColorCls = STRATEGY_COLORS[selectedTemplate] || "text-slate-400 bg-slate-800 border-slate-700";
+  const strategyColorCls = STRATEGY_COLORS[selectedTemplate] || "text-muted-foreground bg-secondary border-border";
 
   return (
-    <div className="min-h-screen bg-[#0a0e1a] text-slate-100">
+    <div className="min-h-screen bg-[#0a0e1a] text-foreground">
       {/* ── Header ── */}
-      <header className="sticky top-0 z-40 border-b border-slate-800/60 bg-[#0a0e1a]/95 backdrop-blur-md">
+      <header className="sticky top-0 z-40 border-b border-border/60 bg-[#0a0e1a]/95 backdrop-blur-md">
         <div className="container mx-auto px-4 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-orange-500 to-amber-600 flex items-center justify-center shadow-lg shadow-orange-500/20">
               <BookOpen className="w-4 h-4 text-white" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-slate-100">QuantAgent OS</h1>
-              <p className="text-[10px] text-slate-400">策略库 & 参数优化</p>
+              <h1 className="text-lg font-bold text-foreground">QuantAgent OS</h1>
+              <p className="text-[10px] text-muted-foreground">策略库 & 参数优化</p>
             </div>
           </div>
 
           <nav className="hidden md:flex items-center gap-1">
-            <Link href="/dashboard" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+            <Link href="/dashboard" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
               <LayoutDashboard className="w-4 h-4" /> 仪表盘
             </Link>
-            <Link href="/backtest" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+            <Link href="/backtest" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
               <BarChart2 className="w-4 h-4" /> 回测
             </Link>
-            <Link href="/replay" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+            <Link href="/replay" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
               <History className="w-4 h-4" /> 历史回放
             </Link>
             <span className="px-3 py-1.5 text-sm text-orange-400 bg-orange-500/10 rounded-lg border border-orange-500/20 font-medium flex items-center gap-1.5">
               <BookOpen className="w-4 h-4" /> 策略库
             </span>
-            <Link href="/strategies/monitor" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+            <Link href="/strategies/monitor" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
               <Activity className="w-4 h-4" /> 监控大盘
             </Link>
-            <Link href="/terminal" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+            <Link href="/terminal" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
               <Terminal className="w-4 h-4" /> 终端
             </Link>
             <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
@@ -447,6 +447,8 @@ export default function StrategiesPage() {
             <Link href="/hummingbot-testnet" className="px-3 py-1.5 text-sm text-orange-400 hover:text-orange-100 hover:bg-orange-500/10 rounded-lg transition-all flex items-center gap-1.5">
               <Server className="w-4 h-4" /> Testnet
             </Link>
+            <Link href="/signals" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Layers className="w-4 h-4" /> 因子/信号</Link>
+            <Link href="/decisions" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Brain className="w-4 h-4" /> 决策中心</Link>
           </nav>
         </div>
       </header>
@@ -454,9 +456,9 @@ export default function StrategiesPage() {
       <main className="container mx-auto px-4 py-6 space-y-6">
         {/* ── Strategy Selection Row ── */}
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-          <Card className="bg-slate-900 border-slate-700/50 lg:col-span-1">
+          <Card className="bg-card border-border/50 lg:col-span-1">
             <CardHeader className="pb-3">
-              <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+              <CardTitle className="text-foreground text-sm flex items-center gap-2">
                 <div className="w-6 h-6 bg-orange-500/10 rounded flex items-center justify-center border border-orange-500/20">
                   <Activity className="w-3.5 h-3.5 text-orange-400" />
                 </div>
@@ -478,8 +480,8 @@ export default function StrategiesPage() {
                     onClick={() => setSelectedTemplate(t.id)}
                     className={`w-full text-left px-3 py-2.5 rounded-lg border text-sm transition-all ${
                       selectedTemplate === t.id
-                        ? `${STRATEGY_COLORS[t.id] || "text-slate-100 bg-slate-700 border-slate-600"} font-medium`
-                        : "text-slate-400 hover:text-slate-100 hover:bg-slate-800 border-transparent"
+                        ? `${STRATEGY_COLORS[t.id] || "text-foreground bg-secondary border-slate-600"} font-medium`
+                        : "text-muted-foreground hover:text-foreground hover:bg-secondary border-transparent"
                     }`}
                   >
                     {t.name}
@@ -490,10 +492,10 @@ export default function StrategiesPage() {
           </Card>
 
           {/* Strategy Detail Card */}
-          <Card className="bg-slate-900 border-slate-700/50 lg:col-span-3">
+          <Card className="bg-card border-border/50 lg:col-span-3">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                <CardTitle className="text-foreground text-sm flex items-center gap-2">
                   <div className={`w-6 h-6 rounded flex items-center justify-center border ${strategyColorCls}`}>
                     <BarChart3 className="w-3.5 h-3.5" />
                   </div>
@@ -507,34 +509,34 @@ export default function StrategiesPage() {
             <CardContent>
               {currentTemplate ? (
                 <div className="space-y-4">
-                  <p className="text-slate-400 text-sm">{currentTemplate.description}</p>
+                  <p className="text-muted-foreground text-sm">{currentTemplate.description}</p>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                     {currentTemplate.params.map(p => (
-                      <div key={p.key} className="bg-slate-800/60 rounded-lg px-3 py-2 border border-slate-700/50">
-                        <p className="text-slate-400 text-xs mb-0.5">{p.label}</p>
-                        <p className="text-slate-100 text-sm font-mono font-bold">{p.default}</p>
-                        <p className="text-slate-500 text-[10px]">Min: {p.min}, Max: {p.max}</p>
+                      <div key={p.key} className="bg-secondary/60 rounded-lg px-3 py-2 border border-border/50">
+                        <p className="text-muted-foreground text-xs mb-0.5">{p.label}</p>
+                        <p className="text-foreground text-sm font-mono font-bold">{p.default}</p>
+                        <p className="text-muted-foreground text-[10px]">Min: {p.min}, Max: {p.max}</p>
                       </div>
                     ))}
                   </div>
                 </div>
               ) : (
-                <p className="text-slate-500 text-sm">加载策略参数中...</p>
+                <p className="text-muted-foreground text-sm">加载策略参数中...</p>
               )}
             </CardContent>
           </Card>
         </div>
 
         {/* ── Tabs ── */}
-        <div className="flex gap-1 bg-slate-800/50 rounded-xl p-1 border border-slate-700/50 w-fit">
+        <div className="flex gap-1 bg-secondary/50 rounded-xl p-1 border border-border/50 w-fit">
           {(["optimize", "batch", "history"] as const).map(t => (
             <button
               key={t}
               onClick={() => setTab(t)}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                 tab === t
-                  ? "bg-slate-700 text-slate-100 shadow"
-                  : "text-slate-400 hover:text-slate-100"
+                  ? "bg-secondary text-foreground shadow"
+                  : "text-muted-foreground hover:text-foreground"
               }`}
             >
               {t === "optimize" ? "参数优化" : t === "batch" ? "批量回测" : "优化历史"}
@@ -545,9 +547,9 @@ export default function StrategiesPage() {
         {/* ── Optimize Tab ── */}
         {tab === "optimize" && (
           <div className="space-y-4">
-            <Card className="bg-slate-900 border-slate-700/50">
-              <CardHeader className="pb-3 border-b border-slate-800/50">
-                <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+            <Card className="bg-card border-border/50">
+              <CardHeader className="pb-3 border-b border-border/50">
+                <CardTitle className="text-foreground text-sm flex items-center gap-2">
                   <Settings2 className="w-4 h-4 text-yellow-400" /> 优化配置
                 </CardTitle>
               </CardHeader>
@@ -555,50 +557,50 @@ export default function StrategiesPage() {
                 {/* 1. Global Settings */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="space-y-1.5">
-                    <label className="text-slate-400 text-xs">交易对</label>
+                    <label className="text-muted-foreground text-xs">交易对</label>
                     <Select value={symbol} onValueChange={setSymbol}>
-                      <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-100 h-9 text-sm">
+                      <SelectTrigger className="bg-secondary border-border text-foreground h-9 text-sm">
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent className="bg-slate-800 border-slate-700">
+                      <SelectContent className="bg-secondary border-border">
                         {SYMBOLS.map(s => (
-                          <SelectItem key={s} value={s} className="text-slate-100 focus:bg-slate-700">{s}</SelectItem>
+                          <SelectItem key={s} value={s} className="text-foreground focus:bg-secondary">{s}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-1.5">
-                    <label className="text-slate-400 text-xs">K 线周期</label>
+                    <label className="text-muted-foreground text-xs">K 线周期</label>
                     <Select value={interval} onValueChange={setInterval}>
-                      <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-100 h-9 text-sm">
+                      <SelectTrigger className="bg-secondary border-border text-foreground h-9 text-sm">
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent className="bg-slate-800 border-slate-700">
+                      <SelectContent className="bg-secondary border-border">
                         {INTERVALS.map(i => (
-                          <SelectItem key={i} value={i} className="text-slate-100 focus:bg-slate-700">{i}</SelectItem>
+                          <SelectItem key={i} value={i} className="text-foreground focus:bg-secondary">{i}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-1.5">
-                    <label className="text-slate-400 text-xs">优化算法</label>
+                    <label className="text-muted-foreground text-xs">优化算法</label>
                     <Select value={algorithm} onValueChange={(v: any) => setAlgorithm(v)}>
-                      <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-100 h-9 text-sm">
+                      <SelectTrigger className="bg-secondary border-border text-foreground h-9 text-sm">
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent className="bg-slate-800 border-slate-700">
-                        <SelectItem value="grid" className="text-slate-100 focus:bg-slate-700">网格搜索 (Grid Search)</SelectItem>
-                        <SelectItem value="optuna" className="text-slate-100 focus:bg-slate-700">贝叶斯优化 (Optuna)</SelectItem>
+                      <SelectContent className="bg-secondary border-border">
+                        <SelectItem value="grid" className="text-foreground focus:bg-secondary">网格搜索 (Grid Search)</SelectItem>
+                        <SelectItem value="optuna" className="text-foreground focus:bg-secondary">贝叶斯优化 (Optuna)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                 </div>
 
                 {/* 2. Parameter Ranges */}
-                <div className="space-y-3 pt-2 border-t border-slate-800/50">
+                <div className="space-y-3 pt-2 border-t border-border/50">
                    <div className="flex items-center justify-between">
-                       <h3 className="text-slate-300 text-xs font-medium">参数范围配置</h3>
-                       <Badge variant="outline" className="text-xs border-slate-700 text-slate-400">
+                       <h3 className="text-foreground/80 text-xs font-medium">参数范围配置</h3>
+                       <Badge variant="outline" className="text-xs border-border text-muted-foreground">
                            {algorithm === 'grid' ? `预计组合数: ${calculateTotalCombos}` : `最大尝试次数: ${nTrials}`}
                        </Badge>
                    </div>
@@ -606,14 +608,14 @@ export default function StrategiesPage() {
                    {algorithm === 'grid' ? (
                        <div className="grid grid-cols-1 gap-3">
                            {currentTemplate?.params.map(p => (
-                               <div key={p.key} className="flex items-center gap-3 bg-slate-800/30 p-2 rounded-lg border border-slate-700/30">
-                                   <div className="w-24 text-xs text-slate-300 font-medium">{p.label}</div>
+                               <div key={p.key} className="flex items-center gap-3 bg-secondary/30 p-2 rounded-lg border border-border/30">
+                                   <div className="w-24 text-xs text-foreground/80 font-medium">{p.label}</div>
                                    <div className="flex items-center gap-2 flex-1">
                                        <div className="flex-1 flex items-center gap-2">
-                                           <span className="text-[10px] text-slate-500">Start</span>
+                                           <span className="text-[10px] text-muted-foreground">Start</span>
                                            <input 
                                                type="number" 
-                                               className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200"
+                                               className="w-full bg-card border border-border rounded px-2 py-1 text-xs text-foreground/90"
                                                value={paramConfig[p.key]?.start ?? p.default}
                                                onChange={e => setParamConfig(prev => ({
                                                    ...prev,
@@ -622,10 +624,10 @@ export default function StrategiesPage() {
                                            />
                                        </div>
                                        <div className="flex-1 flex items-center gap-2">
-                                           <span className="text-[10px] text-slate-500">End</span>
+                                           <span className="text-[10px] text-muted-foreground">End</span>
                                            <input 
                                                type="number" 
-                                               className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200"
+                                               className="w-full bg-card border border-border rounded px-2 py-1 text-xs text-foreground/90"
                                                value={paramConfig[p.key]?.end ?? p.max}
                                                onChange={e => setParamConfig(prev => ({
                                                    ...prev,
@@ -634,10 +636,10 @@ export default function StrategiesPage() {
                                            />
                                        </div>
                                        <div className="flex-1 flex items-center gap-2">
-                                           <span className="text-[10px] text-slate-500">Step</span>
+                                           <span className="text-[10px] text-muted-foreground">Step</span>
                                            <input 
                                                type="number" 
-                                               className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200"
+                                               className="w-full bg-card border border-border rounded px-2 py-1 text-xs text-foreground/90"
                                                value={paramConfig[p.key]?.step ?? 1}
                                                onChange={e => setParamConfig(prev => ({
                                                    ...prev,
@@ -650,15 +652,15 @@ export default function StrategiesPage() {
                            ))}
                        </div>
                    ) : (
-                       <div className="flex items-center gap-4 bg-slate-800/30 p-3 rounded-lg border border-slate-700/30">
-                           <div className="text-xs text-slate-400">
+                       <div className="flex items-center gap-4 bg-secondary/30 p-3 rounded-lg border border-border/30">
+                           <div className="text-xs text-muted-foreground">
                                Optuna 算法将自动在参数定义的 Min/Max 范围内智能搜索最优解。
                            </div>
                            <div className="flex items-center gap-2 ml-auto">
-                               <span className="text-xs text-slate-300">尝试次数 (n_trials)</span>
+                               <span className="text-xs text-foreground/80">尝试次数 (n_trials)</span>
                                <input 
                                    type="number" 
-                                   className="w-20 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200"
+                                   className="w-20 bg-card border border-border rounded px-2 py-1 text-xs text-foreground/90"
                                    value={nTrials}
                                    onChange={e => setNTrials(parseInt(e.target.value))}
                                />
@@ -692,20 +694,20 @@ export default function StrategiesPage() {
             {optimizeResult && (
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 {/* Best Params */}
-                <Card className="bg-slate-900 border-slate-700/50">
+                <Card className="bg-card border-border/50">
                   <CardHeader className="pb-3">
-                    <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                    <CardTitle className="text-foreground text-sm flex items-center gap-2">
                       <Trophy className="w-4 h-4 text-yellow-400" /> 最优参数
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3">
                     <div className="grid grid-cols-2 gap-2">
-                      <div className="bg-slate-800/60 rounded-lg p-2 text-center border border-slate-700/50">
-                        <p className="text-slate-400 text-xs">夏普比率</p>
+                      <div className="bg-secondary/60 rounded-lg p-2 text-center border border-border/50">
+                        <p className="text-muted-foreground text-xs">夏普比率</p>
                         <p className="text-yellow-400 text-lg font-bold font-mono">{fmt(optimizeResult.best_sharpe)}</p>
                       </div>
-                      <div className="bg-slate-800/60 rounded-lg p-2 text-center border border-slate-700/50">
-                        <p className="text-slate-400 text-xs">总收益率</p>
+                      <div className="bg-secondary/60 rounded-lg p-2 text-center border border-border/50">
+                        <p className="text-muted-foreground text-xs">总收益率</p>
                         <p className={`text-lg font-bold font-mono ${colorReturn(optimizeResult.best_return)}`}>
                           {pct(optimizeResult.best_return)}
                         </p>
@@ -714,12 +716,12 @@ export default function StrategiesPage() {
                     <div className="space-y-1.5">
                       {Object.entries(optimizeResult.best_params).map(([k, v]) => (
                         <div key={k} className="flex items-center justify-between text-sm">
-                          <span className="text-slate-400">{k}</span>
-                          <span className="text-slate-100 font-mono font-semibold">{v}</span>
+                          <span className="text-muted-foreground">{k}</span>
+                          <span className="text-foreground font-mono font-semibold">{v}</span>
                         </div>
                       ))}
                     </div>
-                    <div className="flex items-center gap-1.5 text-slate-500 text-xs">
+                    <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
                       <Info className="w-3 h-3" /> 共测试 {optimizeResult.total_combos} 组参数
                     </div>
                     {presetSaved ? (
@@ -745,9 +747,9 @@ export default function StrategiesPage() {
 
                 {/* Heatmap / Scatter Plot (Only for 2 params) */}
                 {Object.keys(optimizeResult.best_params).length === 2 && (
-                    <Card className="bg-slate-900 border-slate-700/50 lg:col-span-2">
+                    <Card className="bg-card border-border/50 lg:col-span-2">
                         <CardHeader className="pb-3">
-                            <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                            <CardTitle className="text-foreground text-sm flex items-center gap-2">
                                 <Activity className="w-4 h-4 text-purple-400" /> 参数敏感度分布 (热力图)
                             </CardTitle>
                         </CardHeader>
@@ -782,8 +784,8 @@ export default function StrategiesPage() {
                                           if (payload && payload.length) {
                                               const d = payload[0].payload;
                                               return (
-                                                  <div className="bg-slate-800 border border-slate-700 p-2 rounded shadow text-xs">
-                                                      <p className="text-slate-300 mb-1">{Object.keys(d.params).map(k => `${k}: ${d.params[k]}`).join(', ')}</p>
+                                                  <div className="bg-secondary border border-border p-2 rounded shadow text-xs">
+                                                      <p className="text-foreground/80 mb-1">{Object.keys(d.params).map(k => `${k}: ${d.params[k]}`).join(', ')}</p>
                                                       <p className="text-yellow-400 font-mono">Sharpe: {fmt(d.sharpe)}</p>
                                                       <p className={`${colorReturn(d.total_return)} font-mono`}>Return: {pct(d.total_return)}</p>
                                                   </div>
@@ -817,9 +819,9 @@ export default function StrategiesPage() {
                 
                 {/* Parallel Coordinates (For > 2 params) */}
                 {(Object.keys(optimizeResult.best_params).length > 2) && (
-                     <Card className="bg-slate-900 border-slate-700/50 lg:col-span-2">
+                     <Card className="bg-card border-border/50 lg:col-span-2">
                         <CardHeader className="pb-3">
-                            <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                            <CardTitle className="text-foreground text-sm flex items-center gap-2">
                                 <Activity className="w-4 h-4 text-purple-400" /> 多维参数平行坐标图
                             </CardTitle>
                         </CardHeader>
@@ -834,9 +836,9 @@ export default function StrategiesPage() {
 
                 {/* Fallback for < 2 params (Single param) */}
                 {(Object.keys(optimizeResult.best_params).length < 2) && (
-                     <Card className="bg-slate-900 border-slate-700/50 lg:col-span-2">
+                     <Card className="bg-card border-border/50 lg:col-span-2">
                         <CardHeader className="pb-3">
-                            <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                            <CardTitle className="text-foreground text-sm flex items-center gap-2">
                                 <Activity className="w-4 h-4 text-purple-400" /> 参数分布
                             </CardTitle>
                         </CardHeader>
@@ -860,9 +862,9 @@ export default function StrategiesPage() {
                 )}
 
                 {/* Top Results Table */}
-                <Card className="bg-slate-900 border-slate-700/50 lg:col-span-3">
+                <Card className="bg-card border-border/50 lg:col-span-3">
                   <CardHeader className="pb-3">
-                    <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                    <CardTitle className="text-foreground text-sm flex items-center gap-2">
                       <BarChart3 className="w-4 h-4 text-blue-400" /> Top 10 参数组合
                     </CardTitle>
                   </CardHeader>
@@ -870,21 +872,21 @@ export default function StrategiesPage() {
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs">
                         <thead>
-                          <tr className="border-b border-slate-700/50">
-                            <th className="text-left pb-2 text-slate-400 font-medium">#</th>
-                            <th className="text-left pb-2 text-slate-400 font-medium">参数</th>
-                            <th className="text-right pb-2 text-slate-400 font-medium">夏普</th>
-                            <th className="text-right pb-2 text-slate-400 font-medium">收益率</th>
+                          <tr className="border-b border-border/50">
+                            <th className="text-left pb-2 text-muted-foreground font-medium">#</th>
+                            <th className="text-left pb-2 text-muted-foreground font-medium">参数</th>
+                            <th className="text-right pb-2 text-muted-foreground font-medium">夏普</th>
+                            <th className="text-right pb-2 text-muted-foreground font-medium">收益率</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800/50">
                           {(optimizeResult.results || []).slice(0, 10).map((r, idx) => (
                             <tr key={idx} className={idx === 0 ? "bg-yellow-500/5" : ""}>
-                              <td className="py-1.5 text-slate-500">{idx + 1}</td>
-                              <td className="py-1.5 text-slate-300 font-mono">
+                              <td className="py-1.5 text-muted-foreground">{idx + 1}</td>
+                              <td className="py-1.5 text-foreground/80 font-mono">
                                 {Object.values(r.params).join(" / ")}
                               </td>
-                              <td className="py-1.5 text-right text-slate-100 font-mono">{fmt(r.sharpe)}</td>
+                              <td className="py-1.5 text-right text-foreground font-mono">{fmt(r.sharpe)}</td>
                               <td className={`py-1.5 text-right font-mono ${colorReturn(r.total_return)}`}>
                                 {pct(r.total_return)}
                               </td>
@@ -892,7 +894,7 @@ export default function StrategiesPage() {
                           ))}
                           {(!optimizeResult.results || optimizeResult.results.length === 0) && (
                             <tr>
-                              <td colSpan={4} className="py-4 text-center text-slate-500">
+                              <td colSpan={4} className="py-4 text-center text-muted-foreground">
                                 暂无详细数据
                               </td>
                             </tr>
@@ -910,15 +912,15 @@ export default function StrategiesPage() {
         {/* ── Batch Backtest Tab ── */}
         {tab === "batch" && (
           <div className="space-y-4">
-            <Card className="bg-slate-900 border-slate-700/50">
+            <Card className="bg-card border-border/50">
               <CardHeader className="pb-3">
-                <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                <CardTitle className="text-foreground text-sm flex items-center gap-2">
                   <BarChart2 className="w-4 h-4 text-cyan-400" /> 多标的批量回测
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <label className="text-slate-400 text-xs">选择回测标的（可多选）</label>
+                  <label className="text-muted-foreground text-xs">选择回测标的（可多选）</label>
                   <div className="flex flex-wrap gap-2">
                     {SYMBOLS.map(s => (
                       <button
@@ -929,7 +931,7 @@ export default function StrategiesPage() {
                         className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
                           batchSymbols.includes(s)
                             ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30"
-                            : "text-slate-400 border-slate-700 hover:border-slate-500"
+                            : "text-muted-foreground border-border hover:border-slate-500"
                         }`}
                       >
                         {s}
@@ -939,12 +941,12 @@ export default function StrategiesPage() {
                 </div>
                 <div className="flex items-center gap-3">
                   <Select value={interval} onValueChange={setInterval}>
-                    <SelectTrigger className="w-[120px] bg-slate-800 border-slate-700 text-slate-100 h-9 text-sm">
+                    <SelectTrigger className="w-[120px] bg-secondary border-border text-foreground h-9 text-sm">
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent className="bg-slate-800 border-slate-700">
+                    <SelectContent className="bg-secondary border-border">
                       {INTERVALS.map(i => (
-                        <SelectItem key={i} value={i} className="text-slate-100 focus:bg-slate-700">{i}</SelectItem>
+                        <SelectItem key={i} value={i} className="text-foreground focus:bg-secondary">{i}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -970,11 +972,11 @@ export default function StrategiesPage() {
             </Card>
 
             {batchResults.length > 0 && (
-              <Card className="bg-slate-900 border-slate-700/50">
+              <Card className="bg-card border-border/50">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                  <CardTitle className="text-foreground text-sm flex items-center gap-2">
                     <Trophy className="w-4 h-4 text-yellow-400" /> 回测排行榜
-                    <Badge variant="outline" className="text-xs text-slate-400 border-slate-600 ml-2">
+                    <Badge variant="outline" className="text-xs text-muted-foreground border-slate-600 ml-2">
                       {batchResults.length} 个标的
                     </Badge>
                   </CardTitle>
@@ -983,25 +985,25 @@ export default function StrategiesPage() {
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
-                        <tr className="border-b border-slate-700/50">
-                          <th className="text-left pb-3 text-slate-400 font-medium">#</th>
-                          <th className="text-left pb-3 text-slate-400 font-medium">标的</th>
-                          <th className="text-right pb-3 text-slate-400 font-medium">总收益</th>
-                          <th className="text-right pb-3 text-slate-400 font-medium">年化收益</th>
-                          <th className="text-right pb-3 text-slate-400 font-medium">夏普</th>
-                          <th className="text-right pb-3 text-slate-400 font-medium">最大回撤</th>
-                          <th className="text-right pb-3 text-slate-400 font-medium">胜率</th>
-                          <th className="text-right pb-3 text-slate-400 font-medium">交易次数</th>
+                        <tr className="border-b border-border/50">
+                          <th className="text-left pb-3 text-muted-foreground font-medium">#</th>
+                          <th className="text-left pb-3 text-muted-foreground font-medium">标的</th>
+                          <th className="text-right pb-3 text-muted-foreground font-medium">总收益</th>
+                          <th className="text-right pb-3 text-muted-foreground font-medium">年化收益</th>
+                          <th className="text-right pb-3 text-muted-foreground font-medium">夏普</th>
+                          <th className="text-right pb-3 text-muted-foreground font-medium">最大回撤</th>
+                          <th className="text-right pb-3 text-muted-foreground font-medium">胜率</th>
+                          <th className="text-right pb-3 text-muted-foreground font-medium">交易次数</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/50">
                         {batchResults.map((r, idx) => (
-                          <tr key={r.symbol} className={idx === 0 ? "bg-yellow-500/5" : "hover:bg-slate-800/30"}>
-                            <td className="py-2.5 text-slate-500 font-mono">
+                          <tr key={r.symbol} className={idx === 0 ? "bg-yellow-500/5" : "hover:bg-secondary/30"}>
+                            <td className="py-2.5 text-muted-foreground font-mono">
                               {idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : idx + 1}
                             </td>
                             <td className="py-2.5">
-                              <span className="text-slate-100 font-semibold">{r.symbol}</span>
+                              <span className="text-foreground font-semibold">{r.symbol}</span>
                             </td>
                             <td className={`py-2.5 text-right font-mono font-semibold ${colorReturn(r.total_return)}`}>
                               {pct(r.total_return)}
@@ -1009,10 +1011,10 @@ export default function StrategiesPage() {
                             <td className={`py-2.5 text-right font-mono ${colorReturn(r.annual_return)}`}>
                               {pct(r.annual_return)}
                             </td>
-                            <td className="py-2.5 text-right text-slate-100 font-mono">{fmt(r.sharpe_ratio)}</td>
+                            <td className="py-2.5 text-right text-foreground font-mono">{fmt(r.sharpe_ratio)}</td>
                             <td className="py-2.5 text-right text-red-400 font-mono">{pct(r.max_drawdown)}</td>
                             <td className="py-2.5 text-right text-blue-400 font-mono">{pct(r.win_rate)}</td>
-                            <td className="py-2.5 text-right text-slate-400">{r.total_trades}</td>
+                            <td className="py-2.5 text-right text-muted-foreground">{r.total_trades}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1028,13 +1030,13 @@ export default function StrategiesPage() {
         {tab === "history" && (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-slate-100 text-sm font-medium">历史优化记录</h2>
+              <h2 className="text-foreground text-sm font-medium">历史优化记录</h2>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={fetchHistory}
                 disabled={loadingHistory}
-                className="border-slate-700 text-slate-400 hover:text-slate-100 h-8 text-xs"
+                className="border-border text-muted-foreground hover:text-foreground h-8 text-xs"
               >
                 <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loadingHistory ? "animate-spin" : ""}`} />
                 刷新
@@ -1042,7 +1044,7 @@ export default function StrategiesPage() {
             </div>
 
             {history.length === 0 && !loadingHistory && (
-              <div className="text-center py-12 text-slate-500">
+              <div className="text-center py-12 text-muted-foreground">
                 <BarChart3 className="w-10 h-10 mx-auto mb-3 opacity-30" />
                 <p>暂无优化记录，请先执行参数优化</p>
               </div>
@@ -1050,20 +1052,20 @@ export default function StrategiesPage() {
 
             <div className="space-y-3">
               {history.map(h => (
-                <Card key={h.id} className="bg-slate-900 border-slate-700/50 hover:border-slate-600/50 transition-all">
+                <Card key={h.id} className="bg-card border-border/50 hover:border-slate-600/50 transition-all">
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between">
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">
-                          <Badge variant="outline" className={`text-xs ${STRATEGY_COLORS[h.strategy_type] || "text-slate-400 border-slate-600"}`}>
+                          <Badge variant="outline" className={`text-xs ${STRATEGY_COLORS[h.strategy_type] || "text-muted-foreground border-slate-600"}`}>
                             {h.strategy_type}
                           </Badge>
-                          <span className="text-slate-100 font-semibold text-sm">{h.symbol}</span>
-                          <span className="text-slate-500 text-xs">{h.interval}</span>
+                          <span className="text-foreground font-semibold text-sm">{h.symbol}</span>
+                          <span className="text-muted-foreground text-xs">{h.interval}</span>
                         </div>
                         <div className="flex items-center gap-4 text-xs">
-                          <span className="text-slate-400">最优参数：
-                            <span className="text-slate-200 font-mono ml-1">
+                          <span className="text-muted-foreground">最优参数：
+                            <span className="text-foreground/90 font-mono ml-1">
                               {Object.entries(h.best_params).map(([k, v]) => `${k}=${v}`).join(", ")}
                             </span>
                           </span>
@@ -1072,19 +1074,19 @@ export default function StrategiesPage() {
                       <div className="text-right space-y-1">
                         <div className="flex items-center gap-3 text-sm">
                           <div>
-                            <p className="text-slate-500 text-xs">夏普</p>
+                            <p className="text-muted-foreground text-xs">夏普</p>
                             <p className="text-yellow-400 font-mono font-bold">{fmt(h.best_sharpe)}</p>
                           </div>
                           <div>
-                            <p className="text-slate-500 text-xs">收益率</p>
+                            <p className="text-muted-foreground text-xs">收益率</p>
                             <p className={`font-mono font-bold ${colorReturn(h.best_return)}`}>{pct(h.best_return)}</p>
                           </div>
                           <div>
-                            <p className="text-slate-500 text-xs">测试组数</p>
-                            <p className="text-slate-300 font-mono">{h.total_combos}</p>
+                            <p className="text-muted-foreground text-xs">测试组数</p>
+                            <p className="text-foreground/80 font-mono">{h.total_combos}</p>
                           </div>
                         </div>
-                        <div className="flex items-center gap-1 text-slate-500 text-xs justify-end">
+                        <div className="flex items-center gap-1 text-muted-foreground text-xs justify-end">
                           <Clock className="w-3 h-3" />
                           {new Date(h.created_at).toLocaleString("zh-CN")}
                         </div>

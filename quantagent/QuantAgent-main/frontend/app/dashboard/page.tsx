@@ -18,7 +18,8 @@ import {
   TrendingUp, TrendingDown, Activity, BarChart3, Settings,
   DollarSign, BarChart2, RefreshCw, WifiOff,
   ChevronDown, ChevronUp, Brain, Shield, Zap, X, Plus, Minus,
-  Wallet, History, BarChart, Server, CheckCircle
+  Wallet, History, BarChart, Server, CheckCircle, Layers,
+  Globe, Newspaper, ExternalLink, Sun, Moon
 } from "lucide-react";
 
 // ─── TypeScript Interfaces ─────────────────────────────────────────────────
@@ -135,34 +136,34 @@ function OrderPanel({ symbol, exchangeId, currentPrice, onClose, onOrderPlaced }
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-[360px] shadow-2xl">
+      <div className="bg-card border border-border rounded-2xl p-6 w-[360px] shadow-2xl">
         <div className="flex items-center justify-between mb-5">
-          <h3 className="text-slate-100 font-bold text-lg">模拟下单</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-100 transition-colors">
+          <h3 className="text-foreground font-bold text-lg">模拟下单</h3>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Symbol */}
-        <div className="mb-4 p-3 bg-slate-800 rounded-xl">
+        <div className="mb-4 p-3 bg-secondary rounded-xl">
           <div className="flex items-center justify-between">
-            <span className="text-slate-400 text-sm">交易对</span>
-            <span className="text-slate-100 font-bold">{symbol}</span>
+            <span className="text-muted-foreground text-sm">交易对</span>
+            <span className="text-foreground font-bold">{symbol}</span>
           </div>
           {currentPrice && (
             <div className="flex items-center justify-between mt-1">
-              <span className="text-slate-500 text-xs">当前价格</span>
+              <span className="text-muted-foreground text-xs">当前价格</span>
               <span className="text-blue-400 text-sm font-mono">${currentPrice.toLocaleString()}</span>
             </div>
           )}
         </div>
 
         {/* Buy / Sell Toggle */}
-        <div className="flex rounded-xl overflow-hidden mb-4 border border-slate-700">
+        <div className="flex rounded-xl overflow-hidden mb-4 border border-border">
           <button
             onClick={() => setSide("BUY")}
             className={`flex-1 py-2.5 text-sm font-bold transition-all ${
-              side === "BUY" ? "bg-green-600 text-white" : "bg-slate-800 text-slate-400 hover:text-slate-200"
+              side === "BUY" ? "bg-green-600 text-white" : "bg-secondary text-muted-foreground hover:text-foreground/90"
             }`}
           >
             买入 BUY
@@ -170,7 +171,7 @@ function OrderPanel({ symbol, exchangeId, currentPrice, onClose, onOrderPlaced }
           <button
             onClick={() => setSide("SELL")}
             className={`flex-1 py-2.5 text-sm font-bold transition-all ${
-              side === "SELL" ? "bg-red-600 text-white" : "bg-slate-800 text-slate-400 hover:text-slate-200"
+              side === "SELL" ? "bg-red-600 text-white" : "bg-secondary text-muted-foreground hover:text-foreground/90"
             }`}
           >
             卖出 SELL
@@ -179,11 +180,11 @@ function OrderPanel({ symbol, exchangeId, currentPrice, onClose, onOrderPlaced }
 
         {/* Quantity */}
         <div className="mb-4">
-          <label className="text-slate-400 text-xs mb-1.5 block">数量</label>
+          <label className="text-muted-foreground text-xs mb-1.5 block">数量</label>
           <div className="flex items-center gap-2">
             <button
               onClick={() => setQuantity(q => Math.max(0.001, parseFloat(q) - 0.01).toFixed(4))}
-              className="w-8 h-8 bg-slate-800 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-100 border border-slate-700"
+              className="w-8 h-8 bg-secondary rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground border border-border"
             >
               <Minus className="w-3 h-3" />
             </button>
@@ -193,18 +194,18 @@ function OrderPanel({ symbol, exchangeId, currentPrice, onClose, onOrderPlaced }
               onChange={e => setQuantity(e.target.value)}
               step="0.01"
               min="0.001"
-              className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 text-sm text-center focus:outline-none focus:border-blue-500"
+              className="flex-1 bg-secondary border border-border rounded-lg px-3 py-2 text-foreground text-sm text-center focus:outline-none focus:border-blue-500"
             />
             <button
               onClick={() => setQuantity(q => (parseFloat(q) + 0.01).toFixed(4))}
-              className="w-8 h-8 bg-slate-800 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-100 border border-slate-700"
+              className="w-8 h-8 bg-secondary rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground border border-border"
             >
               <Plus className="w-3 h-3" />
             </button>
           </div>
           {estimatedCost > 0 && (
-            <p className="text-slate-500 text-xs mt-1.5 text-right">
-              预估金额：<span className="text-slate-300">${estimatedCost.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+            <p className="text-muted-foreground text-xs mt-1.5 text-right">
+              预估金额：<span className="text-foreground/80">${estimatedCost.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
             </p>
           )}
         </div>
@@ -218,7 +219,7 @@ function OrderPanel({ symbol, exchangeId, currentPrice, onClose, onOrderPlaced }
               className={`flex-1 py-1.5 text-xs rounded-lg border transition-all ${
                 quantity === v
                   ? "bg-blue-600/20 border-blue-500/50 text-blue-400"
-                  : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                  : "bg-secondary border-border text-muted-foreground hover:text-foreground/90"
               }`}
             >
               {v}
@@ -273,6 +274,29 @@ export default function DashboardPage() {
   const [hummingbotConnectors, setHummingbotConnectors] = useState<{ connected: boolean; count: number } | null>(null);
   const [hummingbotBots, setHummingbotBots] = useState<{ connected: boolean; count: number; source: string } | null>(null);
   const [hummingbotReadonly, setHummingbotReadonly] = useState<{ portfolio: boolean; orders: boolean; positions: boolean }>({ portfolio: false, orders: false, positions: false });
+
+  // L1 data: macro + news
+  const [macro, setMacro] = useState<Record<string, { value: number | null; date: string | null }>>({});
+  const [headlines, setHeadlines] = useState<Array<{ title: string; source: string; url: string; date: string; symbol: string }>>([]);
+  const [pipelineStats, setPipelineStats] = useState<{ macro_stored: number; news_stored: number; running: boolean } | null>(null);
+
+  const fetchMacroNews = useCallback(async () => {
+    try {
+      const [macroRes, newsRes, pipelineRes] = await Promise.all([
+        fetch("/api/v1/market/macro"),
+        fetch("/api/v1/market/news?symbol=BTC&limit=8"),
+        fetch("/api/v1/system/pipeline"),
+      ]);
+      const md = await macroRes.json();
+      const nd = await newsRes.json();
+      const pd = await pipelineRes.json();
+      setMacro(md.indicators || {});
+      setHeadlines(nd.articles || []);
+      setPipelineStats(pd);
+    } catch { /* silent */ }
+  }, []);
+
+  useEffect(() => { fetchMacroNews(); }, [fetchMacroNews]);
 
   useEffect(() => {
     // Fetch trending coins
@@ -852,9 +876,9 @@ export default function DashboardPage() {
   const formatNumber   = (v: number) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(v);
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="min-h-screen bg-background">
       {/* ── Header ── */}
-      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-40">
+      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
         <div className="container mx-auto px-4 py-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -862,8 +886,8 @@ export default function DashboardPage() {
                 <BarChart3 className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h1 className="text-lg font-bold text-slate-100">QuantAgent OS</h1>
-                <p className="text-[10px] text-slate-400">AI-Native Quantitative Trading</p>
+                <h1 className="text-lg font-bold text-foreground">QuantAgent OS</h1>
+                <p className="text-[10px] text-muted-foreground">AI-Native Quantitative Trading</p>
               </div>
             </div>
 
@@ -871,19 +895,19 @@ export default function DashboardPage() {
               <Link href="/dashboard" className="px-3 py-1.5 text-sm text-blue-400 bg-blue-500/10 rounded-lg border border-blue-500/20 font-medium">
                 仪表盘
               </Link>
-              <Link href="/trades" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+              <Link href="/trades" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 <Activity className="w-4 h-4" /> 交易流水
               </Link>
-              <Link href="/analytics" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+              <Link href="/analytics" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 <BarChart className="w-4 h-4" /> 性能分析
               </Link>
-              <Link href="/backtest" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+              <Link href="/backtest" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 回测
               </Link>
-              <Link href="/replay" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+              <Link href="/replay" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 <History className="w-4 h-4" /> 历史回放
               </Link>
-              <Link href="/terminal" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+              <Link href="/terminal" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 终端
               </Link>
               <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
@@ -892,12 +916,14 @@ export default function DashboardPage() {
               <Link href="/hummingbot-testnet" className="px-3 py-1.5 text-sm text-orange-400 hover:text-orange-100 hover:bg-orange-500/10 rounded-lg transition-all flex items-center gap-1.5">
                 <Server className="w-4 h-4" /> Testnet
               </Link>
+              <Link href="/signals" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Layers className="w-4 h-4" /> 因子/信号</Link>
+              <Link href="/decisions" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Brain className="w-4 h-4" /> 决策中心</Link>
             </nav>
 
             <div className="flex items-center gap-3">
               {/* Balance chip */}
               {balance && (
-                <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 rounded-lg border border-slate-700">
+                <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-secondary rounded-lg border border-border">
                   <Wallet className="w-3.5 h-3.5 text-green-400" />
                   <span className="text-green-400 text-xs font-mono font-bold">
                     ${balance.total_balance.toLocaleString(undefined, { maximumFractionDigits: 2 })}
@@ -907,12 +933,12 @@ export default function DashboardPage() {
 
               {/* Exchange Selector */}
               <Select value={currentExchange} onValueChange={setCurrentExchange}>
-                <SelectTrigger className="w-[110px] bg-slate-800 border-slate-700 text-slate-100 h-8 text-sm">
+                <SelectTrigger className="w-[110px] bg-secondary border-border text-foreground h-8 text-sm">
                   <SelectValue placeholder="交易所" />
                 </SelectTrigger>
-                <SelectContent className="bg-slate-800 border-slate-700">
+                <SelectContent className="bg-secondary border-border">
                   {exchanges.map(ex => (
-                    <SelectItem key={ex.value} value={ex.value} className="text-slate-100 focus:bg-slate-700 focus:text-slate-100 cursor-pointer">
+                    <SelectItem key={ex.value} value={ex.value} className="text-foreground focus:bg-secondary focus:text-foreground cursor-pointer">
                       {ex.label}
                     </SelectItem>
                   ))}
@@ -921,12 +947,12 @@ export default function DashboardPage() {
 
               {/* Symbol Selector */}
               <Select key="symbol-select" value={currentSymbol} onValueChange={setCurrentSymbol}>
-                <SelectTrigger className="w-[140px] bg-slate-800 border-slate-700 text-slate-100 h-8 text-sm">
+                <SelectTrigger className="w-[140px] bg-secondary border-border text-foreground h-8 text-sm">
                   <SelectValue placeholder="选择币种" />
                 </SelectTrigger>
-                <SelectContent className="bg-slate-800 border-slate-700">
+                <SelectContent className="bg-secondary border-border">
                   {symbols.map(s => (
-                    <SelectItem key={s.value} value={s.value} className="text-slate-100 focus:bg-slate-700 focus:text-slate-100 cursor-pointer">{s.label}</SelectItem>
+                    <SelectItem key={s.value} value={s.value} className="text-foreground focus:bg-secondary focus:text-foreground cursor-pointer">{s.label}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -958,12 +984,12 @@ export default function DashboardPage() {
       <main className="container mx-auto px-4 py-6">
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50 hover:border-blue-500/30 transition-all">
+          <Card className="bg-card border-border hover:border-blue-500/30 transition-all">
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-xs text-slate-400 uppercase tracking-wider">{currentSymbol} 价格</p>
-                  <p className="text-2xl font-bold text-slate-100 mt-1">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">{currentSymbol} 价格</p>
+                  <p className="text-2xl font-bold text-foreground mt-1">
                     {ticker ? formatCurrency(ticker.price) : "—"}
                   </p>
                 </div>
@@ -974,11 +1000,11 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50 hover:border-green-500/30 transition-all">
+          <Card className="bg-card border-border hover:border-green-500/30 transition-all">
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-xs text-slate-400 uppercase tracking-wider">24h 涨跌幅</p>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">24h 涨跌幅</p>
                   <p className={`text-2xl font-bold mt-1 ${(ticker?.change_percent ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
                     {ticker ? `${ticker.change_percent >= 0 ? "+" : ""}${ticker.change_percent.toFixed(2)}%` : "—"}
                   </p>
@@ -995,12 +1021,12 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50 hover:border-purple-500/30 transition-all">
+          <Card className="bg-card border-border hover:border-purple-500/30 transition-all">
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-xs text-slate-400 uppercase tracking-wider">24h 成交量</p>
-                  <p className="text-2xl font-bold text-slate-100 mt-1">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">24h 成交量</p>
+                  <p className="text-2xl font-bold text-foreground mt-1">
                     {ticker ? formatNumber(ticker.volume) : "—"}
                   </p>
                 </div>
@@ -1008,16 +1034,16 @@ export default function DashboardPage() {
                   <BarChart2 className="w-6 h-6 text-purple-400" />
                 </div>
               </div>
-              <p className="text-xs text-slate-500 mt-2">USDT</p>
+              <p className="text-xs text-muted-foreground mt-2">USDT</p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50 hover:border-orange-500/30 transition-all">
+          <Card className="bg-card border-border hover:border-orange-500/30 transition-all">
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-xs text-slate-400 uppercase tracking-wider">模拟账户</p>
-                  <p className="text-2xl font-bold text-slate-100 mt-1">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">模拟账户</p>
+                  <p className="text-2xl font-bold text-foreground mt-1">
                     {balance ? `$${(balance.total_balance / 1000).toFixed(1)}K` : "—"}
                   </p>
                 </div>
@@ -1040,39 +1066,39 @@ export default function DashboardPage() {
                    <p className="text-sm font-bold">{riskStatus.kill_switch_active ? "ACTIVATED" : "SAFE"}</p>
                 </div>
              </div>
-             <div className="p-3 bg-slate-900/50 rounded-xl border border-slate-700/50 flex items-center gap-3">
+             <div className="p-3 bg-card/50 rounded-xl border border-border/50 flex items-center gap-3">
                 <Activity className="w-5 h-5 text-blue-400" />
                 <div>
-                   <p className="text-[10px] text-slate-400 uppercase">Drawdown</p>
-                   <p className={`text-sm font-bold ${riskStatus.drawdown_breached ? 'text-red-400' : 'text-slate-200'}`}>
-                      {riskStatus.total_drawdown_pct}% <span className="text-[9px] text-slate-500">/ {riskStatus.drawdown_limit_pct}%</span>
+                   <p className="text-[10px] text-muted-foreground uppercase">Drawdown</p>
+                   <p className={`text-sm font-bold ${riskStatus.drawdown_breached ? 'text-red-400' : 'text-foreground/90'}`}>
+                      {riskStatus.total_drawdown_pct}% <span className="text-[9px] text-muted-foreground">/ {riskStatus.drawdown_limit_pct}%</span>
                    </p>
                 </div>
              </div>
-             <div className="p-3 bg-slate-900/50 rounded-xl border border-slate-700/50 flex items-center gap-3">
+             <div className="p-3 bg-card/50 rounded-xl border border-border/50 flex items-center gap-3">
                 <BarChart2 className="w-5 h-5 text-purple-400" />
                 <div>
-                   <p className="text-[10px] text-slate-400 uppercase">Daily Loss</p>
-                   <p className={`text-sm font-bold ${riskStatus.daily_loss_breached ? 'text-red-400' : 'text-slate-200'}`}>
-                      ${riskStatus.daily_pnl} <span className="text-[9px] text-slate-500">Limit: {riskStatus.daily_loss_limit_pct}%</span>
+                   <p className="text-[10px] text-muted-foreground uppercase">Daily Loss</p>
+                   <p className={`text-sm font-bold ${riskStatus.daily_loss_breached ? 'text-red-400' : 'text-foreground/90'}`}>
+                      ${riskStatus.daily_pnl} <span className="text-[9px] text-muted-foreground">Limit: {riskStatus.daily_loss_limit_pct}%</span>
                    </p>
                 </div>
              </div>
-             <div className="p-3 bg-slate-900/50 rounded-xl border border-slate-700/50 flex items-center gap-3">
+             <div className="p-3 bg-card/50 rounded-xl border border-border/50 flex items-center gap-3">
                 <Zap className="w-5 h-5 text-yellow-400" />
                 <div>
-                   <p className="text-[10px] text-slate-400 uppercase">Leverage Limit</p>
-                   <p className="text-sm font-bold text-slate-200">{riskStatus.max_leverage}x</p>
+                   <p className="text-[10px] text-muted-foreground uppercase">Leverage Limit</p>
+                   <p className="text-sm font-bold text-foreground/90">{riskStatus.max_leverage}x</p>
                 </div>
              </div>
           </div>
         )}
 
         {/* Hummingbot Status Card */}
-        <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-cyan-700/30 mb-6">
+        <Card className="bg-gradient-to-br bg-card border-cyan-700/30 mb-6">
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-slate-100 flex items-center gap-2 text-base">
+              <CardTitle className="text-foreground flex items-center gap-2 text-base">
                 <div className="w-8 h-8 bg-cyan-500/10 rounded-lg flex items-center justify-center border border-cyan-500/20">
                   <Server className="w-4 h-4 text-cyan-400" />
                 </div>
@@ -1081,7 +1107,7 @@ export default function DashboardPage() {
               <div className="flex items-center gap-2">
                 <Badge
                   variant="outline"
-                  className={hummingbotStatus?.connected ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-slate-500/10 text-slate-400 border-slate-500/20"}
+                  className={hummingbotStatus?.connected ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-slate-500/10 text-muted-foreground border-muted-foreground/20"}
                 >
                   {hummingbotStatus?.connected ? (
                     <><CheckCircle className="w-3 h-3 mr-1" /> 已连接</>
@@ -1089,7 +1115,7 @@ export default function DashboardPage() {
                     <><WifiOff className="w-3 h-3 mr-1" /> 未连接</>
                   )}
                 </Badge>
-                <Button variant="ghost" size="sm" className="h-7 text-xs text-slate-400 hover:text-slate-100" onClick={fetchHummingbotStatus}>
+                <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground hover:text-foreground" onClick={fetchHummingbotStatus}>
                   <RefreshCw className="w-3 h-3 mr-1" /> 刷新
                 </Button>
               </div>
@@ -1098,41 +1124,41 @@ export default function DashboardPage() {
           <CardContent className="pt-0">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {/* API Connection */}
-              <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                <p className="text-[10px] text-slate-500 uppercase mb-1">API 状态</p>
-                <p className={`text-sm font-semibold ${hummingbotStatus?.connected ? "text-green-400" : "text-slate-400"}`}>
+              <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                <p className="text-[10px] text-muted-foreground uppercase mb-1">API 状态</p>
+                <p className={`text-sm font-semibold ${hummingbotStatus?.connected ? "text-green-400" : "text-muted-foreground"}`}>
                   {hummingbotStatus?.connected ? "已连接" : "未连接"}
                 </p>
-                <p className="text-[10px] text-slate-500 mt-0.5 truncate" title="http://localhost:8000">
+                <p className="text-[10px] text-muted-foreground mt-0.5 truncate" title="http://localhost:8000">
                   {hummingbotStatus?.version || "—"}
                 </p>
               </div>
 
               {/* Docker Status */}
-              <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                <p className="text-[10px] text-slate-500 uppercase mb-1">Docker 容器</p>
-                <p className={`text-sm font-semibold ${hummingbotDocker?.connected ? "text-green-400" : "text-slate-400"}`}>
+              <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                <p className="text-[10px] text-muted-foreground uppercase mb-1">Docker 容器</p>
+                <p className={`text-sm font-semibold ${hummingbotDocker?.connected ? "text-green-400" : "text-muted-foreground"}`}>
                   {hummingbotDocker?.connected ? "可达" : "不可达"}
                 </p>
-                <p className="text-[10px] text-slate-500 mt-0.5">{hummingbotDocker?.containerCount ?? 0} 个活跃</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">{hummingbotDocker?.containerCount ?? 0} 个活跃</p>
               </div>
 
               {/* Connectors */}
-              <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                <p className="text-[10px] text-slate-500 uppercase mb-1">Connectors</p>
-                <p className={`text-sm font-semibold ${hummingbotConnectors?.connected ? "text-cyan-400" : "text-slate-400"}`}>
+              <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                <p className="text-[10px] text-muted-foreground uppercase mb-1">Connectors</p>
+                <p className={`text-sm font-semibold ${hummingbotConnectors?.connected ? "text-cyan-400" : "text-muted-foreground"}`}>
                   {hummingbotConnectors?.connected ? hummingbotConnectors.count : "—"}
                 </p>
-                <p className="text-[10px] text-slate-500 mt-0.5">可用交易所</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">可用交易所</p>
               </div>
 
               {/* Bots */}
-              <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                <p className="text-[10px] text-slate-500 uppercase mb-1">Bots</p>
-                <p className={`text-sm font-semibold ${hummingbotBots?.count && hummingbotBots.count > 0 ? "text-green-400" : "text-slate-400"}`}>
+              <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
+                <p className="text-[10px] text-muted-foreground uppercase mb-1">Bots</p>
+                <p className={`text-sm font-semibold ${hummingbotBots?.count && hummingbotBots.count > 0 ? "text-green-400" : "text-muted-foreground"}`}>
                   {hummingbotBots?.count ?? "—"}
                 </p>
-                <p className="text-[10px] text-slate-500 mt-0.5 truncate" title={hummingbotBots?.source || ""}>
+                <p className="text-[10px] text-muted-foreground mt-0.5 truncate" title={hummingbotBots?.source || ""}>
                   {hummingbotBots?.source && hummingbotBots.source !== "—" ? "MQTT" : "运行中"}
                 </p>
               </div>
@@ -1142,31 +1168,31 @@ export default function DashboardPage() {
             {hummingbotStatus?.connected && (
               <div className="mt-3 grid grid-cols-3 gap-3">
                 {/* Portfolio indicator */}
-                <div className={`flex items-center gap-2 p-2 rounded-lg border ${hummingbotReadonly.portfolio ? "bg-green-500/5 border-green-500/20" : "bg-slate-800/30 border-slate-700/30"}`}>
+                <div className={`flex items-center gap-2 p-2 rounded-lg border ${hummingbotReadonly.portfolio ? "bg-green-500/5 border-green-500/20" : "bg-secondary/30 border-border/30"}`}>
                   <div className={`w-1.5 h-1.5 rounded-full ${hummingbotReadonly.portfolio ? "bg-green-400" : "bg-slate-600"}`} />
                   <div>
-                    <p className="text-[10px] text-slate-400">实盘资产</p>
-                    <p className={`text-[10px] font-semibold ${hummingbotReadonly.portfolio ? "text-green-400" : "text-slate-500"}`}>
+                    <p className="text-[10px] text-muted-foreground">实盘资产</p>
+                    <p className={`text-[10px] font-semibold ${hummingbotReadonly.portfolio ? "text-green-400" : "text-muted-foreground"}`}>
                       {hummingbotReadonly.portfolio ? "有数据" : "无数据"}
                     </p>
                   </div>
                 </div>
                 {/* Orders indicator */}
-                <div className={`flex items-center gap-2 p-2 rounded-lg border ${hummingbotReadonly.orders ? "bg-orange-500/5 border-orange-500/20" : "bg-slate-800/30 border-slate-700/30"}`}>
+                <div className={`flex items-center gap-2 p-2 rounded-lg border ${hummingbotReadonly.orders ? "bg-orange-500/5 border-orange-500/20" : "bg-secondary/30 border-border/30"}`}>
                   <div className={`w-1.5 h-1.5 rounded-full ${hummingbotReadonly.orders ? "bg-orange-400" : "bg-slate-600"}`} />
                   <div>
-                    <p className="text-[10px] text-slate-400">实盘订单</p>
-                    <p className={`text-[10px] font-semibold ${hummingbotReadonly.orders ? "text-orange-400" : "text-slate-500"}`}>
+                    <p className="text-[10px] text-muted-foreground">实盘订单</p>
+                    <p className={`text-[10px] font-semibold ${hummingbotReadonly.orders ? "text-orange-400" : "text-muted-foreground"}`}>
                       {hummingbotReadonly.orders ? "有数据" : "无数据"}
                     </p>
                   </div>
                 </div>
                 {/* Positions indicator */}
-                <div className={`flex items-center gap-2 p-2 rounded-lg border ${hummingbotReadonly.positions ? "bg-emerald-500/5 border-emerald-500/20" : "bg-slate-800/30 border-slate-700/30"}`}>
+                <div className={`flex items-center gap-2 p-2 rounded-lg border ${hummingbotReadonly.positions ? "bg-emerald-500/5 border-emerald-500/20" : "bg-secondary/30 border-border/30"}`}>
                   <div className={`w-1.5 h-1.5 rounded-full ${hummingbotReadonly.positions ? "bg-emerald-400" : "bg-slate-600"}`} />
                   <div>
-                    <p className="text-[10px] text-slate-400">实盘持仓</p>
-                    <p className={`text-[10px] font-semibold ${hummingbotReadonly.positions ? "text-emerald-400" : "text-slate-500"}`}>
+                    <p className="text-[10px] text-muted-foreground">实盘持仓</p>
+                    <p className={`text-[10px] font-semibold ${hummingbotReadonly.positions ? "text-emerald-400" : "text-muted-foreground"}`}>
                       {hummingbotReadonly.positions ? "有数据" : "无数据"}
                     </p>
                   </div>
@@ -1175,8 +1201,8 @@ export default function DashboardPage() {
             )}
 
             {/* Footer */}
-            <div className="mt-3 flex items-center justify-between pt-3 border-t border-slate-800/50">
-              <p className="text-[10px] text-slate-500">
+            <div className="mt-3 flex items-center justify-between pt-3 border-t border-border/50">
+              <p className="text-[10px] text-muted-foreground">
                 {hummingbotStatus?.timestamp
                   ? `最后更新: ${new Date(hummingbotStatus.timestamp).toLocaleTimeString()}`
                   : "点击刷新获取状态"}
@@ -1191,29 +1217,29 @@ export default function DashboardPage() {
         </Card>
 
         {/* Price Comparison */}
-        <Card className="bg-gradient-to-br from-slate-900 to-slate-800/50 border-slate-700/50 mb-6">
+        <Card className="bg-card border-border mb-6">
             <CardContent className="p-4 flex flex-wrap items-center justify-between gap-4 text-sm">
               <div className="flex items-center gap-2">
-                <span className="text-slate-400 font-bold uppercase">Price Comparison ({currentSymbol})</span>
-                {loadingComparison && <RefreshCw className="w-3 h-3 animate-spin text-slate-500" />}
+                <span className="text-muted-foreground font-bold uppercase">Price Comparison ({currentSymbol})</span>
+                {loadingComparison && <RefreshCw className="w-3 h-3 animate-spin text-muted-foreground" />}
               </div>
               
               {comparisonData ? (
                 <div className="flex items-center gap-6">
                   <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
-                    <span className="text-slate-500 text-xs uppercase">Binance</span>
-                    <span className="font-mono text-slate-200 font-bold">
+                    <span className="text-muted-foreground text-xs uppercase">Binance</span>
+                    <span className="font-mono text-foreground/90 font-bold">
                       ${comparisonData.binance_price ? formatNumber(comparisonData.binance_price) : "—"}
                     </span>
                   </div>
                   <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
-                    <span className="text-slate-500 text-xs uppercase">CoinGecko</span>
-                    <span className="font-mono text-slate-200 font-bold">
+                    <span className="text-muted-foreground text-xs uppercase">CoinGecko</span>
+                    <span className="font-mono text-foreground/90 font-bold">
                       ${comparisonData.coingecko_price ? formatNumber(comparisonData.coingecko_price) : "—"}
                     </span>
                   </div>
-                  <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 pl-4 border-l border-slate-700">
-                    <span className="text-slate-500 text-xs uppercase">Spread</span>
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 pl-4 border-l border-border">
+                    <span className="text-muted-foreground text-xs uppercase">Spread</span>
                     <span className={`font-mono font-bold ${(comparisonData.price_diff ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
                       {(comparisonData.price_diff ?? 0) >= 0 ? "+" : ""}{comparisonData.price_diff ? formatNumber(comparisonData.price_diff) : "0.00"}
                     </span>
@@ -1223,7 +1249,7 @@ export default function DashboardPage() {
                   </div>
                 </div>
               ) : (
-                <div className="text-slate-500 text-xs">暂无数据</div>
+                <div className="text-muted-foreground text-xs">暂无数据</div>
               )}
             </CardContent>
           </Card>
@@ -1232,12 +1258,12 @@ export default function DashboardPage() {
         <div className="mb-6 relative">
           <div className="absolute top-4 right-4 z-10">
             <Select key="interval-select" value={currentInterval} onValueChange={setCurrentInterval}>
-              <SelectTrigger className="w-24 bg-slate-800 border-slate-700 text-slate-100">
+              <SelectTrigger className="w-24 bg-secondary border-border text-foreground">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent className="bg-slate-800 border-slate-700">
+              <SelectContent className="bg-secondary border-border">
                 {intervals.map(i => (
-                  <SelectItem key={i.value} value={i.value} className="text-slate-100 focus:bg-slate-700 focus:text-slate-100 cursor-pointer">{i.label}</SelectItem>
+                  <SelectItem key={i.value} value={i.value} className="text-foreground focus:bg-secondary focus:text-foreground cursor-pointer">{i.label}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -1248,17 +1274,17 @@ export default function DashboardPage() {
         {/* Trending Coins */}
         {trendingCoins.length > 0 && (
           <div className="mb-6">
-            <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+            <h3 className="text-sm font-bold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
               <TrendingUp className="w-4 h-4" /> Trending Coins (CoinGecko)
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
               {trendingCoins.slice(0, 4).map((coin, idx) => (
-                <div key={idx} className="flex items-center gap-3 p-3 bg-slate-900/50 rounded-xl border border-slate-800/50 hover:border-slate-700 transition-all">
+                <div key={idx} className="flex items-center gap-3 p-3 bg-card/50 rounded-xl border border-border/50 hover:border-border transition-all">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={coin.item.thumb} alt={coin.item.name} width={32} height={32} className="rounded-full" loading="lazy" />
                   <div>
-                    <p className="text-sm font-bold text-slate-200">{coin.item.name}</p>
-                    <p className="text-xs text-slate-500">#{coin.item.market_cap_rank} · {coin.item.symbol}</p>
+                    <p className="text-sm font-bold text-foreground/90">{coin.item.name}</p>
+                    <p className="text-xs text-muted-foreground">#{coin.item.market_cap_rank} · {coin.item.symbol}</p>
                   </div>
                 </div>
               ))}
@@ -1268,10 +1294,10 @@ export default function DashboardPage() {
 
         <div className="space-y-6">
           {/* ── Positions ── */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/30 border-slate-700/50">
+          <Card className="bg-card border-border/50">
             <CardHeader className="pb-4">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-slate-100 flex items-center gap-2">
+                <CardTitle className="text-foreground flex items-center gap-2">
                   <div className="w-8 h-8 bg-blue-500/10 rounded-lg flex items-center justify-center border border-blue-500/20">
                     <Activity className="w-4 h-4 text-blue-400" />
                   </div>
@@ -1283,7 +1309,7 @@ export default function DashboardPage() {
                   )}
                 </CardTitle>
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="sm" className="h-7 text-xs text-slate-400 hover:text-slate-100 px-2" onClick={fetchPositions}>
+                  <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground hover:text-foreground px-2" onClick={fetchPositions}>
                     <RefreshCw className="w-3 h-3 mr-1" /> 刷新
                   </Button>
                   {positions.length > 0 && (
@@ -1296,19 +1322,19 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent className="pt-0">
               {positionsLoading ? (
-                <div className="flex items-center justify-center py-8 text-slate-500 text-sm">
+                <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
                   <RefreshCw className="w-4 h-4 animate-spin mr-2" /> 加载持仓中...
                 </div>
               ) : positions.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-10 text-slate-500">
+                <div className="flex flex-col items-center justify-center py-10 text-muted-foreground">
                   <Activity className="w-10 h-10 mb-3 opacity-30" />
                   <p className="text-sm">暂无持仓</p>
-                  <p className="text-xs text-slate-600 mt-1">点击右上角「下单」开始模拟交易</p>
+                  <p className="text-xs text-muted-foreground/50 mt-1">点击右上角「下单」开始模拟交易</p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {positions.map((pos, idx) => (
-                    <div key={idx} className="group relative p-4 bg-gradient-to-br from-slate-800/80 to-slate-900/80 rounded-xl border border-slate-700/50 hover:border-slate-500/50 transition-all hover:shadow-lg">
+                    <div key={idx} className="group relative p-4 bg-gradient-to-br bg-card rounded-xl border border-border/50 hover:hover:border-border transition-all hover:shadow-lg">
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-2">
                           <div className="w-8 h-8 bg-green-500/15 text-green-400 border border-green-500/20 rounded-lg flex items-center justify-center">
@@ -1316,10 +1342,10 @@ export default function DashboardPage() {
                           </div>
                           <div>
                             <div className="flex items-center gap-1.5">
-                              <span className="font-bold text-slate-100">{pos.symbol}</span>
+                              <span className="font-bold text-foreground">{pos.symbol}</span>
                               <Badge variant="outline" className="text-[9px] px-1 py-0 bg-green-500/10 text-green-400 border-green-500/20">LONG</Badge>
                             </div>
-                            <p className="text-[10px] text-slate-500">持仓 {Number(pos.quantity).toFixed(6)}</p>
+                            <p className="text-[10px] text-muted-foreground">持仓 {Number(pos.quantity).toFixed(6)}</p>
                           </div>
                         </div>
                         <div className="text-right">
@@ -1332,18 +1358,18 @@ export default function DashboardPage() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-3 gap-1 p-2 bg-slate-900/50 rounded-lg border border-slate-800/50 text-center">
+                      <div className="grid grid-cols-3 gap-1 p-2 bg-card/50 rounded-lg border border-border/50 text-center">
                         <div>
-                          <p className="text-slate-500 text-[9px] uppercase">开仓</p>
-                          <p className="text-slate-200 font-medium text-xs">${Number(pos.avg_price).toFixed(2)}</p>
+                          <p className="text-muted-foreground text-[9px] uppercase">开仓</p>
+                          <p className="text-foreground/90 font-medium text-xs">${Number(pos.avg_price).toFixed(2)}</p>
                         </div>
-                        <div className="border-x border-slate-800/50">
-                          <p className="text-slate-500 text-[9px] uppercase">标记</p>
+                        <div className="border-x border-border/50">
+                          <p className="text-muted-foreground text-[9px] uppercase">标记</p>
                           <p className="text-blue-400 font-medium text-xs">${Number(pos.mark_price).toFixed(2)}</p>
                         </div>
                         <div>
-                          <p className="text-slate-500 text-[9px] uppercase">数量</p>
-                          <p className="text-slate-300 font-medium text-xs">{Number(pos.quantity).toFixed(4)}</p>
+                          <p className="text-muted-foreground text-[9px] uppercase">数量</p>
+                          <p className="text-foreground/80 font-medium text-xs">{Number(pos.quantity).toFixed(4)}</p>
                         </div>
                       </div>
 
@@ -1364,9 +1390,9 @@ export default function DashboardPage() {
           </Card>
 
           {/* ── AI Agents ── */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/30 border-slate-700/50">
+          <Card className="bg-card border-border/50">
             <CardHeader className="pb-4">
-              <CardTitle className="text-slate-100 flex items-center gap-2">
+              <CardTitle className="text-foreground flex items-center gap-2">
                 <div className="w-8 h-8 bg-purple-500/10 rounded-lg flex items-center justify-center border border-purple-500/20">
                   <Brain className="w-4 h-4 text-purple-400" />
                 </div>
@@ -1381,7 +1407,7 @@ export default function DashboardPage() {
                   <div className="text-xs text-orange-300">
                     <p className="font-semibold mb-1">Ollama 本地服务未运行</p>
                     <a href="https://ollama.com/download" target="_blank" rel="noopener noreferrer" className="text-blue-400 underline">下载 Ollama</a>
-                    <span className="ml-2 text-orange-400/70">启动后运行：<code className="bg-slate-800 px-1 rounded">ollama run qwen3:8b</code></span>
+                    <span className="ml-2 text-orange-400/70">启动后运行：<code className="bg-secondary px-1 rounded">ollama run qwen3:8b</code></span>
                   </div>
                 </div>
               )}
@@ -1400,7 +1426,7 @@ export default function DashboardPage() {
                   const s = colorMap[agent.color] || colorMap.blue;
 
                   return (
-                    <div key={agent.id} className={`group relative bg-gradient-to-br from-slate-800/80 to-slate-900/80 rounded-xl border ${hasError ? "border-red-500/30" : "border-slate-700/50"} hover:border-slate-500/50 transition-all hover:shadow-lg ${s.glow} flex flex-col`}>
+                    <div key={agent.id} className={`group relative bg-gradient-to-br bg-card rounded-xl border ${hasError ? "border-red-500/30" : "border-border/50"} hover:hover:border-border transition-all hover:shadow-lg ${s.glow} flex flex-col`}>
                       <div className="p-3">
                         <div className="flex items-center gap-3">
                           <div className={`w-10 h-10 ${s.bg} rounded-lg flex items-center justify-center border ${s.border} shrink-0`}>
@@ -1408,17 +1434,17 @@ export default function DashboardPage() {
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between gap-1">
-                              <p className="font-bold text-slate-100 text-sm truncate">{agent.name}</p>
-                              <Badge variant="outline" className={`text-[9px] px-1 py-0 ${agent.status === "运行中" ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-slate-500/10 text-slate-400 border-slate-500/20"}`}>
+                              <p className="font-bold text-foreground text-sm truncate">{agent.name}</p>
+                              <Badge variant="outline" className={`text-[9px] px-1 py-0 ${agent.status === "运行中" ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-slate-500/10 text-muted-foreground border-muted-foreground/20"}`}>
                                 {agent.status}
                               </Badge>
                             </div>
                             <div className="flex items-center gap-2 mt-0.5">
-                              <span className="text-[10px] text-slate-400 truncate">{aiProviders.find(p => p.value === agent.provider)?.label || agent.provider}</span>
+                              <span className="text-[10px] text-muted-foreground truncate">{aiProviders.find(p => p.value === agent.provider)?.label || agent.provider}</span>
                               {agent.winRateLoading ? (
-                                <span className="text-[10px] text-slate-500">胜率: <span className="text-slate-500 animate-pulse">计算中…</span></span>
+                                <span className="text-[10px] text-muted-foreground">胜率: <span className="text-muted-foreground animate-pulse">计算中…</span></span>
                               ) : agent.winRate !== "--" ? (
-                                <span className="text-[10px] text-slate-500">
+                                <span className="text-[10px] text-muted-foreground">
                                   胜率: <span className={parseFloat(agent.winRate) >= 50 ? "text-green-400" : "text-red-400"}>{agent.winRate}</span>
                                 </span>
                               ) : null}
@@ -1429,15 +1455,15 @@ export default function DashboardPage() {
 
                       <div className="flex-1 flex flex-col">
                         {configuringAgent === agent.id && (
-                          <div className="mx-3 mb-2 p-2 bg-slate-900 rounded-lg border border-slate-800">
-                            <div className="text-[10px] text-slate-400 mb-1">选择模型:</div>
+                          <div className="mx-3 mb-2 p-2 bg-card rounded-lg border border-border">
+                            <div className="text-[10px] text-muted-foreground mb-1">选择模型:</div>
                             <Select value={agent.provider} onValueChange={v => handleProviderChange(agent.id, v)}>
-                              <SelectTrigger className="w-full h-7 bg-slate-800 border-slate-700 text-slate-100 text-[10px]">
+                              <SelectTrigger className="w-full h-7 bg-secondary border-border text-foreground text-[10px]">
                                 <SelectValue />
                               </SelectTrigger>
-                              <SelectContent className="bg-slate-800 border-slate-700">
+                              <SelectContent className="bg-secondary border-border">
                                 {aiProviders.map(p => (
-                                  <SelectItem key={p.value} value={p.value} className="text-[10px] text-slate-100 cursor-pointer focus:bg-slate-700">{p.label}</SelectItem>
+                                  <SelectItem key={p.value} value={p.value} className="text-[10px] text-foreground cursor-pointer focus:bg-secondary">{p.label}</SelectItem>
                                 ))}
                               </SelectContent>
                             </Select>
@@ -1459,27 +1485,27 @@ export default function DashboardPage() {
                         )}
 
                         <div className="mx-3 mb-2 flex-1 min-h-0">
-                          <div className={`bg-slate-900/50 rounded-lg p-2 border ${hasError ? "border-red-500/20 bg-red-500/5" : "border-slate-800"}`}>
+                          <div className={`bg-card/50 rounded-lg p-2 border ${hasError ? "border-red-500/20 bg-red-500/5" : "border-border"}`}>
                             <div className="flex items-center justify-between mb-1">
                               <div className="flex items-center gap-1.5">
                                 <div className={`w-1.5 h-1.5 rounded-full ${agent.analyzing ? "bg-blue-400 animate-pulse" : hasError ? "bg-red-400" : "bg-slate-600"}`} />
                                 <span className={`text-[9px] uppercase font-semibold tracking-wider ${hasError ? "text-red-400" : "text-blue-400"}`}>{hasError ? "错误" : "AI分析"}</span>
                               </div>
                               {analysisCache.current[`${agent.id}-${currentSymbol}`] && !agent.analyzing && !hasError && (
-                                <span className="text-[8px] text-slate-500">已缓存</span>
+                                <span className="text-[8px] text-muted-foreground">已缓存</span>
                               )}
                             </div>
                             <div className="prose prose-invert prose-sm max-w-none h-[320px] overflow-y-auto custom-scrollbar">
                               <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-                                h1: ({ children }) => <h1 className="text-sm font-bold text-slate-100 mb-1">{children}</h1>,
-                                h2: ({ children }) => <h2 className="text-xs font-semibold text-slate-200 mb-1 mt-2">{children}</h2>,
-                                h3: ({ children }) => <h3 className="text-[11px] font-semibold text-slate-300 mb-0.5 mt-1">{children}</h3>,
-                                p:  ({ children }) => <div className="text-[10px] text-slate-300 leading-relaxed mb-1">{children}</div>,
-                                ul: ({ children }) => <ul className="list-disc list-inside text-[10px] text-slate-300 mb-1 space-y-0">{children}</ul>,
-                                ol: ({ children }) => <ol className="list-decimal list-inside text-[10px] text-slate-300 mb-1 space-y-0">{children}</ol>,
-                                li: ({ children }) => <li className="text-[10px] text-slate-300">{children}</li>,
-                                strong: ({ children }) => <strong className="text-slate-100 font-semibold">{children}</strong>,
-                                code: ({ children }) => <code className="bg-slate-800 text-slate-200 px-0.5 rounded text-[9px] font-mono">{children}</code>,
+                                h1: ({ children }) => <h1 className="text-sm font-bold text-foreground mb-1">{children}</h1>,
+                                h2: ({ children }) => <h2 className="text-xs font-semibold text-foreground/90 mb-1 mt-2">{children}</h2>,
+                                h3: ({ children }) => <h3 className="text-[11px] font-semibold text-foreground/80 mb-0.5 mt-1">{children}</h3>,
+                                p:  ({ children }) => <div className="text-[10px] text-foreground/80 leading-relaxed mb-1">{children}</div>,
+                                ul: ({ children }) => <ul className="list-disc list-inside text-[10px] text-foreground/80 mb-1 space-y-0">{children}</ul>,
+                                ol: ({ children }) => <ol className="list-decimal list-inside text-[10px] text-foreground/80 mb-1 space-y-0">{children}</ol>,
+                                li: ({ children }) => <li className="text-[10px] text-foreground/80">{children}</li>,
+                                strong: ({ children }) => <strong className="text-foreground font-semibold">{children}</strong>,
+                                code: ({ children }) => <code className="bg-secondary text-foreground/90 px-0.5 rounded text-[9px] font-mono">{children}</code>,
                               }}>
                                 {agent.outputContent || agent.logs}
                               </ReactMarkdown>
@@ -1490,7 +1516,7 @@ export default function DashboardPage() {
                         <div className="px-3 pb-3 flex justify-between items-center gap-1">
                           <Button
                             variant="outline" size="sm"
-                            className={`h-7 text-[10px] px-2 border-slate-700 ${canAnalyze ? `${s.text} ${s.border} hover:bg-slate-800` : "text-slate-600 border-slate-700 cursor-not-allowed"}`}
+                            className={`h-7 text-[10px] px-2 border-border ${canAnalyze ? `${s.text} ${s.border} hover:bg-secondary` : "text-muted-foreground/50 border-border cursor-not-allowed"}`}
                             disabled={!canAnalyze}
                             onClick={() => { const a = agents.find(x => x.id === agent.id); if (a) fetchAgentAnalysis(a, false); }}
                           >
@@ -1500,10 +1526,10 @@ export default function DashboardPage() {
                               : <><Zap className="w-3 h-3 mr-0.5" />分析</>}
                           </Button>
                           <div className="flex gap-1">
-                            <Button variant="ghost" size="sm" className="h-7 text-[10px] text-slate-400 hover:text-slate-100 px-2" onClick={() => toggleAgentStatus(agent.id)}>
+                            <Button variant="ghost" size="sm" className="h-7 text-[10px] text-muted-foreground hover:text-foreground px-2" onClick={() => toggleAgentStatus(agent.id)}>
                               {agent.status === "运行中" ? "暂停" : "启动"}
                             </Button>
-                            <Button variant="ghost" size="sm" className={`h-7 text-[10px] px-2 ${configuringAgent === agent.id ? `${s.text} ${s.bg}` : "text-slate-400 hover:text-slate-100"}`}
+                            <Button variant="ghost" size="sm" className={`h-7 text-[10px] px-2 ${configuringAgent === agent.id ? `${s.text} ${s.bg}` : "text-muted-foreground hover:text-foreground"}`}
                               onClick={() => setConfiguringAgent(configuringAgent === agent.id ? null : agent.id)}>
                               <Settings className="w-3 h-3" />
                             </Button>
@@ -1513,6 +1539,74 @@ export default function DashboardPage() {
                     </div>
                   );
                 })}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* ── Macro & News ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-4">
+          <Card className="lg:col-span-1 bg-card border-border">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Globe className="w-4 h-4 text-blue-400" /> 宏观指标
+                <Badge className="text-[10px]">FRED+OECD</Badge>
+                {pipelineStats && (
+                  <Badge variant="outline" className={`text-[9px] ${pipelineStats.running ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-slate-500/10 text-muted-foreground border-muted-foreground/20"}`}>
+                    {pipelineStats.macro_stored}条
+                  </Badge>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {[
+                { k: "fed_funds_rate", l: "联邦基金利率", u: "%", i: "🏦" },
+                { k: "treasury_10y", l: "10年国债", u: "%", i: "📈" },
+                { k: "inflation_expect", l: "通胀预期", u: "%", i: "💹" },
+                { k: "cpi", l: "CPI", u: "%", i: "🛒" },
+                { k: "unemployment", l: "失业率", u: "%", i: "👥" },
+              ].map(({ k, l, u, i }) => {
+                const d = macro[k];
+                const v = d?.value;
+                return (
+                  <div key={k} className="flex justify-between py-1.5 border-b border-border/50 last:border-0">
+                    <span className="text-xs text-muted-foreground">{i} {l}</span>
+                    <span className="text-xs font-mono font-bold">
+                      {v != null ? `${v.toFixed(2)}${u}` : <span className="text-muted-foreground/50">—</span>}
+                    </span>
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+          <Card className="lg:col-span-2 bg-card border-border">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Newspaper className="w-4 h-4 text-amber-400" /> 加密新闻
+                {pipelineStats && (
+                  <Badge variant="outline" className="text-[9px] bg-amber-500/10 text-amber-400 border-amber-500/20">
+                    {pipelineStats.news_stored}条
+                  </Badge>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-1.5 max-h-[240px] overflow-y-auto">
+                {headlines.map((h, i) => (
+                  <a key={i} href={h.url} target="_blank" rel="noopener noreferrer"
+                    className="flex items-start gap-2 p-2 rounded hover:bg-secondary/50 transition-all group">
+                    <ExternalLink className="w-3 h-3 text-muted-foreground shrink-0 mt-0.5 group-hover:text-foreground" />
+                    <div className="min-w-0">
+                      <div className="text-xs text-foreground/80 group-hover:text-foreground leading-snug truncate">{h.title}</div>
+                      <div className="flex gap-2 mt-0.5">
+                        <span className="text-[10px] text-muted-foreground">{h.source}</span>
+                        <span className="text-[10px] text-muted-foreground/50">
+                          {h.date ? new Date(h.date).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}
+                        </span>
+                      </div>
+                    </div>
+                  </a>
+                ))}
               </div>
             </CardContent>
           </Card>

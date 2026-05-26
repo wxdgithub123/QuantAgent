@@ -419,6 +419,9 @@ class SignalBasedStrategy(BaseStrategy):
                 # 买入信号 - 全仓模式（与回测引擎对齐）
                 self.log(f"检测到买入信号 价格={bar.close}")
 
+                # Persist signal event for L6 consumption
+                await self._persist_signal(bar, current_signal, 0.7, df)
+
                 # 获取当前可用资金
                 balance_info = await self.bus.get_balance()
                 available_capital = balance_info.get("available_balance", 0)
@@ -463,6 +466,10 @@ class SignalBasedStrategy(BaseStrategy):
             elif current_signal == -1 and self.position > 0:
                 # 卖出信号
                 self.log(f"检测到卖出信号 价格={bar.close}")
+
+                # Persist signal event for L6 consumption
+                await self._persist_signal(bar, current_signal, 0.7, df)
+
                 order_req = OrderRequest(
                     symbol=bar.symbol,
                     side=TradeSide.SELL,
@@ -507,3 +514,60 @@ class SignalBasedStrategy(BaseStrategy):
     async def on_tick(self, tick):
         # 可选的Tick级别逻辑
         pass
+
+    # ── L5 Persistence ─────────────────────────────────────────────────────
+
+    async def _persist_signal(
+        self, bar: BarData, signal: float, confidence: float, df: pd.DataFrame
+    ) -> None:
+        """Persist FactorSnapshot and SignalEvent to DB (fire-and-forget)."""
+        try:
+            from app.models.db_models import FactorSnapshotDB, SignalEventDB
+            from app.services.database import get_db
+
+            signal_type_map = {1: "BUY", -1: "SELL", 0: "WAIT"}
+            signal_type = signal_type_map.get(int(signal), "WAIT")
+
+            # Capture factor values from the last row of the DataFrame
+            factors: Dict[str, float] = {}
+            row = df.iloc[-1]
+            for col in df.columns:
+                val = row[col]
+                if isinstance(val, (int, float)) and not pd.isna(val):
+                    factors[str(col)] = float(val)
+
+            # Write to DB via async session
+            async with get_db() as session:
+                # Persist individual factors
+                for name, value in factors.items():
+                    snap = FactorSnapshotDB(
+                        symbol=bar.symbol,
+                        timestamp=bar.datetime,
+                        factor_name=name,
+                        factor_value=value,
+                        parameters={},
+                        source="indicators",
+                    )
+                    session.add(snap)
+
+                # Persist signal event
+                evt = SignalEventDB(
+                    symbol=bar.symbol,
+                    timestamp=bar.datetime,
+                    signal_type=signal_type,
+                    signal_value=float(signal),
+                    confidence=confidence,
+                    source_strategy=self.strategy_type,
+                    strategy_id=str(self.strategy_id),
+                    factors=factors,
+                    extra_data={},
+                )
+                session.add(evt)
+                await session.commit()
+
+            logger.debug(
+                f"[策略:{self.strategy_id}] L5 persisted: "
+                f"{len(factors)} factors, signal={signal_type}"
+            )
+        except Exception as e:
+            logger.debug(f"[策略:{self.strategy_id}] L5 persistence skipped: {e}")

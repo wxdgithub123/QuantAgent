@@ -280,22 +280,22 @@ export default function HummingbotTestnetPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-6">
+    <div className="min-h-screen bg-background text-foreground p-6">
       <div className="max-w-6xl mx-auto space-y-6">
 
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Link href="/hummingbot">
-              <Button variant="ghost" size="icon" className="text-slate-400 hover:text-slate-100">
+              <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
                 <ArrowLeft className="w-4 h-4" />
               </Button>
             </Link>
             <div>
-              <h1 className="text-2xl font-bold text-slate-100">
+              <h1 className="text-2xl font-bold text-foreground">
                 Hummingbot — Testnet Perpetual Bot
               </h1>
-              <p className="text-sm text-slate-400 mt-1">
+              <p className="text-sm text-muted-foreground mt-1">
                 永续合约测试网 Bot · Binance Futures Testnet · 不动真钱
               </p>
             </div>
@@ -333,13 +333,13 @@ export default function HummingbotTestnetPage() {
         </Card>
 
         {/* ── Tab 切换 ───────────────────────────────────────────────────── */}
-        <div className="flex gap-1 border-b border-slate-800">
+        <div className="flex gap-1 border-b border-border">
           <button
             onClick={() => setActiveTab("create")}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               activeTab === "create"
                 ? "border-cyan-500 text-cyan-400"
-                : "border-transparent text-slate-400 hover:text-slate-200"
+                : "border-transparent text-muted-foreground hover:text-foreground/90"
             }`}
           >
             创建 Bot
@@ -349,7 +349,7 @@ export default function HummingbotTestnetPage() {
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               activeTab === "list"
                 ? "border-cyan-500 text-cyan-400"
-                : "border-transparent text-slate-400 hover:text-slate-200"
+                : "border-transparent text-muted-foreground hover:text-foreground/90"
             }`}
           >
             Bot 列表
@@ -361,9 +361,9 @@ export default function HummingbotTestnetPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
             {/* 左：表单 */}
-            <Card className="bg-slate-900/80 border-slate-800">
+            <Card className="bg-card/80 border-border">
               <CardHeader className="pb-4">
-                <CardTitle className="text-slate-100 text-base flex items-center gap-2">
+                <CardTitle className="text-foreground text-base flex items-center gap-2">
                   <Bot className="w-4 h-4 text-cyan-400" />
                   Testnet Bot 配置
                 </CardTitle>
@@ -372,7 +372,7 @@ export default function HummingbotTestnetPage() {
 
                 {/* Bot 名称 */}
                 <div className="space-y-1">
-                  <Label htmlFor="bot_name" className="text-slate-300 text-xs">
+                  <Label htmlFor="bot_name" className="text-foreground/80 text-xs">
                     Bot 名称 <span className="text-red-400">*</span>
                   </Label>
                   <Input
@@ -380,20 +380,20 @@ export default function HummingbotTestnetPage() {
                     value={formData.bot_name}
                     onChange={e => updateField("bot_name", e.target.value)}
                     placeholder="testnet_boll_001"
-                    className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                    className="bg-secondary border-border text-foreground text-sm"
                   />
                 </div>
 
                 {/* Connector */}
                 <div className="space-y-1">
-                  <Label htmlFor="connector" className="text-slate-300 text-xs">
+                  <Label htmlFor="connector" className="text-foreground/80 text-xs">
                     Connector <span className="text-red-400">*</span>
                   </Label>
                   <select
                     id="connector"
                     value={formData.connector}
                     onChange={e => updateField("connector", e.target.value)}
-                    className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                    className="w-full h-9 px-3 bg-secondary border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   >
                     <option value="binance_perpetual_testnet">binance_perpetual_testnet</option>
                     <option value="bybit_perpetual_testnet">bybit_perpetual_testnet</option>
@@ -403,14 +403,14 @@ export default function HummingbotTestnetPage() {
 
                 {/* Credentials Profile */}
                 <div className="space-y-1">
-                  <Label htmlFor="credentials_profile" className="text-slate-300 text-xs">
+                  <Label htmlFor="credentials_profile" className="text-foreground/80 text-xs">
                     Credentials Profile <span className="text-red-400">*</span>
                   </Label>
                   <select
                     id="credentials_profile"
                     value={formData.credentials_profile}
                     onChange={e => updateField("credentials_profile", e.target.value)}
-                    className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                    className="w-full h-9 px-3 bg-secondary border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   >
                     <option value="binance_testnet_account">binance_testnet_account</option>
                     <option value="bybit_testnet_account">bybit_testnet_account</option>
@@ -420,14 +420,14 @@ export default function HummingbotTestnetPage() {
 
                 {/* Controller */}
                 <div className="space-y-1">
-                  <Label htmlFor="controller_name" className="text-slate-300 text-xs">
+                  <Label htmlFor="controller_name" className="text-foreground/80 text-xs">
                     Controller <span className="text-red-400">*</span>
                   </Label>
                   <select
                     id="controller_name"
                     value={formData.controller_name}
                     onChange={e => updateField("controller_name", e.target.value)}
-                    className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                    className="w-full h-9 px-3 bg-secondary border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   >
                     <option value="bollinger_v1">bollinger_v1 (Bollinger Bands)</option>
                     <option value="supertrend_v1">supertrend_v1 (SuperTrend)</option>
@@ -438,12 +438,12 @@ export default function HummingbotTestnetPage() {
                 {/* Trading Pair + Timeframe */}
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <Label htmlFor="trading_pair" className="text-slate-300 text-xs">交易对</Label>
+                    <Label htmlFor="trading_pair" className="text-foreground/80 text-xs">交易对</Label>
                     <select
                       id="trading_pair"
                       value={formData.trading_pair}
                       onChange={e => updateField("trading_pair", e.target.value)}
-                      className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                      className="w-full h-9 px-3 bg-secondary border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
                     >
                       <option value="BTC-USDT">BTC-USDT</option>
                       <option value="ETH-USDT">ETH-USDT</option>
@@ -451,12 +451,12 @@ export default function HummingbotTestnetPage() {
                     </select>
                   </div>
                   <div className="space-y-1">
-                    <Label htmlFor="timeframe" className="text-slate-300 text-xs">周期</Label>
+                    <Label htmlFor="timeframe" className="text-foreground/80 text-xs">周期</Label>
                     <select
                       id="timeframe"
                       value={formData.timeframe}
                       onChange={e => updateField("timeframe", e.target.value)}
-                      className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                      className="w-full h-9 px-3 bg-secondary border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
                     >
                       <option value="3m">3 分钟</option>
                       <option value="5m">5 分钟</option>
@@ -469,7 +469,7 @@ export default function HummingbotTestnetPage() {
                 {/* 账户参数 */}
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <Label htmlFor="total_amount_quote" className="text-slate-300 text-xs">
+                    <Label htmlFor="total_amount_quote" className="text-foreground/80 text-xs">
                       测试网资金 (USDT)
                     </Label>
                     <Input
@@ -478,16 +478,16 @@ export default function HummingbotTestnetPage() {
                       min={1}
                       value={formData.total_amount_quote}
                       onChange={e => updateField("total_amount_quote", Number(e.target.value))}
-                      className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                      className="bg-secondary border-border text-foreground text-sm"
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label htmlFor="leverage" className="text-slate-300 text-xs">杠杆倍数</Label>
+                    <Label htmlFor="leverage" className="text-foreground/80 text-xs">杠杆倍数</Label>
                     <select
                       id="leverage"
                       value={formData.leverage}
                       onChange={e => updateField("leverage", Number(e.target.value))}
-                      className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                      className="w-full h-9 px-3 bg-secondary border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
                     >
                       {[1,2,3,5,10,20,50,100].map(v => (
                         <option key={v} value={v}>{v}x</option>
@@ -499,7 +499,7 @@ export default function HummingbotTestnetPage() {
                 {/* 风控参数 */}
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <Label htmlFor="stop_loss_pct" className="text-slate-300 text-xs">止损 (%)</Label>
+                    <Label htmlFor="stop_loss_pct" className="text-foreground/80 text-xs">止损 (%)</Label>
                     <Input
                       id="stop_loss_pct"
                       type="number"
@@ -508,11 +508,11 @@ export default function HummingbotTestnetPage() {
                       step={0.5}
                       value={formData.stop_loss_pct}
                       onChange={e => updateField("stop_loss_pct", Number(e.target.value))}
-                      className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                      className="bg-secondary border-border text-foreground text-sm"
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label htmlFor="take_profit_pct" className="text-slate-300 text-xs">止盈 (%)</Label>
+                    <Label htmlFor="take_profit_pct" className="text-foreground/80 text-xs">止盈 (%)</Label>
                     <Input
                       id="take_profit_pct"
                       type="number"
@@ -521,7 +521,7 @@ export default function HummingbotTestnetPage() {
                       step={0.5}
                       value={formData.take_profit_pct}
                       onChange={e => updateField("take_profit_pct", Number(e.target.value))}
-                      className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                      className="bg-secondary border-border text-foreground text-sm"
                     />
                   </div>
                 </div>
@@ -529,18 +529,18 @@ export default function HummingbotTestnetPage() {
                 {/* 布林带参数 */}
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <Label htmlFor="bb_length" className="text-slate-300 text-xs">BB 周期</Label>
+                    <Label htmlFor="bb_length" className="text-foreground/80 text-xs">BB 周期</Label>
                     <Input
                       id="bb_length"
                       type="number"
                       min={1}
                       value={formData.bb_length}
                       onChange={e => updateField("bb_length", Number(e.target.value))}
-                      className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                      className="bg-secondary border-border text-foreground text-sm"
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label htmlFor="bb_std" className="text-slate-300 text-xs">BB 标准差</Label>
+                    <Label htmlFor="bb_std" className="text-foreground/80 text-xs">BB 标准差</Label>
                     <Input
                       id="bb_std"
                       type="number"
@@ -549,7 +549,7 @@ export default function HummingbotTestnetPage() {
                       step={0.1}
                       value={formData.bb_std}
                       onChange={e => updateField("bb_std", Number(e.target.value))}
-                      className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                      className="bg-secondary border-border text-foreground text-sm"
                     />
                   </div>
                 </div>
@@ -557,19 +557,19 @@ export default function HummingbotTestnetPage() {
                 {/* Position Mode + Max Executors */}
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <Label htmlFor="position_mode" className="text-slate-300 text-xs">持仓模式</Label>
+                    <Label htmlFor="position_mode" className="text-foreground/80 text-xs">持仓模式</Label>
                     <select
                       id="position_mode"
                       value={formData.position_mode}
                       onChange={e => updateField("position_mode", e.target.value)}
-                      className="w-full h-9 px-3 bg-slate-800 border border-slate-700 rounded-md text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                      className="w-full h-9 px-3 bg-secondary border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
                     >
                       <option value="ONEWAY">单向（ONEWAY）</option>
                       <option value="HEDGE">双向（HEDGE）</option>
                     </select>
                   </div>
                   <div className="space-y-1">
-                    <Label htmlFor="max_executors_per_side" className="text-slate-300 text-xs">每侧最大挂单数</Label>
+                    <Label htmlFor="max_executors_per_side" className="text-foreground/80 text-xs">每侧最大挂单数</Label>
                     <Input
                       id="max_executors_per_side"
                       type="number"
@@ -577,7 +577,7 @@ export default function HummingbotTestnetPage() {
                       max={10}
                       value={formData.max_executors_per_side}
                       onChange={e => updateField("max_executors_per_side", Number(e.target.value))}
-                      className="bg-slate-800 border-slate-700 text-slate-100 text-sm"
+                      className="bg-secondary border-border text-foreground text-sm"
                     />
                   </div>
                 </div>
@@ -619,11 +619,11 @@ export default function HummingbotTestnetPage() {
 
               {/* 预览结果 */}
               {preview && (
-                <Card className={`bg-slate-900/80 border ${
+                <Card className={`bg-card/80 border ${
                   preview.valid ? "border-cyan-600" : "border-red-600"
                 }`}>
                   <CardHeader className="pb-3">
-                    <CardTitle className="text-base text-slate-100 flex items-center gap-2">
+                    <CardTitle className="text-base text-foreground flex items-center gap-2">
                       {preview.valid ? (
                         <CheckCircle className="w-4 h-4 text-green-400" />
                       ) : (
@@ -636,8 +636,8 @@ export default function HummingbotTestnetPage() {
                     {preview.valid && preview.data ? (
                       <>
                         <div className="space-y-1">
-                          <p className="text-xs text-slate-400">将发送给 Hummingbot 的 Controller Config：</p>
-                          <div className="bg-slate-950 rounded-md p-3 text-xs font-mono text-slate-300 max-h-64 overflow-y-auto">
+                          <p className="text-xs text-muted-foreground">将发送给 Hummingbot 的 Controller Config：</p>
+                          <div className="bg-background rounded-md p-3 text-xs font-mono text-foreground/80 max-h-64 overflow-y-auto">
                             <pre className="whitespace-pre-wrap break-all">
                               {JSON.stringify(preview.data.controller_config, null, 2)}
                             </pre>
@@ -666,12 +666,12 @@ export default function HummingbotTestnetPage() {
 
               {/* 启动结果 */}
               {startResult && (
-                <Card className={`bg-slate-900/80 border ${
+                <Card className={`bg-card/80 border ${
                   startResult.remote_confirmed ? "border-green-600" :
                   startResult.remote_started ? "border-yellow-600" : "border-red-600"
                 }`}>
                   <CardHeader className="pb-3">
-                    <CardTitle className="text-base text-slate-100 flex items-center gap-2">
+                    <CardTitle className="text-base text-foreground flex items-center gap-2">
                       {startResult.remote_confirmed ? (
                         <CheckCircle className="w-4 h-4 text-green-400" />
                       ) : (
@@ -684,38 +684,38 @@ export default function HummingbotTestnetPage() {
                     {startResult.data && (
                       <>
                         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                          <span className="text-slate-400">Bot 名称：</span>
-                          <span className="text-slate-100 font-mono">{startResult.data.bot_name}</span>
-                          <span className="text-slate-400">Bot ID：</span>
-                          <span className="text-slate-100 font-mono flex items-center gap-1">
+                          <span className="text-muted-foreground">Bot 名称：</span>
+                          <span className="text-foreground font-mono">{startResult.data.bot_name}</span>
+                          <span className="text-muted-foreground">Bot ID：</span>
+                          <span className="text-foreground font-mono flex items-center gap-1">
                             <span className="truncate max-w-[120px]">{startResult.data.testnet_bot_id}</span>
                             <button
                               onClick={() => copyToClipboard(startResult.data!.testnet_bot_id, startResult.data!.testnet_bot_id)}
-                              className="shrink-0 text-slate-500 hover:text-slate-300"
+                              className="shrink-0 text-muted-foreground hover:text-foreground/80"
                             >
                               {copiedId === startResult.data!.testnet_bot_id
                                 ? <Check className="w-3 h-3 text-green-400" />
                                 : <Copy className="w-3 h-3" />}
                             </button>
                           </span>
-                          <span className="text-slate-400">Controller：</span>
-                          <span className="text-slate-100">
+                          <span className="text-muted-foreground">Controller：</span>
+                          <span className="text-foreground">
                             {controllerLabel[startResult.data.controller_name] || startResult.data.controller_name}
                           </span>
-                          <span className="text-slate-400">Connector：</span>
-                          <span className="text-slate-100 font-mono">{startResult.data.connector}</span>
-                          <span className="text-slate-400">本地状态：</span>
+                          <span className="text-muted-foreground">Connector：</span>
+                          <span className="text-foreground font-mono">{startResult.data.connector}</span>
+                          <span className="text-muted-foreground">本地状态：</span>
                           <Badge variant={startResult.data.local_status === "submitted" ? "default" : "destructive"}>
                             {startResult.data.local_status}
                           </Badge>
-                          <span className="text-slate-400">远端确认：</span>
+                          <span className="text-muted-foreground">远端确认：</span>
                           <Badge variant={startResult.data.remote_confirmed ? "default" : "outline"}>
                             {startResult.data.remote_confirmed ? "running" : "not confirmed"}
                           </Badge>
                           {startResult.data.hummingbot_bot_id && (
                             <>
-                              <span className="text-slate-400">Hummingbot ID：</span>
-                              <span className="text-slate-100 font-mono">{startResult.data.hummingbot_bot_id}</span>
+                              <span className="text-muted-foreground">Hummingbot ID：</span>
+                              <span className="text-foreground font-mono">{startResult.data.hummingbot_bot_id}</span>
                             </>
                           )}
                         </div>
@@ -733,10 +733,10 @@ export default function HummingbotTestnetPage() {
 
               {/* 验收说明 */}
               {!startResult && !preview && (
-                <Card className="bg-slate-900/80 border-slate-800">
+                <Card className="bg-card/80 border-border">
                   <CardContent className="p-4">
-                    <div className="text-sm text-slate-400 space-y-2">
-                      <p className="text-slate-300 font-medium">验收标准</p>
+                    <div className="text-sm text-muted-foreground space-y-2">
+                      <p className="text-foreground/80 font-medium">验收标准</p>
                       <div className="space-y-1 text-xs">
                         <div className="flex items-start gap-2">
                           <div className="w-4 h-4 rounded border border-slate-600 shrink-0 mt-0.5" />
@@ -769,10 +769,10 @@ export default function HummingbotTestnetPage() {
 
         {/* ── Bot 列表 ───────────────────────────────────────────────────── */}
         {activeTab === "list" && (
-          <Card className="bg-slate-900/80 border-slate-800">
+          <Card className="bg-card/80 border-border">
             <CardHeader className="pb-4">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-slate-100 text-base">Testnet Bot 列表</CardTitle>
+                <CardTitle className="text-foreground text-base">Testnet Bot 列表</CardTitle>
                 <Button variant="outline" size="sm" onClick={fetchBotList} disabled={listLoading}>
                   <RefreshCw className={`w-3 h-3 mr-1 ${listLoading ? "animate-spin" : ""}`} />
                   刷新
@@ -781,7 +781,7 @@ export default function HummingbotTestnetPage() {
             </CardHeader>
             <CardContent>
               {!botList || botList.data.bots.length === 0 ? (
-                <div className="text-center py-12 text-slate-500 text-sm">
+                <div className="text-center py-12 text-muted-foreground text-sm">
                   <Bot className="w-8 h-8 mx-auto mb-2 opacity-30" />
                   暂无 Testnet Bot，点击「创建 Bot」启动第一个
                 </div>
@@ -789,7 +789,7 @@ export default function HummingbotTestnetPage() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="border-b border-slate-800 text-slate-400">
+                      <tr className="border-b border-border text-muted-foreground">
                         <th className="text-left py-2 pr-3 font-medium">名称</th>
                         <th className="text-left py-2 pr-3 font-medium">Controller</th>
                         <th className="text-left py-2 pr-3 font-medium">交易对</th>
@@ -802,14 +802,14 @@ export default function HummingbotTestnetPage() {
                     </thead>
                     <tbody>
                       {botList.data.bots.map(bot => (
-                        <tr key={bot.testnet_bot_id} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                        <tr key={bot.testnet_bot_id} className="border-b border-border/50 hover:bg-secondary/30">
                           <td className="py-2 pr-3">
-                            <div className="font-mono text-slate-100">{bot.bot_name}</div>
+                            <div className="font-mono text-foreground">{bot.bot_name}</div>
                           </td>
-                          <td className="py-2 pr-3 text-slate-300">
+                          <td className="py-2 pr-3 text-foreground/80">
                             {controllerLabel[bot.controller_name] || bot.controller_name}
                           </td>
-                          <td className="py-2 pr-3 text-slate-300">{bot.trading_pair}</td>
+                          <td className="py-2 pr-3 text-foreground/80">{bot.trading_pair}</td>
                           <td className="py-2 pr-3">
                             <Badge
                               variant={bot.local_status === "submitted" ? "default" : "destructive"}
@@ -828,8 +828,8 @@ export default function HummingbotTestnetPage() {
                               {bot.remote_status}
                             </Badge>
                           </td>
-                          <td className="py-2 pr-3 text-slate-400">{bot.matched_by}</td>
-                          <td className="py-2 pr-3 text-slate-400">{runtimeStr(bot.runtime_seconds)}</td>
+                          <td className="py-2 pr-3 text-muted-foreground">{bot.matched_by}</td>
+                          <td className="py-2 pr-3 text-muted-foreground">{runtimeStr(bot.runtime_seconds)}</td>
                           <td className="py-2">
                             {bot.remote_status === "running" || bot.local_status === "submitted" ? (
                               <Button
@@ -841,7 +841,7 @@ export default function HummingbotTestnetPage() {
                                 停止
                               </Button>
                             ) : (
-                              <span className="text-slate-600 text-[10px]">—</span>
+                              <span className="text-muted-foreground/50 text-[10px]">—</span>
                             )}
                           </td>
                         </tr>

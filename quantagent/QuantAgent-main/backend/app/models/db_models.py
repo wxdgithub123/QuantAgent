@@ -897,8 +897,74 @@ class SkillWorkflowDB(Base):
     author = Column(String(100), nullable=True)
     tags = Column(JSONB, nullable=False, default=[])
     version = Column(String(20), nullable=False, default="1.0.0")
-    
+
     # 时间戳
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     last_executed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+# ── L3/L5: Factor & Signal persistence ─────────────────────────────────────
+
+
+class FactorSnapshotDB(Base):
+    """Persisted factor/indicator values for audit trail and reproducibility."""
+
+    __tablename__ = "factor_snapshots"
+    __table_args__ = (
+        Index("idx_factor_symbol_time", "symbol", "timestamp"),
+        Index("idx_factor_name", "factor_name"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(20), nullable=False)
+    timestamp = Column(DateTime(timezone=True), nullable=False)
+    factor_name = Column(String(50), nullable=False)
+    factor_value = Column(Float, nullable=False)
+    parameters = Column(JSONB, nullable=False, default={})
+    source = Column(String(20), nullable=False, default="indicators")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class SignalEventDB(Base):
+    """Persisted signal events consumed by L6 decision layer."""
+
+    __tablename__ = "signal_events"
+    __table_args__ = (
+        Index("idx_signal_symbol_time", "symbol", "timestamp"),
+        Index("idx_signal_type", "signal_type"),
+        Index("idx_signal_source", "source_strategy"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(20), nullable=False)
+    timestamp = Column(DateTime(timezone=True), nullable=False)
+    signal_type = Column(String(20), nullable=False)
+    signal_value = Column(Float, nullable=False, default=0.0)
+    confidence = Column(Float, nullable=False, default=0.5)
+    source_strategy = Column(String(30), nullable=False, default="")
+    strategy_id = Column(String(30), nullable=False, default="")
+    factors = Column(JSONB, nullable=False, default={})
+    extra_data = Column(JSONB, nullable=False, default={})  # "metadata" reserved by SQLAlchemy
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class CoordinationHistoryDB(Base):
+    """Persisted coordination decisions for audit and visualization."""
+
+    __tablename__ = "coordination_history"
+    __table_args__ = (
+        Index("idx_coord_symbol_time", "symbol", "timestamp"),
+        Index("idx_coord_signal", "final_signal"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(20), nullable=False)
+    timestamp = Column(DateTime(timezone=True), nullable=False)
+    final_signal = Column(String(20), nullable=False)
+    confidence = Column(Float, nullable=False, default=0.0)
+    vote_breakdown = Column(JSONB, nullable=False, default={})
+    risk_veto = Column(Boolean, nullable=False, default=False)
+    summary = Column(Text, nullable=False, default="")
+    agent_signals = Column(JSONB, nullable=False, default=[])
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -118,11 +118,28 @@ services:
     networks:
       - quantagent-network
 
+  # MQTT Broker — Hummingbot API 用 MQTT 与 Bot 实例通信
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    container_name: mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "hc-$$RANDOM", "-W", "3"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - quantagent-network
+
   # Hummingbot API (FastAPI)
   # 使用自定义镜像（包含 docker.io CLI 和正确的 BOTS_PATH）
   # 构建命令：docker build -f Dockerfile.hummingbot-api -t hummingbot-api-fixed:latest .
   hummingbot-api:
-    image: hummingbot-api-fixed:v6
+    image: hummingbot-api-fixed:v9
     container_name: hummingbot-api
     restart: unless-stopped
     ports:
@@ -138,8 +155,19 @@ services:
     environment:
       - BOTS_HOST_PATH=A:/project/Hummingbot/quantagent/QuantAgent-main/hummingbot_data/bots
       - DOCKER_HOST=unix:///var/run/docker.sock
+      - BROKER_HOST=mosquitto
+      - BROKER_PORT=1883
+      - BROKER_USERNAME=admin
+      - BROKER_PASSWORD=password
+      - DOCKER_NETWORK=quantagent-main_quantagent-network
+      # Proxy — pass through to bot containers for Binance API access
+      - HTTP_PROXY=http://host.docker.internal:7897
+      - HTTPS_PROXY=http://host.docker.internal:7897
+      - NO_PROXY=localhost,127.0.0.1,mosquitto,hummingbot-postgres
     depends_on:
       hummingbot-postgres:
+        condition: service_healthy
+      mosquitto:
         condition: service_healthy
     # healthcheck:
     #   test: ["CMD-SHELL", "curl -f http://localhost:8000/ || exit 1"]
@@ -175,6 +203,7 @@ services:
       # Ollama 使用 host.docker.internal 访问宿主机
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - LLM_PROVIDER=ollama
+      - OPENBB_FRED_API_KEY=${OPENBB_FRED_API_KEY:-}
       # 禁用 Ollama 请求的代理
       - OLLAMA_NO_PROXY=true
       - NO_PROXY=host.docker.internal,host-gateway,ollama,192.168.10.239,localhost,127.0.0.1,host.docker.internal:11434,backend,postgres,redis,nats,clickhouse,frontend,gateway,hummingbot-api,172.19.0.0/16

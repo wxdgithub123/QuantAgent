@@ -39,6 +39,17 @@ ccxt>=4.4.40
 pycoingecko>=3.2.0
 binance-connector>=3.9.0
 
+# Unified Data Platform (L1-L2, optional graceful fallback)
+openbb[crypto,economy]>=4.3.0
+
+# Lightweight OLAP Storage (L4)
+duckdb>=1.1.0
+pyarrow>=17.0.0
+
+# TradingAgents multi-agent debate framework (L6, optional graceful fallback)
+# Install from GitHub if not on PyPI:
+# tradingagents @ git+https://github.com/TradingAgents-AI/tradingagents.git
+
 # Messaging
 nats-py>=2.9.0
 

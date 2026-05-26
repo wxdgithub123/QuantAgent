@@ -9,7 +9,7 @@ import {
   BarChart2, Percent, AlertTriangle, CheckCircle2, Terminal, 
   BookOpen, LayoutDashboard, Calendar as CalendarIcon, History, Shield, Zap, Info, X,
   ArrowLeft, ChevronRight, ChevronDown, ChevronUp, ChevronLeft, Settings2, MousePointer2,
-  Bookmark, BookmarkCheck, Trash2, List, Server
+  Bookmark, BookmarkCheck, Trash2, List, Server, Layers, Brain
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -33,7 +33,7 @@ import WeightEvolutionChart from "@/components/replay/WeightEvolutionChart";
 // Dynamic import with SSR disabled to avoid hydration mismatch with localStorage state
 const ReplayContent = dynamic(() => Promise.resolve(ReplayContentWithHydrationFix), {
   ssr: false,
-  loading: () => <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">Loading Replay...</div>
+  loading: () => <div className="min-h-screen bg-background flex items-center justify-center text-muted-foreground">Loading Replay...</div>
 });
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1384,9 +1384,9 @@ function ReplayContentWithHydrationFix() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-40">
+      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
         <div className="container mx-auto px-4 py-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -1394,21 +1394,21 @@ function ReplayContentWithHydrationFix() {
                 <History className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h1 className="text-lg font-bold text-slate-100">QuantAgent OS</h1>
-                <p className="text-[10px] text-slate-400">历史回放模拟</p>
+                <h1 className="text-lg font-bold text-foreground">QuantAgent OS</h1>
+                <p className="text-[10px] text-muted-foreground">历史回放模拟</p>
               </div>
             </div>
             <nav className="hidden md:flex items-center gap-1">
-              <Link href="/dashboard" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+              <Link href="/dashboard" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 <LayoutDashboard className="w-4 h-4" /> 仪表盘
               </Link>
-              <Link href="/backtest" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+              <Link href="/backtest" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 <BarChart2 className="w-4 h-4" /> 回测
               </Link>
               <span className="px-3 py-1.5 text-sm text-indigo-400 bg-indigo-500/10 rounded-lg border border-indigo-500/20 font-medium flex items-center gap-1.5">
                 <History className="w-4 h-4" /> 历史回放
               </span>
-              <Link href="/terminal" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+              <Link href="/terminal" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 <Terminal className="w-4 h-4" /> 终端
               </Link>
               <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
@@ -1417,11 +1417,13 @@ function ReplayContentWithHydrationFix() {
               <button onClick={toggleHistoryPanel}
                 className={`px-3 py-1.5 text-sm rounded-lg transition-all flex items-center gap-1.5 ${showHistoryPanel
                     ? 'text-amber-400 bg-amber-500/10 border border-amber-500/20' 
-                    : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
                 }`}
               >
                 <List className="w-4 h-4" /> 历史记录
               </button>
+              <Link href="/signals" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Layers className="w-4 h-4" /> 因子/信号</Link>
+              <Link href="/decisions" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Brain className="w-4 h-4" /> 决策中心</Link>
             </nav>
           </div>
         </div>
@@ -1430,52 +1432,52 @@ function ReplayContentWithHydrationFix() {
       <main className="container mx-auto px-4 py-6">
         {/* ── History Panel ── */}
         {showHistoryPanel && (
-          <Card className="bg-slate-900 border-slate-700/50 shadow-lg mb-6">
-            <CardHeader className="pb-3 border-b border-slate-800/50 flex flex-row items-center justify-between">
-              <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+          <Card className="bg-card border-border/50 shadow-lg mb-6">
+            <CardHeader className="pb-3 border-b border-border/50 flex flex-row items-center justify-between">
+              <CardTitle className="text-foreground text-sm flex items-center gap-2">
                 <List className="w-4 h-4 text-amber-400" />
                 回放历史记录
-                <Badge variant="outline" className="ml-2 text-xs border-slate-600 text-slate-400">
+                <Badge variant="outline" className="ml-2 text-xs border-slate-600 text-muted-foreground">
                   {historyTotalCount > 0 ? `${historyTotalCount} 条` : `${historyList.length} 条`}
                 </Badge>
               </CardTitle>
               <div className="flex items-center gap-2">
                 {/* 状态筛选 */}
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-[100px] h-7 bg-slate-800 border-slate-700 text-slate-300 text-xs">
+                  <SelectTrigger className="w-[100px] h-7 bg-secondary border-border text-foreground/80 text-xs">
                     <SelectValue placeholder="状态" />
                   </SelectTrigger>
-                  <SelectContent className="bg-slate-800 border-slate-700">
-                    <SelectItem value="all" className="text-slate-100 text-xs focus:bg-slate-700">全部状态</SelectItem>
-                    <SelectItem value="completed" className="text-slate-100 text-xs focus:bg-slate-700">已完成</SelectItem>
-                    <SelectItem value="running" className="text-slate-100 text-xs focus:bg-slate-700">运行中</SelectItem>
-                    <SelectItem value="paused" className="text-slate-100 text-xs focus:bg-slate-700">已暂停</SelectItem>
-                    <SelectItem value="failed" className="text-slate-100 text-xs focus:bg-slate-700">失败</SelectItem>
+                  <SelectContent className="bg-secondary border-border">
+                    <SelectItem value="all" className="text-foreground text-xs focus:bg-secondary">全部状态</SelectItem>
+                    <SelectItem value="completed" className="text-foreground text-xs focus:bg-secondary">已完成</SelectItem>
+                    <SelectItem value="running" className="text-foreground text-xs focus:bg-secondary">运行中</SelectItem>
+                    <SelectItem value="paused" className="text-foreground text-xs focus:bg-secondary">已暂停</SelectItem>
+                    <SelectItem value="failed" className="text-foreground text-xs focus:bg-secondary">失败</SelectItem>
                   </SelectContent>
                 </Select>
                 {/* 策略筛选 */}
                 <Select value={strategyFilter} onValueChange={setStrategyFilter}>
-                  <SelectTrigger className="w-[90px] h-7 bg-slate-800 border-slate-700 text-slate-300 text-xs">
+                  <SelectTrigger className="w-[90px] h-7 bg-secondary border-border text-foreground/80 text-xs">
                     <SelectValue placeholder="策略" />
                   </SelectTrigger>
-                  <SelectContent className="bg-slate-800 border-slate-700">
-                    <SelectItem value="all" className="text-slate-100 text-xs focus:bg-slate-700">全部策略</SelectItem>
+                  <SelectContent className="bg-secondary border-border">
+                    <SelectItem value="all" className="text-foreground text-xs focus:bg-secondary">全部策略</SelectItem>
                     {templates.map(t => (
-                      <SelectItem key={t.id} value={t.id} className="text-slate-100 text-xs focus:bg-slate-700">{t.name}</SelectItem>
+                      <SelectItem key={t.id} value={t.id} className="text-foreground text-xs focus:bg-secondary">{t.name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 <button onClick={() => { setShowSavedOnly(!showSavedOnly); }}
                   className={`px-3 py-1 text-xs rounded-lg transition-all flex items-center gap-1.5 ${showSavedOnly
                       ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' 
-                      : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700'
+                      : 'bg-secondary text-muted-foreground border border-border hover:bg-secondary'
                   }`}
                 >
                   <BookmarkCheck className="w-3.5 h-3.5" />
                   已保存
                 </button>
                 <button onClick={() => fetchHistory(historyPage)}
-                  className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200 transition-all"title="刷新"
+                  className="p-1.5 rounded-lg bg-secondary text-muted-foreground hover:bg-secondary hover:text-foreground/90 transition-all"title="刷新"
                 >
                   <RefreshCw className={`w-4 h-4 ${historyLoading ? 'animate-spin' : ''}`} />
                 </button>
@@ -1483,11 +1485,11 @@ function ReplayContentWithHydrationFix() {
             </CardHeader>
             <CardContent className="p-4">
               {historyLoading ? (
-                <div className="flex items-center justify-center py-8 text-slate-500">
+                <div className="flex items-center justify-center py-8 text-muted-foreground">
                   <RefreshCw className="w-5 h-5 animate-spin mr-2" /> 加载中...
                 </div>
               ) : historyList.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-8 text-slate-500 space-y-2">
+                <div className="flex flex-col items-center justify-center py-8 text-muted-foreground space-y-2">
                   <History className="w-8 h-8 opacity-30" />
                   <p className="text-sm">{showSavedOnly ? "暂无保存的记录" : "暂无回放记录"}</p>
                 </div>
@@ -1505,7 +1507,7 @@ function ReplayContentWithHydrationFix() {
                         <div 
                           className={`flex items-center justify-between p-3 rounded-lg border transition-all cursor-pointer ${session?.replay_session_id === item.replay_session_id
                               ? 'bg-indigo-500/10 border-indigo-500/30'
-                              : 'bg-slate-800/50 border-slate-700/50 hover:bg-slate-800 hover:border-slate-600'
+                              : 'bg-secondary/50 border-border/50 hover:bg-secondary hover:border-slate-600'
                           }`} onClick={() => {
                             if (isExpanded) {setExpandedSessionId(null);
                             } else {setExpandedSessionId(item.replay_session_id);
@@ -1517,12 +1519,12 @@ function ReplayContentWithHydrationFix() {
                         >
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1">
-                              <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
-                              <span className="text-sm font-medium text-slate-100 truncate">
+                              <ChevronRight className={`w-4 h-4 text-muted-foreground transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                              <span className="text-sm font-medium text-foreground truncate">
                                 {item.symbol}
                               </span>
                               <Badge className={`text-[10px] px-1.5 py-0.5 ${item.status === 'completed' ? 'bg-green-500/10 text-green-400 border-green-500/20' :item.status === 'running' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :item.status === 'failed' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
-                                'bg-slate-700 text-slate-400 border-slate-600'
+                                'bg-secondary text-muted-foreground border-slate-600'
                               }`}>
                                 {item.status}
                               </Badge>
@@ -1530,7 +1532,7 @@ function ReplayContentWithHydrationFix() {
                                 <Bookmark className="w-3.5 h-3.5 text-amber-400" />
                               )}
                             </div>
-                            <div className="flex items-center gap-4 text-[11px] text-slate-500">
+                            <div className="flex items-center gap-4 text-[11px] text-muted-foreground">
                               <span>{item.strategy_type?.toUpperCase() || 'MA'}</span>
                               <span>{format(new Date(item.start_time), "MM-dd HH:mm")} ~ {format(new Date(item.end_time), "MM-dd HH:mm")}</span>
                               {/* 显示 summary 信息（如果有） */}
@@ -1548,7 +1550,7 @@ function ReplayContentWithHydrationFix() {
                               )}
                               {/* 显示交易次数 */}
                               {item.summary?.trade_count !== null && item.summary?.trade_count !== undefined && (
-                                <span className="text-slate-400">{item.summary.trade_count}笔</span>
+                                <span className="text-muted-foreground">{item.summary.trade_count}笔</span>
                               )}
                             </div>
                           </div>
@@ -1568,13 +1570,13 @@ function ReplayContentWithHydrationFix() {
                             <button onClick={() => handleToggleSave(item.replay_session_id)}
                               className={`p-1.5 rounded-lg transition-all ${item.is_saved
                                   ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30'
-                                  : 'bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-slate-200'
+                                  : 'bg-secondary text-muted-foreground hover:bg-slate-600 hover:text-foreground/90'
                               }`}title={item.is_saved ? "取消保存" : "保存记录"}
                             >
                               {item.is_saved ? <BookmarkCheck className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
                             </button>
                             <button onClick={() => handleDeleteSession(item.replay_session_id)}
-                              className="p-1.5 rounded-lg bg-slate-700 text-slate-400 hover:bg-red-500/20 hover:text-red-400 transition-all"title="删除记录"
+                              className="p-1.5 rounded-lg bg-secondary text-muted-foreground hover:bg-red-500/20 hover:text-red-400 transition-all"title="删除记录"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -1583,81 +1585,81 @@ function ReplayContentWithHydrationFix() {
                         
                         {/* Expanded Details Panel */}
                         {isExpanded && (
-                          <div className="bg-slate-800/30 border border-slate-700/30 rounded-lg p-3 ml-4">
+                          <div className="bg-secondary/30 border border-border/30 rounded-lg p-3 ml-4">
                             {isLoadingStats ? (
-                              <div className="flex items-center justify-center py-4 text-slate-500">
+                              <div className="flex items-center justify-center py-4 text-muted-foreground">
                                 <RefreshCw className="w-4 h-4 animate-spin mr-2" /> 加载统计数据...
                               </div>
                             ) : stats ? (
                               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-                                <div className="bg-slate-800/50 rounded p-2">
-                                  <div className="text-slate-500 mb-1">交易次数</div>
-                                  <div className="text-slate-100 font-medium">{stats.total_trades}</div>
+                                <div className="bg-secondary/50 rounded p-2">
+                                  <div className="text-muted-foreground mb-1">交易次数</div>
+                                  <div className="text-foreground font-medium">{stats.total_trades}</div>
                                 </div>
-                                <div className="bg-slate-800/50 rounded p-2">
-                                  <div className="text-slate-500 mb-1">胜率</div>
+                                <div className="bg-secondary/50 rounded p-2">
+                                  <div className="text-muted-foreground mb-1">胜率</div>
                                   <div className={`font-medium ${stats.win_rate >= 50 ? 'text-green-400' : 'text-red-400'}`}>
                                     {stats.win_rate.toFixed(1)}%
                                   </div>
                                 </div>
-                                <div className="bg-slate-800/50 rounded p-2">
-                                  <div className="text-slate-500 mb-1">总盈亏</div>
+                                <div className="bg-secondary/50 rounded p-2">
+                                  <div className="text-muted-foreground mb-1">总盈亏</div>
                                   <div className={`font-medium ${stats.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                                     {stats.total_pnl >= 0 ? '+' : ''}{stats.total_pnl.toFixed(2)}
                                   </div>
                                 </div>
-                                <div className="bg-slate-800/50 rounded p-2">
-                                  <div className="text-slate-500 mb-1">收益率</div>
+                                <div className="bg-secondary/50 rounded p-2">
+                                  <div className="text-muted-foreground mb-1">收益率</div>
                                   <div className={`font-medium ${stats.returns_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                                     {stats.returns_pct >= 0 ? '+' : ''}{stats.returns_pct.toFixed(2)}%
                                   </div>
                                 </div>
-                                <div className="bg-slate-800/50 rounded p-2">
-                                  <div className="text-slate-500 mb-1">盈利次数</div>
+                                <div className="bg-secondary/50 rounded p-2">
+                                  <div className="text-muted-foreground mb-1">盈利次数</div>
                                   <div className="text-green-400 font-medium">{stats.winning_trades}</div>
                                 </div>
-                                <div className="bg-slate-800/50 rounded p-2">
-                                  <div className="text-slate-500 mb-1">亏损次数</div>
+                                <div className="bg-secondary/50 rounded p-2">
+                                  <div className="text-muted-foreground mb-1">亏损次数</div>
                                   <div className="text-red-400 font-medium">{stats.losing_trades}</div>
                                 </div>
-                                <div className="bg-slate-800/50 rounded p-2">
-                                  <div className="text-slate-500 mb-1">平均盈利</div>
+                                <div className="bg-secondary/50 rounded p-2">
+                                  <div className="text-muted-foreground mb-1">平均盈利</div>
                                   <div className="text-green-400 font-medium">+{stats.avg_win.toFixed(2)}</div>
                                 </div>
-                                <div className="bg-slate-800/50 rounded p-2">
-                                  <div className="text-slate-500 mb-1">平均亏损</div>
+                                <div className="bg-secondary/50 rounded p-2">
+                                  <div className="text-muted-foreground mb-1">平均亏损</div>
                                   <div className="text-red-400 font-medium">-{stats.avg_loss.toFixed(2)}</div>
                                 </div>
-                                <div className="bg-slate-800/50 rounded p-2">
-                                  <div className="text-slate-500 mb-1">最大单笔盈利</div>
+                                <div className="bg-secondary/50 rounded p-2">
+                                  <div className="text-muted-foreground mb-1">最大单笔盈利</div>
                                   <div className="text-green-400 font-medium">+{stats.max_profit.toFixed(2)}</div>
                                 </div>
-                                <div className="bg-slate-800/50 rounded p-2">
-                                  <div className="text-slate-500 mb-1">最大单笔亏损</div>
+                                <div className="bg-secondary/50 rounded p-2">
+                                  <div className="text-muted-foreground mb-1">最大单笔亏损</div>
                                   <div className="text-red-400 font-medium">-{stats.max_loss.toFixed(2)}</div>
                                 </div>
-                                <div className="bg-slate-800/50 rounded p-2">
-                                  <div className="text-slate-500 mb-1">手续费</div>
-                                  <div className="text-slate-400 font-medium">-{stats.total_fees.toFixed(2)}</div>
+                                <div className="bg-secondary/50 rounded p-2">
+                                  <div className="text-muted-foreground mb-1">手续费</div>
+                                  <div className="text-muted-foreground font-medium">-{stats.total_fees.toFixed(2)}</div>
                                 </div>
-                                <div className="bg-slate-800/50 rounded p-2">
-                                  <div className="text-slate-500 mb-1">最终权益</div>
-                                  <div className="text-slate-100 font-medium">${stats.final_equity.toFixed(2)}</div>
+                                <div className="bg-secondary/50 rounded p-2">
+                                  <div className="text-muted-foreground mb-1">最终权益</div>
+                                  <div className="text-foreground font-medium">${stats.final_equity.toFixed(2)}</div>
                                 </div>
                               </div>
                             ) : (
-                              <div className="text-center py-4 text-slate-500 text-xs">
+                              <div className="text-center py-4 text-muted-foreground text-xs">
                                 暂无交易数据
                               </div>
                             )}
                             
                             {/* Strategy Parameters */}
                             {item.params && Object.keys(item.params).length > 0 && (
-                              <div className="mt-3 pt-3 border-t border-slate-700/30">
-                                <div className="text-[10px] text-slate-500 mb-2">策略参数</div>
+                              <div className="mt-3 pt-3 border-t border-border/30">
+                                <div className="text-[10px] text-muted-foreground mb-2">策略参数</div>
                                 <div className="flex flex-wrap gap-1">
                                   {Object.entries(item.params).map(([key, value]) => (
-                                    <Badge key={key} variant="outline" className="text-[10px] border-slate-600 text-slate-400 bg-slate-800/50">
+                                    <Badge key={key} variant="outline" className="text-[10px] border-slate-600 text-muted-foreground bg-secondary/50">
                                       {key}: {String(value)}
                                     </Badge>
                                   ))}
@@ -1674,21 +1676,21 @@ function ReplayContentWithHydrationFix() {
               
               {/* 分页控件 */}
               {historyTotalPages > 1 && (
-                <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-700/30">
-                  <div className="text-xs text-slate-500">
+                <div className="flex items-center justify-between mt-4 pt-4 border-t border-border/30">
+                  <div className="text-xs text-muted-foreground">
                     第 {historyPage} / {historyTotalPages} 页，共 {historyTotalCount} 条
                   </div>
                   <div className="flex items-center gap-2">
                     <Button
                       variant="outline"size="sm"disabled={historyPage <= 1 || historyLoading} onClick={() => fetchHistory(historyPage - 1)}
-                      className="h-7 px-2 text-xs border-slate-700 text-slate-300 hover:bg-slate-800"
+                      className="h-7 px-2 text-xs border-border text-foreground/80 hover:bg-secondary"
                     >
                       <ChevronLeft className="w-4 h-4" />
                       上一页
                     </Button>
                     <Button
                       variant="outline"size="sm"disabled={historyPage >= historyTotalPages || historyLoading} onClick={() => fetchHistory(historyPage + 1)}
-                      className="h-7 px-2 text-xs border-slate-700 text-slate-300 hover:bg-slate-800"
+                      className="h-7 px-2 text-xs border-border text-foreground/80 hover:bg-secondary"
                     >
                       下一页
                       <ChevronRight className="w-4 h-4" />
@@ -1703,9 +1705,9 @@ function ReplayContentWithHydrationFix() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* ── Left: Config Panel ── */}
           <div className="lg:col-span-1 space-y-4">
-            <Card className="bg-slate-900 border-slate-700/50 shadow-lg">
-              <CardHeader className="pb-3 border-b border-slate-800/50">
-                <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+            <Card className="bg-card border-border/50 shadow-lg">
+              <CardHeader className="pb-3 border-b border-border/50">
+                <CardTitle className="text-foreground text-sm flex items-center gap-2">
                   <Settings2 className="w-4 h-4 text-indigo-400" />
                   回放配置
                 </CardTitle>
@@ -1713,17 +1715,17 @@ function ReplayContentWithHydrationFix() {
               <CardContent className="space-y-4 pt-4">
                 {/* Strategy Selection */}
                 <div>
-                  <label className="text-xs text-slate-400 mb-1.5 block">选择策略</label>
+                  <label className="text-xs text-muted-foreground mb-1.5 block">选择策略</label>
                   <Select value={selectedType} onValueChange={setSelectedType}>
-                    <SelectTrigger className="w-full bg-slate-800 border-slate-700 text-slate-100 h-9 text-sm">
+                    <SelectTrigger className="w-full bg-secondary border-border text-foreground h-9 text-sm">
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent className="bg-slate-800 border-slate-700">
+                    <SelectContent className="bg-secondary border-border">
                       {templates.map(t => (
-                        <SelectItem key={t.id} value={t.id} className="text-slate-100 focus:bg-slate-700 cursor-pointer">{t.name}</SelectItem>
+                        <SelectItem key={t.id} value={t.id} className="text-foreground focus:bg-secondary cursor-pointer">{t.name}</SelectItem>
                       ))}
-                      <SelectSeparator className="bg-slate-700" />
-                      <SelectItem value="dynamic_selection" className="text-indigo-300 focus:bg-slate-700 cursor-pointer">
+                      <SelectSeparator className="bg-secondary" />
+                      <SelectItem value="dynamic_selection" className="text-indigo-300 focus:bg-secondary cursor-pointer">
                         🔄 动态选择（多策略组合）
                       </SelectItem>
                     </SelectContent>
@@ -1736,19 +1738,19 @@ function ReplayContentWithHydrationFix() {
                 </div>
 
                 {/* Preset Profiles Toggle */}
-                <div className="border border-slate-700/50 rounded-lg overflow-hidden">
+                <div className="border border-border/50 rounded-lg overflow-hidden">
                   <button onClick={() => setShowPresets(!showPresets)}
-                    className="w-full px-3 py-2 bg-slate-800/50 hover:bg-slate-800 text-left flex items-center justify-between transition-all"
+                    className="w-full px-3 py-2 bg-secondary/50 hover:bg-secondary text-left flex items-center justify-between transition-all"
                   >
-                    <span className="text-xs text-slate-300 flex items-center gap-2">
+                    <span className="text-xs text-foreground/80 flex items-center gap-2">
                       <Zap className="w-3.5 h-3.5 text-amber-400" />
                       快速预设方案
                     </span>
-                    {showPresets ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+                    {showPresets ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
                   </button>
                   
                   {showPresets && (
-                    <div className="p-2 space-y-2 bg-slate-900/50">
+                    <div className="p-2 space-y-2 bg-card/50">
                       {PRESET_PROFILES.map(preset => {
                         const days = (() => {
                           if (!validDates || validDates.length === 0) return preset.config.days;
@@ -1764,19 +1766,19 @@ function ReplayContentWithHydrationFix() {
                         
                         return (
                           <button key={preset.id} onClick={() => applyPreset(preset)}
-                            className="w-full p-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700/50 hover:border-indigo-500/30 transition-all text-left group"
+                            className="w-full p-2 rounded-lg bg-secondary hover:bg-secondary border border-border/50 hover:border-indigo-500/30 transition-all text-left group"
                           >
                             <div className="flex items-start justify-between">
                               <div className="flex-1">
                                 <div className="flex items-center gap-1.5">
                                   <span className="text-sm">{preset.icon}</span>
-                                  <span className="text-xs font-medium text-slate-200 group-hover:text-indigo-300">{preset.name}</span>
+                                  <span className="text-xs font-medium text-foreground/90 group-hover:text-indigo-300">{preset.name}</span>
                                 </div>
-                                <p className="text-[10px] text-slate-500 mt-0.5">{preset.desc}</p>
+                                <p className="text-[10px] text-muted-foreground mt-0.5">{preset.desc}</p>
                               </div>
                               <div className="text-right">
                                 <p className="text-[10px] text-amber-400/80">{estimatedTime}</p>
-                                <p className="text-[10px] text-slate-500">{dataPointsStr}</p>
+                                <p className="text-[10px] text-muted-foreground">{dataPointsStr}</p>
                               </div>
                             </div>
                           </button>
@@ -1788,14 +1790,14 @@ function ReplayContentWithHydrationFix() {
 
                 {/* Market Symbol */}
                 <div>
-                  <label className="text-xs text-slate-400 mb-1.5 block">交易品种</label>
+                  <label className="text-xs text-muted-foreground mb-1.5 block">交易品种</label>
                   <Select value={symbol} onValueChange={setSymbol}>
-                    <SelectTrigger className="w-full bg-slate-800 border-slate-700 text-slate-100 h-9 text-sm">
+                    <SelectTrigger className="w-full bg-secondary border-border text-foreground h-9 text-sm">
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent className="bg-slate-800 border-slate-700">
+                    <SelectContent className="bg-secondary border-border">
                       {SYMBOLS.map(s => (
-                        <SelectItem key={s.value} value={s.value} className="text-slate-100 focus:bg-slate-700 cursor-pointer">{s.label}</SelectItem>
+                        <SelectItem key={s.value} value={s.value} className="text-foreground focus:bg-secondary cursor-pointer">{s.label}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -1804,9 +1806,9 @@ function ReplayContentWithHydrationFix() {
                 {/* Date Range Picker */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs text-slate-400">回放日期范围</label>
+                    <label className="text-xs text-muted-foreground">回放日期范围</label>
                     {validDates && validDates.length > 0 && (
-                      <span className="text-[10px] text-slate-500">
+                      <span className="text-[10px] text-muted-foreground">
                         {(() => {
                           const minD = validDates[0];
                           const maxD = validDates[validDates.length - 1];
@@ -1835,7 +1837,7 @@ function ReplayContentWithHydrationFix() {
 
                 {/* Interval */}
                 <div>
-                  <label className="text-xs text-slate-400 mb-1.5 block">K线周期</label>
+                  <label className="text-xs text-muted-foreground mb-1.5 block">K线周期</label>
                   <Select 
                     value={interval} 
                     onValueChange={(value) => {
@@ -1843,12 +1845,12 @@ function ReplayContentWithHydrationFix() {
                       setInterval(value);
                     }}
                   >
-                    <SelectTrigger className="w-full bg-slate-800 border-slate-700 text-slate-100 h-9 text-sm">
+                    <SelectTrigger className="w-full bg-secondary border-border text-foreground h-9 text-sm">
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent className="bg-slate-800 border-slate-700">
+                    <SelectContent className="bg-secondary border-border">
                       {INTERVALS.map(i => (
-                        <SelectItem key={i.value} value={i.value} className="text-slate-100 focus:bg-slate-700 cursor-pointer">{i.label}</SelectItem>
+                        <SelectItem key={i.value} value={i.value} className="text-foreground focus:bg-secondary cursor-pointer">{i.label}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -1884,15 +1886,15 @@ function ReplayContentWithHydrationFix() {
                   const hasNoData = dataPoints === 0;
                   
                   return (
-                    <div className={`rounded-lg p-3 ${hasNoData ? 'bg-red-500/10 border border-red-500/30' : 'bg-slate-800/50 border border-amber-500/20'}`}>
+                    <div className={`rounded-lg p-3 ${hasNoData ? 'bg-red-500/10 border border-red-500/30' : 'bg-secondary/50 border border-amber-500/20'}`}>
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                        <span className="text-[10px] text-muted-foreground flex items-center gap-1">
                           <Clock className="w-3 h-3" />
                           预计回放时间
                           {estimateLoading && <RefreshCw className="w-3 h-3 animate-spin text-indigo-400" />}
                           {useServerEstimate && <span className="text-indigo-400/60">(服务端估算)</span>}
                         </span>
-                        <Badge variant="outline" className="text-[10px] border-slate-600 text-slate-300 bg-slate-800">
+                        <Badge variant="outline" className="text-[10px] border-slate-600 text-foreground/80 bg-secondary">
                           {speed === -1 ? "极速" : `${speed}x`}
                         </Badge>
                       </div>
@@ -1901,7 +1903,7 @@ function ReplayContentWithHydrationFix() {
                           <p className={`text-lg font-bold ${hasNoData ? 'text-red-400' : 'text-amber-400'}`}>
                             {estimateLoading ? '估算中...' : estimatedTime}
                           </p>
-                          <p className="text-[10px] text-slate-500 mt-0.5">
+                          <p className="text-[10px] text-muted-foreground mt-0.5">
                             {interval} · {days}天范围 · {dataPointsStr}
                           </p>
                           {hasNoData && (
@@ -1936,39 +1938,39 @@ function ReplayContentWithHydrationFix() {
                 {/* Speed & Capital */}
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-xs text-slate-400 mb-1.5 block">回放倍速</label>
+                    <label className="text-xs text-muted-foreground mb-1.5 block">回放倍速</label>
                     <Select value={String(speed)} onValueChange={v => setSpeed(Number(v))}>
-                      <SelectTrigger className="w-full bg-slate-800 border-slate-700 text-slate-100 h-9 text-sm">
+                      <SelectTrigger className="w-full bg-secondary border-border text-foreground h-9 text-sm">
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent className="bg-slate-800 border-slate-700">
+                      <SelectContent className="bg-secondary border-border">
                         {SPEEDS.map(s => (
-                          <SelectItem key={s.value} value={String(s.value)} className="text-slate-100 focus:bg-slate-700 cursor-pointer">{s.label}</SelectItem>
+                          <SelectItem key={s.value} value={String(s.value)} className="text-foreground focus:bg-secondary cursor-pointer">{s.label}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 mb-1.5 block">初始资金</label>
+                    <label className="text-xs text-muted-foreground mb-1.5 block">初始资金</label>
                     <input
                       type="number"value={initialCapital}onChange={e => setInitialCapital(Number(e.target.value))}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                      className="w-full bg-secondary border border-border rounded-lg px-3 py-1.5 text-sm text-foreground focus:outline-none focus:border-blue-500"
                     />
                   </div>
                 </div>
 
                 {/* Slippage Model Info */}
-                <div className="p-3 bg-slate-800/50 border border-slate-700/50 rounded-lg">
+                <div className="p-3 bg-secondary/50 border border-border/50 rounded-lg">
                   <div className="flex items-start gap-2">
-                    <Info className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
+                    <Info className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />
                     <div className="space-y-1">
-                      <p className="text-xs text-slate-300 font-medium">交易成本模型</p>
-                      <div className="flex items-center gap-3 text-[11px] text-slate-400">
-                        <span>滑点率: <span className="text-slate-200">0.05%</span></span>
-                        <span className="text-slate-600">|</span>
-                        <span>手续费: <span className="text-slate-200">0.1%</span></span>
+                      <p className="text-xs text-foreground/80 font-medium">交易成本模型</p>
+                      <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+                        <span>滑点率: <span className="text-foreground/90">0.05%</span></span>
+                        <span className="text-muted-foreground/50">|</span>
+                        <span>手续费: <span className="text-foreground/90">0.1%</span></span>
                       </div>
-                      <p className="text-[10px] text-slate-500">市价单自动应用滑点，买入价上浮、卖出价下调</p>
+                      <p className="text-[10px] text-muted-foreground">市价单自动应用滑点，买入价上浮、卖出价下调</p>
                     </div>
                   </div>
                 </div>
@@ -2018,9 +2020,9 @@ function ReplayContentWithHydrationFix() {
             )}
             {/* Regular Strategy Params */}
             {selectedType !== "dynamic_selection" && currentTemplate && currentTemplate.params.length > 0 && (
-              <Card className="bg-slate-900 border-slate-700/50">
+              <Card className="bg-card border-border/50">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                  <CardTitle className="text-foreground text-sm flex items-center gap-2">
                     <div className="w-6 h-6 bg-purple-500/10 rounded flex items-center justify-center border border-purple-500/20">
                       <Settings2 className="w-3.5 h-3.5 text-purple-400" />
                     </div>
@@ -2031,7 +2033,7 @@ function ReplayContentWithHydrationFix() {
                   {currentTemplate.params.map(p => (
                     <div key={p.key}>
                       <div className="flex items-center justify-between mb-1.5">
-                        <label className="text-xs text-slate-300">{p.label}</label>
+                        <label className="text-xs text-foreground/80">{p.label}</label>
                         <span className="text-xs font-mono text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded">
                           {paramValues[p.key] ?? p.default}
                         </span>
@@ -2041,11 +2043,11 @@ function ReplayContentWithHydrationFix() {
                           ...prev,
                           [p.key]: p.type === "int" ? parseInt(e.target.value) : parseFloat(e.target.value),
                         }))}
-                        className="w-full h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-purple-500"
+                        className="w-full h-1.5 bg-secondary rounded-full appearance-none cursor-pointer accent-purple-500"
                       />
                       <div className="flex justify-between mt-0.5">
-                        <span className="text-[9px] text-slate-600">{p.min}</span>
-                        <span className="text-[9px] text-slate-600">{p.max}</span>
+                        <span className="text-[9px] text-muted-foreground/50">{p.min}</span>
+                        <span className="text-[9px] text-muted-foreground/50">{p.max}</span>
                       </div>
                     </div>
                   ))}
@@ -2057,13 +2059,13 @@ function ReplayContentWithHydrationFix() {
           {/* ── Right: Replay Status & Monitoring ── */}
           <div className="lg:col-span-2 space-y-6">
             {!status ? (
-              <div className="flex flex-col items-center justify-center min-h-[500px] text-slate-500 space-y-4 border-2 border-dashed border-slate-800 rounded-2xl">
-                <div className="w-20 h-20 bg-slate-900/50 rounded-2xl flex items-center justify-center border border-slate-800 shadow-inner">
+              <div className="flex flex-col items-center justify-center min-h-[500px] text-muted-foreground space-y-4 border-2 border-dashed border-border rounded-2xl">
+                <div className="w-20 h-20 bg-card/50 rounded-2xl flex items-center justify-center border border-border shadow-inner">
                   <History className="w-10 h-10 opacity-20" />
                 </div>
                 <div className="text-center">
-                  <p className="text-base font-medium text-slate-400">准备就绪</p>
-                  <p className="text-sm text-slate-600 mt-1">配置完成后点击「开始回放」即可实时观察策略表现</p>
+                  <p className="text-base font-medium text-muted-foreground">准备就绪</p>
+                  <p className="text-sm text-muted-foreground/50 mt-1">配置完成后点击「开始回放」即可实时观察策略表现</p>
                 </div>
               </div>
             ) : (
@@ -2072,7 +2074,7 @@ function ReplayContentWithHydrationFix() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <Badge className={`px-2 py-1 ${status.status === "running" ? "bg-green-500/10 text-green-400 border-green-500/20" :status.status === "paused" ? "bg-yellow-500/10 text-yellow-400 border-yellow-500/20" :
-                      "bg-slate-700 text-slate-300"
+                      "bg-secondary text-foreground/80"
                     }`}>
                       {status.status.toUpperCase()}
                     </Badge>
@@ -2090,8 +2092,8 @@ function ReplayContentWithHydrationFix() {
                       </button>
                     )}
                     <div className="flex flex-col">
-                      <span className="text-sm font-bold text-slate-100">{session?.symbol}</span>
-                      <span className="text-[10px] text-slate-500">{selectedType.toUpperCase()} · {speed === -1 ? "极速" : `${speed}x`}</span>
+                      <span className="text-sm font-bold text-foreground">{session?.symbol}</span>
+                      <span className="text-[10px] text-muted-foreground">{selectedType.toUpperCase()} · {speed === -1 ? "极速" : `${speed}x`}</span>
                     </div>
                   </div>
                   
@@ -2102,7 +2104,7 @@ function ReplayContentWithHydrationFix() {
                       <button onClick={() => handleToggleSave(session.replay_session_id)}
                         className={`p-2 rounded-lg transition-all ${session.is_saved
                             ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30'
-                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200 border border-slate-700'
+                            : 'bg-secondary text-muted-foreground hover:bg-secondary hover:text-foreground/90 border border-border'
                         }`}
                         title={session.is_saved ? "取消保存" : "保存记录"}
                       >
@@ -2110,7 +2112,7 @@ function ReplayContentWithHydrationFix() {
                       </button>
                     )}
                     {status.status === "running" ? (
-                      <Button variant="outline" size="sm" onClick={handlePause} className="h-8 border-slate-700 hover:bg-slate-800">
+                      <Button variant="outline" size="sm" onClick={handlePause} className="h-8 border-border hover:bg-secondary">
                         <Pause className="w-3.5 h-3.5 mr-1.5" /> 暂停
                       </Button>
                     ) : (status.status === "paused" || status.status === "pending") ? (
@@ -2136,7 +2138,7 @@ function ReplayContentWithHydrationFix() {
                     {/* Delete button - only for completed/failed/paused sessions */}
                     {(status.status === "completed" || status.status === "failed" || status.status === "paused") && session && (
                       <button onClick={() => handleDeleteSession(session.replay_session_id)}
-                        className="p-2 rounded-lg bg-slate-800 text-slate-400 hover:bg-red-500/20 hover:text-red-400 transition-all border border-slate-700"
+                        className="p-2 rounded-lg bg-secondary text-muted-foreground hover:bg-red-500/20 hover:text-red-400 transition-all border border-border"
                         title="删除记录"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -2147,9 +2149,9 @@ function ReplayContentWithHydrationFix() {
 
                 {/* Warning Details Panel - Collapsible */}
                 {showWarningPanel && status.error_count && status.error_count > 0 && status.warnings && status.warnings.length > 0 && (
-                  <Card className="bg-slate-900 border-orange-500/30 shadow-lg animate-in slide-in-from-top-2 duration-200">
+                  <Card className="bg-card border-orange-500/30 shadow-lg animate-in slide-in-from-top-2 duration-200">
                     <CardHeader className="pb-2 pt-3 px-4">
-                      <CardTitle className="text-slate-100 text-sm flex items-center justify-between">
+                      <CardTitle className="text-foreground text-sm flex items-center justify-between">
                         <span className="flex items-center gap-2">
                           <AlertTriangle className="w-4 h-4 text-orange-400" />
                           警告详情
@@ -2158,9 +2160,9 @@ function ReplayContentWithHydrationFix() {
                           </Badge>
                         </span>
                         <button onClick={() => setShowWarningPanel(false)}
-                          className="p-1 hover:bg-slate-800 rounded transition-colors"
+                          className="p-1 hover:bg-secondary rounded transition-colors"
                         >
-                          <X className="w-4 h-4 text-slate-500" />
+                          <X className="w-4 h-4 text-muted-foreground" />
                         </button>
                       </CardTitle>
                     </CardHeader>
@@ -2168,7 +2170,7 @@ function ReplayContentWithHydrationFix() {
                       <div className="max-h-40 overflow-y-auto space-y-1 pr-2 custom-scrollbar">
                         {status.warnings.map((warning, index) => (
                           <div key={index}
-                            className="text-xs font-mono text-slate-400 bg-slate-800/50 px-2 py-1.5 rounded border border-slate-700/50"
+                            className="text-xs font-mono text-muted-foreground bg-secondary/50 px-2 py-1.5 rounded border border-border/50"
                           >
                             <span className="text-orange-400/60 mr-1">[{index + 1}]</span>
                             {warning}
@@ -2180,10 +2182,10 @@ function ReplayContentWithHydrationFix() {
                 )}
 
                 {/* Progress Card */}
-                <Card className="bg-slate-900 border-slate-700/50 shadow-lg overflow-hidden relative group">
+                <Card className="bg-card border-border/50 shadow-lg overflow-hidden relative group">
                   {/* Top mini progress bar with click/drag support */}
                   <div 
-                    className={`absolute top-0 left-0 w-full h-1.5 bg-slate-800 cursor-pointer ${status?.status === "paused" ? "cursor-ew-resize hover:bg-slate-700" : "cursor-default"}`}
+                    className={`absolute top-0 left-0 w-full h-1.5 bg-secondary cursor-pointer ${status?.status === "paused" ? "cursor-ew-resize hover:bg-secondary" : "cursor-default"}`}
                     onMouseMove={isDragging ? handleDragMove : calculateProgressHover}
                     onMouseLeave={() => { if (!isDragging) setHoverProgress(null); }}
                     onMouseDown={handleDragStart}
@@ -2202,7 +2204,7 @@ function ReplayContentWithHydrationFix() {
                     {/* Hover tooltip */}
                     {hoverProgress && !isDragging && (
                       <div 
-                        className="absolute top-4 bg-slate-800 text-slate-100 text-[10px] px-2 py-1 rounded border border-slate-600 whitespace-nowrap z-10 pointer-events-none shadow-lg"style={{ left: `${hoverProgress.x}px`, transform: 'translateX(-50%)' }}
+                        className="absolute top-4 bg-secondary text-foreground text-[10px] px-2 py-1 rounded border border-slate-600 whitespace-nowrap z-10 pointer-events-none shadow-lg"style={{ left: `${hoverProgress.x}px`, transform: 'translateX(-50%)' }}
                       >
                         {hoverProgress.time}
                         {status?.status === "paused" && (
@@ -2225,9 +2227,9 @@ function ReplayContentWithHydrationFix() {
                             <Clock className="w-5 h-5 text-indigo-400" />
                           </div>
                           <div>
-                            <p className="text-[10px] text-slate-500 uppercase font-bold">当前回放时间</p>
+                            <p className="text-[10px] text-muted-foreground uppercase font-bold">当前回放时间</p>
                             <div className="flex items-baseline gap-1">
-                              <p className="text-xl font-mono font-bold text-slate-100 tabular-nums">
+                              <p className="text-xl font-mono font-bold text-foreground tabular-nums">
                                 {status.current_simulated_time 
                                   ? format(new Date(status.current_simulated_time), "yyyy-MM-dd HH:mm:ss") 
                                   : "----- --:--:--"}
@@ -2242,11 +2244,11 @@ function ReplayContentWithHydrationFix() {
                         </div>
                         <div className="space-y-1.5">
                           <div className="flex justify-between text-xs">
-                            <span className="text-slate-500">回放进度</span>
+                            <span className="text-muted-foreground">回放进度</span>
                             <div className="flex items-center gap-2">
                               {/* K线处理进度 */}
                               {status.bars_processed !== undefined && status.bars_total !== undefined && status.bars_total > 0 && (
-                                <span className="text-slate-500 text-[10px]">
+                                <span className="text-muted-foreground text-[10px]">
                                   K线: {status.bars_processed}/{status.bars_total}
                                 </span>
                               )}
@@ -2254,7 +2256,7 @@ function ReplayContentWithHydrationFix() {
                             </div>
                           </div>
                           <div 
-                            className={`h-2 w-full bg-slate-800 rounded-full overflow-hidden cursor-crosshair relative ${status?.status === "paused" ? "cursor-ew-resize hover:bg-slate-700" : ""}`}onMouseMove={isDragging ? handleDragMove : calculateProgressHover}onMouseLeave={() => { if (!isDragging) setHoverProgress(null); }}onMouseDown={handleDragStart}onMouseUp={handleDragEnd} onClick={status?.status === "paused" && !isDragging ? handleProgressClick : undefined}
+                            className={`h-2 w-full bg-secondary rounded-full overflow-hidden cursor-crosshair relative ${status?.status === "paused" ? "cursor-ew-resize hover:bg-secondary" : ""}`}onMouseMove={isDragging ? handleDragMove : calculateProgressHover}onMouseLeave={() => { if (!isDragging) setHoverProgress(null); }}onMouseDown={handleDragStart}onMouseUp={handleDragEnd} onClick={status?.status === "paused" && !isDragging ? handleProgressClick : undefined}
                           >
                             <div 
                               className={`h-full bg-indigo-500 transition-all ${isDragging ? "duration-100" : "duration-500"}`} style={{ width: `${(status?.progress || 0) * 100}%` }}
@@ -2274,7 +2276,7 @@ function ReplayContentWithHydrationFix() {
                             {/* Hover time tooltip */}
                             {hoverProgress && (
                               <div 
-                                className="absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-700 text-slate-100 text-[10px] px-2 py-1 rounded border border-slate-600 whitespace-nowrap z-20 pointer-events-none"
+                                className="absolute -top-8 left-1/2 -translate-x-1/2 bg-secondary text-foreground text-[10px] px-2 py-1 rounded border border-slate-600 whitespace-nowrap z-20 pointer-events-none"
                               >
                                 {hoverProgress.time}
                                 {status?.status === "paused" && (
@@ -2286,9 +2288,9 @@ function ReplayContentWithHydrationFix() {
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between p-4 bg-slate-800/30 rounded-2xl border border-slate-700/30">
+                      <div className="flex items-center justify-between p-4 bg-secondary/30 rounded-2xl border border-border/30">
                         <div>
-                          <p className="text-[10px] text-slate-500 uppercase font-bold">当前浮盈 (PNL)</p>
+                          <p className="text-[10px] text-muted-foreground uppercase font-bold">当前浮盈 (PNL)</p>
                           <p className={`text-2xl font-bold font-mono ${status.pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
                             {status.pnl >= 0 ? "+" : ""}${status.pnl.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                           </p>
@@ -2311,21 +2313,21 @@ function ReplayContentWithHydrationFix() {
 
                 {/* Info Card */}
                 <div className="grid grid-cols-3 gap-4">
-                  <div className="p-4 bg-slate-900 border border-slate-700/50 rounded-xl">
-                    <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">开始时间</p>
-                    <p className="text-xs text-slate-300">
+                  <div className="p-4 bg-card border border-border/50 rounded-xl">
+                    <p className="text-[10px] text-muted-foreground uppercase font-bold mb-1">开始时间</p>
+                    <p className="text-xs text-foreground/80">
                       {session?.start_time ? new Date(session.start_time).toLocaleDateString() : "---"}
                     </p>
                   </div>
-                  <div className="p-4 bg-slate-900 border border-slate-700/50 rounded-xl">
-                    <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">结束时间</p>
-                    <p className="text-xs text-slate-300">
+                  <div className="p-4 bg-card border border-border/50 rounded-xl">
+                    <p className="text-[10px] text-muted-foreground uppercase font-bold mb-1">结束时间</p>
+                    <p className="text-xs text-foreground/80">
                       {session?.end_time ? new Date(session.end_time).toLocaleDateString() : "---"}
                     </p>
                   </div>
-                  <div className="p-4 bg-slate-900 border border-slate-700/50 rounded-xl">
-                    <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">初始资金</p>
-                    <p className="text-xs text-slate-300">
+                  <div className="p-4 bg-card border border-border/50 rounded-xl">
+                    <p className="text-[10px] text-muted-foreground uppercase font-bold mb-1">初始资金</p>
+                    <p className="text-xs text-foreground/80">
                       {session?.initial_capital ? `$${session.initial_capital.toLocaleString()}` : "---"}
                     </p>
                   </div>
@@ -2333,15 +2335,15 @@ function ReplayContentWithHydrationFix() {
 
                 {/* Time Comparison Card - Show estimated vs actual */}
                 {status?.elapsed_seconds !== undefined && (
-                  <div className="p-4 bg-slate-900 border border-slate-700/50 rounded-xl">
-                    <p className="text-[10px] text-slate-500 uppercase font-bold mb-2 flex items-center gap-1">
+                  <div className="p-4 bg-card border border-border/50 rounded-xl">
+                    <p className="text-[10px] text-muted-foreground uppercase font-bold mb-2 flex items-center gap-1">
                       <Clock className="w-3 h-3" />
                       回放时间统计
                     </p>
                     <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-slate-800/50 rounded-lg p-2">
-                        <p className="text-[10px] text-slate-500">理论时间</p>
-                        <p className="text-sm font-medium text-slate-300">
+                      <div className="bg-secondary/50 rounded-lg p-2">
+                        <p className="text-[10px] text-muted-foreground">理论时间</p>
+                        <p className="text-sm font-medium text-foreground/80">
                           {(() => {
                             if (!validDates || validDates.length === 0) return "---";
                             const startDate = new Date(dateRange.start);
@@ -2353,8 +2355,8 @@ function ReplayContentWithHydrationFix() {
                           })()}
                         </p>
                       </div>
-                      <div className="bg-slate-800/50 rounded-lg p-2 border border-amber-500/20">
-                        <p className="text-[10px] text-slate-500 flex items-center gap-1">
+                      <div className="bg-secondary/50 rounded-lg p-2 border border-amber-500/20">
+                        <p className="text-[10px] text-muted-foreground flex items-center gap-1">
                           <Zap className="w-3 h-3 text-amber-400" />
                           实际消耗
                         </p>
@@ -2376,18 +2378,18 @@ function ReplayContentWithHydrationFix() {
                       const barsPerSec = processedBars > 0 ? Math.round(processedBars / actualSec) : 0;
                       
                       return (
-                        <div className="mt-3 pt-3 border-t border-slate-700/50">
-                          <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1.5">
+                        <div className="mt-3 pt-3 border-t border-border/50">
+                          <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1.5">
                             <span>处理进度</span>
-                            <span className="text-slate-400">{progressPct}%</span>
+                            <span className="text-muted-foreground">{progressPct}%</span>
                           </div>
-                          <div className="w-full bg-slate-800 rounded-full h-1.5 mb-2">
+                          <div className="w-full bg-secondary rounded-full h-1.5 mb-2">
                             <div 
                               className="bg-indigo-500 h-1.5 rounded-full transition-all duration-300"style={{ width: `${progressPct}%` }}
                             />
                           </div>
                           <div className="flex items-center justify-between text-[10px]">
-                            <span className="text-slate-500">处理速度</span>
+                            <span className="text-muted-foreground">处理速度</span>
                             <span className="text-indigo-400">{barsPerSec > 0 ? `${barsPerSec.toLocaleString()} 根/秒` : "---"}</span>
                           </div>
                         </div>
@@ -2398,9 +2400,9 @@ function ReplayContentWithHydrationFix() {
                 
                 {/* K线图表区域 - 回放进行中或完成时显示 */}
                 {(status?.status === "running" || status?.status === "paused" || status?.status === "completed") && klineData.length > 0 && (
-                  <Card className="bg-slate-900 border-slate-700/50">
+                  <Card className="bg-card border-border/50">
                     <CardHeader className="pb-2">
-                      <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                      <CardTitle className="text-foreground text-sm flex items-center gap-2">
                         <BarChart3 className="w-4 h-4 text-purple-400" />
                         K线图 · {session?.symbol} · {session?.interval || session?.params?.interval || "15m"}
                       </CardTitle>
@@ -2412,13 +2414,13 @@ function ReplayContentWithHydrationFix() {
                 )}
 
                 {/* Equity Curve Chart */}
-                <Card className="bg-slate-900 border-slate-700/50">
+                <Card className="bg-card border-border/50">
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                    <CardTitle className="text-foreground text-sm flex items-center gap-2">
                       <TrendingUp className="w-4 h-4 text-indigo-400" />
                       资产曲线
                       {tradeMarkers.length > 0 && (
-                        <span className="text-xs font-normal text-slate-400 ml-1">
+                        <span className="text-xs font-normal text-muted-foreground ml-1">
                           ({tradeMarkers.length} 笔交易)
                         </span>
                       )}
@@ -2489,37 +2491,37 @@ function ReplayContentWithHydrationFix() {
       {/* Jump Modal */}
       {showJumpModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl animate-in zoom-in-95 duration-200">
-            <div className="p-6 border-b border-slate-800">
+          <div className="bg-card border border-border rounded-2xl w-full max-w-lg shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="p-6 border-b border-border">
               <div className="flex items-center justify-between">
-                <h3 className="text-lg font-bold text-slate-100 flex items-center gap-2">
+                <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
                   <SkipForward className="w-5 h-5 text-indigo-400" />
                   精准跳转回放点
                 </h3>
-                <button onClick={() => setShowJumpModal(false)} className="text-slate-500 hover:text-slate-200 transition-colors">
+                <button onClick={() => setShowJumpModal(false)} className="text-muted-foreground hover:text-foreground/90 transition-colors">
                   <X className="w-5 h-5" />
                 </button>
               </div>
-              <p className="text-xs text-slate-500 mt-2">跳转后，回放将从该时间点继续。注意：跳转可能会重置部分未成交的模拟订单。</p>
+              <p className="text-xs text-muted-foreground mt-2">跳转后，回放将从该时间点继续。注意：跳转可能会重置部分未成交的模拟订单。</p>
             </div>
             <div className="p-6 space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label className="text-xs text-slate-400 block">选择日期</label>
+                  <label className="text-xs text-muted-foreground block">选择日期</label>
                   <Popover>
                     <PopoverTrigger asChild>
                       <Button
                         variant={"outline"}
                         className={cn(
-                          "w-full justify-start text-left font-normal bg-slate-800 border-slate-700 text-slate-100 h-10 px-3",
-                          !jumpDate && "text-slate-500"
+                          "w-full justify-start text-left font-normal bg-secondary border-border text-foreground h-10 px-3",
+                          !jumpDate && "text-muted-foreground"
                         )}
                       >
-                        <CalendarIcon className="mr-2 h-4 w-4 text-slate-400" />
+                        <CalendarIcon className="mr-2 h-4 w-4 text-muted-foreground" />
                         {jumpDate ? format(jumpDate, "PPP") : <span>选择日期</span>}
                       </Button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0 bg-slate-900 border-slate-700" align="start">
+                    <PopoverContent className="w-auto p-0 bg-card border-border" align="start">
                       <Calendar mode="single"selected={jumpDate} onSelect={setJumpDate}initialFocus fromDate={validDates.length > 0 ? new Date(validDates[0]) : undefined}toDate={validDates.length > 0 ? new Date(validDates[validDates.length - 1]) : undefined} disabled={(day) => !isDateValid(day)}modifiers={{hasData: (day) => isDateValid(day),
                         }}modifiersClassNames={{hasData: "after:content-[''] after:absolute after:bottom-1 after:left-1/2 after:-translate-x-1/2 after:w-1 after:h-1 after:bg-blue-500 after:rounded-full",
                         }}
@@ -2528,12 +2530,12 @@ function ReplayContentWithHydrationFix() {
                   </Popover>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-xs text-slate-400 block">选择时间</label>
+                  <label className="text-xs text-muted-foreground block">选择时间</label>
                   <div className="relative">
-                    <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <input
                       type="time"value={jumpTime}onChange={(e) => setJumpTime(e.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-10 pr-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 transition-all"
+                      className="w-full bg-secondary border border-border rounded-lg pl-10 pr-3 py-2 text-sm text-foreground focus:outline-none focus:border-indigo-500 transition-all"
                     />
                   </div>
                 </div>
@@ -2541,13 +2543,13 @@ function ReplayContentWithHydrationFix() {
 
               <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-xl">
                 <p className="text-[10px] text-indigo-400 font-bold uppercase mb-1">目标时间 (Local)</p>
-                <p className="text-sm font-mono text-slate-100">
+                <p className="text-sm font-mono text-foreground">
                   {jumpDate ? format(jumpDate, "yyyy-MM-dd") : "-----"} {jumpTime}:00
                 </p>
               </div>
 
               <div className="flex gap-3">
-                <Button variant="ghost" onClick={() => setShowJumpModal(false)} className="flex-1 text-slate-400">取消</Button>
+                <Button variant="ghost" onClick={() => setShowJumpModal(false)} className="flex-1 text-muted-foreground">取消</Button>
                 <Button onClick={handleJump} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold shadow-lg shadow-indigo-500/20">
                   确认跳转
                 </Button>
@@ -2561,13 +2563,13 @@ function ReplayContentWithHydrationFix() {
       {toast && (
         <div className={cn(
           "fixed bottom-6 right-6 z-[100] px-4 py-3 rounded-xl border shadow-2xl animate-in slide-in-from-bottom-4 duration-300 flex items-center gap-3",toast.type === "error" ? "bg-red-950 border-red-500/50 text-red-200" :toast.type === "success" ? "bg-green-950 border-green-500/50 text-green-200" :
-          "bg-slate-900 border-slate-700 text-slate-200"
+          "bg-card border-border text-foreground/90"
         )}>
           {toast.type === "error" ? <AlertTriangle className="w-5 h-5 text-red-400" /> :
            toast.type === "success" ? <CheckCircle2 className="w-5 h-5 text-green-400" /> :
            <Info className="w-5 h-5 text-indigo-400" />}
           <span className="text-sm font-medium">{toast.message}</span>
-          <button onClick={() => setToast(null)} className="ml-2 text-slate-500 hover:text-slate-200">
+          <button onClick={() => setToast(null)} className="ml-2 text-muted-foreground hover:text-foreground/90">
             <X className="w-4 h-4" />
           </button>
         </div>

@@ -16,7 +16,15 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
+
+
+class _DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super().default(obj)
 
 import httpx
 
@@ -368,9 +376,23 @@ async def _call_hummingbot_api(
         auth = httpx.BasicAuth(username, password)
 
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        response = await client.request(
-            method=method, url=url, json=json_data, auth=auth
-        )
+        # 预先序列化 JSON 以处理 Decimal 等非标量类型
+        if json_data is not None:
+            json_bytes = json.dumps(json_data, cls=_DecimalEncoder).encode("utf-8")
+            request_kwargs = {
+                "method": method,
+                "url": url,
+                "content": json_bytes,
+                "auth": auth,
+                "headers": {"Content-Type": "application/json"},
+            }
+        else:
+            request_kwargs = {
+                "method": method,
+                "url": url,
+                "auth": auth,
+            }
+        response = await client.request(**request_kwargs)
         if response.status_code == 401:
             raise Exception("Hummingbot API 认证失败（401 Unauthorized）")
         elif response.status_code == 404:
@@ -975,6 +997,7 @@ async def start_paper_bot(
             "credentials_profile": credentials_profile,
             "controllers_config": [controller_config_id],
             "headless": True,
+            "image": "hummingbot-bot-proxy:latest",
         }
 
         deploy_resp: Optional[Dict[str, Any]] = None

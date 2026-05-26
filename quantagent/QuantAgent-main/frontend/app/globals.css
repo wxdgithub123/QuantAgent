@@ -131,17 +131,20 @@
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
-  background: rgba(30, 41, 59, 0.5);
+  background: oklch(0.279 0.041 260.031 / 50%);
   border-radius: 2px;
+}
+:root:not(.dark) .custom-scrollbar::-webkit-scrollbar-track {
+  background: oklch(0.968 0.007 247.896 / 80%);
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(71, 85, 105, 0.8);
+  background: oklch(0.551 0.027 264.364 / 60%);
   border-radius: 2px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 1);
+  background: oklch(0.551 0.027 264.364 / 90%);
 }
 
 /* Smooth transitions for all interactive elements */

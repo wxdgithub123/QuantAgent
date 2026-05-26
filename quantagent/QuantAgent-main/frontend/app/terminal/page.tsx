@@ -12,7 +12,7 @@ import {
   Brain, Send, RefreshCw, BarChart3, BarChart, Activity,
   TrendingUp, Shield, Zap, ChevronDown, ChevronUp, X, Clock,
   AlertTriangle, CheckCircle, Info, BookOpen, LayoutDashboard, WifiOff, Cpu,
-  History, Server
+  History, Server, Layers
 } from "lucide-react";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -98,9 +98,9 @@ function TimelineCard({ step }: { step: TimelineStep }) {
   return (
     <div className={`rounded-xl border transition-all ${
       step.status === "error" ? "border-red-500/30 bg-red-500/5" :
-      step.status === "done"  ? "border-slate-700/50 bg-slate-800/40" :
+      step.status === "done"  ? "border-border/50 bg-secondary/40" :
       step.status === "running" ? "border-blue-500/30 bg-blue-500/5" :
-      "border-slate-700/30 bg-slate-900/40"
+      "border-border/30 bg-card/40"
     }`}>
       <div
         className="flex items-center gap-3 p-3 cursor-pointer select-none"
@@ -110,7 +110,7 @@ function TimelineCard({ step }: { step: TimelineStep }) {
           info.color === "blue"   ? "bg-blue-500/10 border border-blue-500/20" :
           info.color === "purple" ? "bg-purple-500/10 border border-purple-500/20" :
           info.color === "orange" ? "bg-orange-500/10 border border-orange-500/20" :
-          "bg-slate-700/50 border border-slate-600/30"
+          "bg-secondary/50 border border-slate-600/30"
         }`}>
           {step.status === "running"
             ? <RefreshCw className="w-4 h-4 animate-spin text-blue-400" />
@@ -127,44 +127,44 @@ function TimelineCard({ step }: { step: TimelineStep }) {
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-slate-100 text-sm font-semibold">{info.name}</span>
+            <span className="text-foreground text-sm font-semibold">{info.name}</span>
             {step.status === "running" && (
               <span className="text-[10px] text-blue-400 animate-pulse">分析中...</span>
             )}
           </div>
           {step.signal && (
             <div className="flex items-center gap-2 mt-0.5">
-              <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${SIGNAL_COLORS[step.signal] || "text-slate-400"}`}>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${SIGNAL_COLORS[step.signal] || "text-muted-foreground"}`}>
                 {step.signal}
               </span>
               {step.confidence !== undefined && (
-                <span className="text-[10px] text-slate-500">置信度: {(step.confidence * 100).toFixed(0)}%</span>
+                <span className="text-[10px] text-muted-foreground">置信度: {(step.confidence * 100).toFixed(0)}%</span>
               )}
             </div>
           )}
         </div>
 
         <div className="flex items-center gap-2">
-          {elapsed && <span className="text-[10px] text-slate-500">{elapsed}s</span>}
+          {elapsed && <span className="text-[10px] text-muted-foreground">{elapsed}s</span>}
           {step.content && (
-            expanded ? <ChevronUp className="w-3.5 h-3.5 text-slate-400" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+            expanded ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
           )}
         </div>
       </div>
 
       {expanded && step.content && (
-        <div className="px-3 pb-3 border-t border-slate-700/30 mt-0 pt-2">
+        <div className="px-3 pb-3 border-t border-border/30 mt-0 pt-2">
           <div className="prose prose-invert prose-sm max-w-none max-h-64 overflow-y-auto custom-scrollbar">
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-              p:  ({ children }) => <p className="text-[11px] text-slate-300 leading-relaxed mb-1">{children}</p>,
-              h2: ({ children }) => <h2 className="text-xs font-bold text-slate-200 mb-1 mt-2">{children}</h2>,
-              h3: ({ children }) => <h3 className="text-[11px] font-semibold text-slate-300 mb-0.5 mt-1">{children}</h3>,
-              ul: ({ children }) => <ul className="list-disc list-inside text-[11px] text-slate-300 mb-1">{children}</ul>,
-              li: ({ children }) => <li className="text-[11px] text-slate-300">{children}</li>,
-              strong: ({ children }) => <strong className="text-slate-100 font-bold">{children}</strong>,
+              p:  ({ children }) => <p className="text-[11px] text-foreground/80 leading-relaxed mb-1">{children}</p>,
+              h2: ({ children }) => <h2 className="text-xs font-bold text-foreground/90 mb-1 mt-2">{children}</h2>,
+              h3: ({ children }) => <h3 className="text-[11px] font-semibold text-foreground/80 mb-0.5 mt-1">{children}</h3>,
+              ul: ({ children }) => <ul className="list-disc list-inside text-[11px] text-foreground/80 mb-1">{children}</ul>,
+              li: ({ children }) => <li className="text-[11px] text-foreground/80">{children}</li>,
+              strong: ({ children }) => <strong className="text-foreground font-bold">{children}</strong>,
               table: ({ children }) => <table className="text-[10px] w-full mb-2 border-collapse">{children}</table>,
-              th: ({ children }) => <th className="text-left px-1 py-0.5 text-slate-400 border-b border-slate-700">{children}</th>,
-              td: ({ children }) => <td className="px-1 py-0.5 text-slate-300">{children}</td>,
+              th: ({ children }) => <th className="text-left px-1 py-0.5 text-muted-foreground border-b border-border">{children}</th>,
+              td: ({ children }) => <td className="px-1 py-0.5 text-foreground/80">{children}</td>,
             }}>
               {step.content}
             </ReactMarkdown>
@@ -386,9 +386,9 @@ export default function TerminalPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col">
+    <div className="min-h-screen bg-background flex flex-col">
       {/* ── Header ── */}
-      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-40">
+      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
         <div className="container mx-auto px-4 py-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -396,22 +396,22 @@ export default function TerminalPage() {
                 <Brain className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h1 className="text-lg font-bold text-slate-100">QuantAgent Terminal</h1>
-                <p className="text-[10px] text-slate-400">Multi-Agent Natural Language Trading</p>
+                <h1 className="text-lg font-bold text-foreground">QuantAgent Terminal</h1>
+                <p className="text-[10px] text-muted-foreground">Multi-Agent Natural Language Trading</p>
               </div>
             </div>
 
             <nav className="hidden md:flex items-center gap-1">
-              <Link href="/dashboard" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+              <Link href="/dashboard" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 <LayoutDashboard className="w-4 h-4" /> 仪表盘
               </Link>
-              <Link href="/backtest" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+              <Link href="/backtest" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 <BarChart className="w-4 h-4" /> 回测
               </Link>
-              <Link href="/replay" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+              <Link href="/replay" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 <History className="w-4 h-4" /> 历史回放
               </Link>
-              <Link href="/strategies" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+              <Link href="/strategies" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 <BookOpen className="w-4 h-4" /> 策略库
               </Link>
               <span className="px-3 py-1.5 text-sm text-purple-400 bg-purple-500/10 rounded-lg border border-purple-500/20 font-medium flex items-center gap-1.5">
@@ -420,20 +420,22 @@ export default function TerminalPage() {
               <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
                 <Server className="w-4 h-4" /> Hummingbot
               </Link>
+              <Link href="/signals" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Layers className="w-4 h-4" /> 因子/信号</Link>
+              <Link href="/decisions" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Brain className="w-4 h-4" /> 决策中心</Link>
             </nav>
 
             <div className="flex items-center gap-2">
               {/* LLM Provider Selector */}
               <div className="flex flex-col items-end gap-0.5">
                 <div className="flex items-center gap-1.5">
-                  <Cpu className="w-3.5 h-3.5 text-slate-400" />
+                  <Cpu className="w-3.5 h-3.5 text-muted-foreground" />
                   <Select value={provider} onValueChange={v => { setProvider(v); if (v === "ollama") fetch("/api/v1/market/ollama/status").then(r => r.ok ? r.json() : null).then(d => { if (d) setOllamaStatus({ ...d, checked: true }); }).catch(() => setOllamaStatus({ online: false, checked: true })); }}>
-                    <SelectTrigger className={`w-[185px] bg-slate-800 border-slate-700 text-slate-100 h-8 text-sm ${isOllamaOffline ? "border-orange-500/50" : ""}`}>
+                    <SelectTrigger className={`w-[185px] bg-secondary border-border text-foreground h-8 text-sm ${isOllamaOffline ? "border-orange-500/50" : ""}`}>
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent className="bg-slate-800 border-slate-700">
+                    <SelectContent className="bg-secondary border-border">
                       {LLM_PROVIDERS.map(p => (
-                        <SelectItem key={p.value} value={p.value} className="text-slate-100 focus:bg-slate-700 cursor-pointer">{p.label}</SelectItem>
+                        <SelectItem key={p.value} value={p.value} className="text-foreground focus:bg-secondary cursor-pointer">{p.label}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -446,12 +448,12 @@ export default function TerminalPage() {
               </div>
               {/* Symbol Selector */}
               <Select value={symbol} onValueChange={setSymbol}>
-                <SelectTrigger className="w-[130px] bg-slate-800 border-slate-700 text-slate-100 h-8 text-sm">
+                <SelectTrigger className="w-[130px] bg-secondary border-border text-foreground h-8 text-sm">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent className="bg-slate-800 border-slate-700">
+                <SelectContent className="bg-secondary border-border">
                   {SYMBOLS.map(s => (
-                    <SelectItem key={s.value} value={s.value} className="text-slate-100 focus:bg-slate-700 cursor-pointer">{s.label}</SelectItem>
+                    <SelectItem key={s.value} value={s.value} className="text-foreground focus:bg-secondary cursor-pointer">{s.label}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -466,15 +468,15 @@ export default function TerminalPage() {
         {/* Left: Conversation + Input */}
         <div className="flex-1 flex flex-col gap-3 min-w-0">
           {/* Conversation history */}
-          <Card className="flex-1 bg-gradient-to-br from-slate-900 to-slate-800/30 border-slate-700/50 overflow-hidden">
-            <CardHeader className="py-3 px-4 border-b border-slate-700/30">
-              <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+          <Card className="flex-1 bg-card border-border/50 overflow-hidden">
+            <CardHeader className="py-3 px-4 border-b border-border/30">
+              <CardTitle className="text-foreground text-sm flex items-center gap-2">
                 <Info className="w-4 h-4 text-blue-400" /> 对话记录
               </CardTitle>
             </CardHeader>
             <CardContent className="p-4 overflow-y-auto max-h-[60vh] custom-scrollbar space-y-3">
               {!mounted ? (
-                <div className="flex items-center justify-center py-12 text-slate-500">
+                <div className="flex items-center justify-center py-12 text-muted-foreground">
                   <RefreshCw className="w-6 h-6 animate-spin" />
                 </div>
               ) : (
@@ -484,8 +486,8 @@ export default function TerminalPage() {
                       msg.role === "user"
                         ? "bg-blue-600 text-white"
                         : msg.role === "agent"
-                          ? "bg-purple-500/10 border border-purple-500/20 text-slate-100"
-                          : "bg-slate-800/60 border border-slate-700/30 text-slate-300"
+                          ? "bg-purple-500/10 border border-purple-500/20 text-foreground"
+                          : "bg-secondary/60 border border-border/30 text-foreground/80"
                     }`}>
                       <div className="prose prose-invert prose-sm max-w-none">
                         <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
@@ -514,7 +516,7 @@ export default function TerminalPage() {
               <WifiOff className="w-3.5 h-3.5 text-orange-400 mt-0.5 shrink-0" />
               <div className="text-xs text-orange-300">
                 <span className="font-semibold">Ollama 本地服务未运行</span>
-                <span className="ml-2 text-orange-400/70">启动命令：<code className="bg-slate-800 px-1 rounded">ollama run qwen3:8b</code></span>
+                <span className="ml-2 text-orange-400/70">启动命令：<code className="bg-secondary px-1 rounded">ollama run qwen3:8b</code></span>
               </div>
             </div>
           )}
@@ -528,7 +530,7 @@ export default function TerminalPage() {
                 key={chip.label}
                 onClick={() => { setInput(chip.prompt); }}
                 disabled={isAnalyzing}
-                className="px-3 py-1.5 text-xs bg-slate-800 border border-slate-700 text-slate-300 rounded-full hover:bg-slate-700 hover:text-slate-100 transition-all disabled:opacity-40"
+                className="px-3 py-1.5 text-xs bg-secondary border border-border text-foreground/80 rounded-full hover:bg-secondary hover:text-foreground transition-all disabled:opacity-40"
               >
                 <Zap className="w-3 h-3 inline mr-1" />{chip.label}
               </button>
@@ -545,7 +547,7 @@ export default function TerminalPage() {
                 disabled={isAnalyzing}
                 placeholder={`向 AI Agent 下达分析指令，例如「分析 ${symbol} 当前趋势」...`}
                 rows={2}
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-purple-500/50 resize-none disabled:opacity-40"
+                className="w-full bg-secondary border border-border rounded-xl px-4 py-3 text-sm text-foreground placeholder-slate-500 focus:outline-none focus:border-purple-500/50 resize-none disabled:opacity-40"
               />
             </div>
             <Button
@@ -562,15 +564,15 @@ export default function TerminalPage() {
 
         {/* Right: Agent Timeline */}
         <div className="w-[320px] shrink-0 flex flex-col gap-3">
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800/30 border-slate-700/50">
-            <CardHeader className="py-3 px-4 border-b border-slate-700/30">
+          <Card className="bg-card border-border/50">
+            <CardHeader className="py-3 px-4 border-b border-border/30">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                <CardTitle className="text-foreground text-sm flex items-center gap-2">
                   <Activity className="w-4 h-4 text-purple-400" />
                   Agent 执行时间轴
                 </CardTitle>
                 {timeline.length > 0 && (
-                  <button onClick={() => { setTimeline([]); setFinalDecision(null); }} className="text-slate-500 hover:text-slate-300">
+                  <button onClick={() => { setTimeline([]); setFinalDecision(null); }} className="text-muted-foreground hover:text-foreground/80">
                     <X className="w-3.5 h-3.5" />
                   </button>
                 )}
@@ -578,10 +580,10 @@ export default function TerminalPage() {
             </CardHeader>
             <CardContent className="p-3 space-y-2 max-h-[70vh] overflow-y-auto custom-scrollbar">
               {timeline.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 text-slate-500">
+                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                   <Brain className="w-10 h-10 mb-3 opacity-20" />
                   <p className="text-xs">Agent 时间轴</p>
-                  <p className="text-[10px] text-slate-600 mt-1">发送分析指令后，各 Agent 的决策过程将在此展示</p>
+                  <p className="text-[10px] text-muted-foreground/50 mt-1">发送分析指令后，各 Agent 的决策过程将在此展示</p>
                 </div>
               ) : (
                 <>
@@ -589,7 +591,7 @@ export default function TerminalPage() {
                     <TimelineCard key={step.id} step={step} />
                   ))}
                   {isAnalyzing && (
-                    <div className="flex items-center gap-2 p-2 text-slate-500 text-xs">
+                    <div className="flex items-center gap-2 p-2 text-muted-foreground text-xs">
                       <RefreshCw className="w-3 h-3 animate-spin" />
                       Agent 分析进行中...
                     </div>
@@ -608,9 +610,9 @@ export default function TerminalPage() {
                   ? "border-red-500/30 bg-red-500/5"
                   : "border-yellow-500/30 bg-yellow-500/5"
             }`}>
-              <CardHeader className="py-3 px-4 border-b border-slate-700/30">
+              <CardHeader className="py-3 px-4 border-b border-border/30">
                 <div className="flex items-center justify-between">
-                  <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                  <CardTitle className="text-foreground text-sm flex items-center gap-2">
                     <Brain className="w-4 h-4 text-purple-400" />
                     协调者最终决策
                   </CardTitle>
@@ -627,20 +629,20 @@ export default function TerminalPage() {
                 )}
                 <div className="grid grid-cols-3 gap-2">
                   <div className="text-center p-2 bg-green-500/10 rounded-lg">
-                    <p className="text-[10px] text-slate-400">看多</p>
+                    <p className="text-[10px] text-muted-foreground">看多</p>
                     <p className="text-green-400 font-bold text-sm">{((finalDecision.vote_breakdown?.bullish || 0) * 100).toFixed(0)}%</p>
                   </div>
                   <div className="text-center p-2 bg-red-500/10 rounded-lg">
-                    <p className="text-[10px] text-slate-400">看空</p>
+                    <p className="text-[10px] text-muted-foreground">看空</p>
                     <p className="text-red-400 font-bold text-sm">{((finalDecision.vote_breakdown?.bearish || 0) * 100).toFixed(0)}%</p>
                   </div>
-                  <div className="text-center p-2 bg-slate-700/40 rounded-lg">
-                    <p className="text-[10px] text-slate-400">中性</p>
-                    <p className="text-slate-400 font-bold text-sm">{((finalDecision.vote_breakdown?.neutral || 0) * 100).toFixed(0)}%</p>
+                  <div className="text-center p-2 bg-secondary/40 rounded-lg">
+                    <p className="text-[10px] text-muted-foreground">中性</p>
+                    <p className="text-muted-foreground font-bold text-sm">{((finalDecision.vote_breakdown?.neutral || 0) * 100).toFixed(0)}%</p>
                   </div>
                 </div>
-                <div className="text-xs text-slate-400">
-                  置信度: <span className="text-slate-200 font-semibold">{(finalDecision.confidence * 100).toFixed(0)}%</span>
+                <div className="text-xs text-muted-foreground">
+                  置信度: <span className="text-foreground/90 font-semibold">{(finalDecision.confidence * 100).toFixed(0)}%</span>
                 </div>
               </CardContent>
             </Card>

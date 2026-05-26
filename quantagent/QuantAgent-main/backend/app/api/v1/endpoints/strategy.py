@@ -7,6 +7,7 @@ parameter grid optimization, and multi-symbol batch backtests.
 import asyncio
 import itertools
 import logging
+import time
 from datetime import datetime, date
 from typing import List, Optional, Dict, Any
 
@@ -1237,31 +1238,36 @@ async def create_paper_bot_from_optimization(req: OptimizePaperBotRequest):
     strategy_map: Dict[str, StrategyType] = {
         "ma": StrategyType.MA,
         "rsi": StrategyType.RSI,
-        "boll": StrategyType.BOLLINGER,
-        "bollinger": StrategyType.BOLLINGER,
+        "boll": StrategyType.BOLL,
+        "bollinger": StrategyType.BOLL,
         "macd": StrategyType.MACD,
-        "atr": StrategyType.ATR,
-        "kdj": StrategyType.KDJ,
-        "supertrend": StrategyType.SUPERTREND,
+        "atr": StrategyType.ATR_TREND,
+        "atr_trend": StrategyType.ATR_TREND,
     }
     mapped_strategy = strategy_map.get(req.strategy_type.lower(), StrategyType.MA)
 
     timeframe_map: Dict[str, Timeframe] = {
-        "15m": Timeframe.MINUTES_15,
-        "1h": Timeframe.HOUR,
-        "4h": Timeframe.HOURS_4,
-        "1d": Timeframe.DAY,
+        "1m": Timeframe.M1,
+        "5m": Timeframe.M5,
+        "15m": Timeframe.M15,
+        "1h": Timeframe.H1,
+        "4h": Timeframe.H4,
+        "1d": Timeframe.D1,
     }
-    mapped_timeframe = timeframe_map.get(req.interval, Timeframe.DAY)
+    mapped_timeframe = timeframe_map.get(req.interval, Timeframe.D1)
 
     params = req.params
 
+    symbol_parts = req.symbol.replace("USDT", "-USDT") if "-" not in req.symbol else req.symbol
     request = PaperBotPreviewRequest(
+        bot_name=f"{req.strategy_type}-{symbol_parts}-{int(time.time())}",
+        connector="binance",
         strategy_type=mapped_strategy,
-        trading_pair=req.symbol.replace("USDT", "-USDT"),
+        trading_pair=symbol_parts,
         timeframe=mapped_timeframe,
         paper_initial_balance=req.initial_capital,
         order_amount=100,
+        max_runtime_minutes=60 * 24,
         fast_period=params.get("fast_period", 10),
         slow_period=params.get("slow_period", 30),
         rsi_period=params.get("rsi_period", 14),
@@ -1281,8 +1287,8 @@ async def create_paper_bot_from_optimization(req: OptimizePaperBotRequest):
         )
         return {
             "success": True,
-            "paper_bot_id": response.paper_bot_id,
-            "bot_name": response.bot_name,
+            "paper_bot_id": response.data.paper_bot_id if response.data else None,
+            "bot_name": response.data.bot_name if response.data else req.strategy_type,
             "remote_started": response.remote_started,
             "remote_confirmed": response.remote_confirmed,
             "error": response.friendly_error or response.error,

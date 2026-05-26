@@ -7,6 +7,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 import asyncio
 import json
 import logging
@@ -58,8 +59,10 @@ async def _startup_backfill():
     On startup, check data completeness and trigger incremental sync if needed.
     Uses Redis lock to ensure only one instance runs this at a time.
     """
-    from app.services.clickhouse_service import clickhouse_service
+    from app.services.storage_factory import get_storage_service
     from app.services.binance_service import binance_service
+
+    storage = get_storage_service()
 
     # Try to acquire lock
     if not await _acquire_backfill_lock():
@@ -74,7 +77,7 @@ async def _startup_backfill():
 
     for symbol in settings.SYMBOLS:
         for interval, config in INTERVALS_STARTUP.items():
-            max_ts = await clickhouse_service.get_max_timestamp(symbol, interval)
+            max_ts = await storage.get_max_timestamp(symbol, interval)
             if max_ts is None:
                 # No data at all — needs full backfill
                 needs_sync.append((symbol, interval, "full", config["days_back"]))
@@ -108,7 +111,7 @@ async def _startup_backfill():
                 start_dt = now - timedelta(days=days_back)
                 start_ms = int(start_dt.timestamp() * 1000)
             else:
-                max_ts = await clickhouse_service.get_max_timestamp(symbol, interval)
+                max_ts = await storage.get_max_timestamp(symbol, interval)
                 start_ms = int(max_ts.timestamp() * 1000) - config["ms_delta"]
 
             end_ms = int(now.timestamp() * 1000)
@@ -136,7 +139,7 @@ async def _startup_backfill():
                     }
                     for k in klines
                 ]
-                await clickhouse_service.insert_klines(symbol, interval, rows)
+                await storage.insert_klines(symbol, interval, rows)
                 count += len(klines)
                 last_ts = klines[-1].timestamp.timestamp() * 1000
                 current_ms = int(last_ts + config["ms_delta"])
@@ -234,19 +237,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Redis check failed: {e}")
 
-    # Initialize ClickHouse tables and trigger startup backfill
+    # Initialize storage backend (ClickHouse or DuckDB)
     try:
-        from app.services.clickhouse_service import clickhouse_service
-        ch_ok = await clickhouse_service.async_init_tables()
-        if ch_ok:
-            logger.info("ClickHouse klines table verified.")
+        from app.services.storage_factory import get_storage_service
+        storage = get_storage_service()
+        storage_ok = await storage.async_init_tables()
+        storage_name = type(storage).__name__
+        if storage_ok:
+            logger.info(f"Storage backend ({storage_name}) initialized.")
         else:
-            logger.warning("ClickHouse not available — skipping klines table init.")
+            logger.warning(f"Storage backend ({storage_name}) unavailable.")
 
-        # Startup backfill: async, non-blocking
-        asyncio.create_task(_startup_backfill())
+        # Startup backfill: async, non-blocking (ClickHouse only)
+        if settings.STORAGE_BACKEND != "duckdb":
+            asyncio.create_task(_startup_backfill())
     except Exception as e:
-        logger.error(f"ClickHouse init failed: {e}")
+        logger.error(f"Storage init failed: {e}")
 
     # Test Binance connectivity
     try:
@@ -303,6 +309,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to start Scheduler: {e}")
 
+    # Start Data Pipeline Orchestrator (L1→L4 ingestion)
+    try:
+        from app.pipeline.orchestrator import pipeline_orchestrator
+        asyncio.create_task(pipeline_orchestrator.start())
+        logger.info("Pipeline Orchestrator starting (background task)...")
+    except Exception as e:
+        logger.error(f"Failed to start Pipeline Orchestrator: {e}")
+
     # Start Paper Bot WebSocket heartbeat
     try:
         asyncio.create_task(_paper_bot_ws_heartbeat_loop())
@@ -334,7 +348,14 @@ async def lifespan(app: FastAPI):
         logger.info("Scheduler stopped.")
     except Exception as e:
         logger.error(f"Error stopping Scheduler: {e}")
-        
+
+    try:
+        from app.pipeline.orchestrator import pipeline_orchestrator
+        await pipeline_orchestrator.stop()
+        logger.info("Pipeline Orchestrator stopped.")
+    except Exception as e:
+        logger.error(f"Error stopping Pipeline Orchestrator: {e}")
+
     try:
         from app.services.ingestion_service import ingestion_service
         await ingestion_service.stop()

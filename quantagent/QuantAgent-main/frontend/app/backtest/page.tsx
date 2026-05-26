@@ -12,11 +12,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import {
   BarChart3, TrendingUp, TrendingDown, Activity, RefreshCw,
   Play, ChevronRight, Info, ArrowLeft, Clock, DollarSign,
   BarChart2, Percent, AlertTriangle, CheckCircle2, Terminal, BookOpen, LayoutDashboard,
-  HelpCircle, History, Trash2, X, Layers, Server
+  HelpCircle, History, Trash2, X, Layers, Server, Zap, Brain
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -121,12 +123,12 @@ interface OptimizeWarning {
 // ─── Metric Card ──────────────────────────────────────────────────────────────
 function MetricCard({ label, value, positive, sub }: { label: string; value: string; positive?: boolean; sub?: string }) {
   return (
-    <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700/50">
-      <p className="text-xs text-slate-400 uppercase tracking-wider mb-1">{label}</p>
-      <p className={`text-xl font-bold ${positive === undefined ? "text-slate-100" : positive ? "text-green-400" : "text-red-400"}`}>
+    <div className="p-4 bg-secondary/50 rounded-xl border border-border/50">
+      <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">{label}</p>
+      <p className={`text-xl font-bold ${positive === undefined ? "text-foreground" : positive ? "text-green-400" : "text-red-400"}`}>
         {value}
       </p>
-      {sub && <p className="text-[10px] text-slate-500 mt-0.5">{sub}</p>}
+      {sub && <p className="text-[10px] text-muted-foreground mt-0.5">{sub}</p>}
     </div>
   );
 }
@@ -154,7 +156,7 @@ function MetricsComparisonTable({
   templates: Template[];
 }) {
   if (!comparisons && !atomicStrategies) {
-    return <div className="text-slate-500 text-xs">暂无数据</div>;
+    return <div className="text-muted-foreground text-xs">暂无数据</div>;
   }
 
   // Build columns: atomic strategies first, then compositions
@@ -212,15 +214,15 @@ function MetricsComparisonTable({
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead>
-          <tr className="border-b border-slate-700">
-            <th className="px-3 py-2 text-left text-slate-400 font-medium sticky left-0 bg-slate-900">指标</th>
+          <tr className="border-b border-border">
+            <th className="px-3 py-2 text-left text-muted-foreground font-medium sticky left-0 bg-card">指标</th>
             {allKeys.map(key => (
               <th
                 key={key}
                 className={`px-3 py-2 text-right font-medium ${
                   compositionKeys.includes(key)
                     ? "text-purple-400 bg-purple-500/5"
-                    : "text-slate-400"
+                    : "text-muted-foreground"
                 }`}
               >
                 {getName(key)}
@@ -233,8 +235,8 @@ function MetricsComparisonTable({
             const config = METRIC_LABELS[metric];
             const { best, worst } = getBestWorst(metric);
             return (
-              <tr key={metric} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
-                <td className="px-3 py-2 text-slate-300 sticky left-0 bg-slate-900">{config.label}</td>
+              <tr key={metric} className="border-b border-border/50 hover:bg-secondary/30 transition-colors">
+                <td className="px-3 py-2 text-foreground/80 sticky left-0 bg-card">{config.label}</td>
                 {allKeys.map(key => {
                   const isError = hasError(key);
                   const perf = getPerf(key);
@@ -253,10 +255,10 @@ function MetricsComparisonTable({
                       } ${
                         isError ? "text-amber-500" :
                         isBest ? "text-green-400 font-bold" :
-                        isWorst && allKeys.length > 2 ? "text-slate-500" :
+                        isWorst && allKeys.length > 2 ? "text-muted-foreground" :
                         isReturn ? (isPositive ? "text-green-400" : "text-red-400") :
                         metric === "max_drawdown" ? "text-red-400" :
-                        "text-slate-300"
+                        "text-foreground/80"
                       }`}
                     >
                       {isError ? "计算失败" : config.format(value)}
@@ -290,7 +292,7 @@ function WeightDistributionBars({
   const entries = Object.entries(weights).filter(([_, w]) => w > 0);
 
   if (entries.length === 0) {
-    return <div className="text-slate-500 text-xs">暂无权重数据</div>;
+    return <div className="text-muted-foreground text-xs">暂无权重数据</div>;
   }
 
   const getName = (key: string) => {
@@ -305,8 +307,8 @@ function WeightDistributionBars({
         const pct = (weight * 100).toFixed(1);
         return (
           <div key={key} className="flex items-center gap-3">
-            <span className="text-xs text-slate-400 w-16 truncate">{getName(key)}</span>
-            <div className="flex-1 h-6 bg-slate-800 rounded-full overflow-hidden">
+            <span className="text-xs text-muted-foreground w-16 truncate">{getName(key)}</span>
+            <div className="flex-1 h-6 bg-secondary rounded-full overflow-hidden">
               <div
                 className="h-full rounded-full transition-all"
                 style={{
@@ -315,7 +317,7 @@ function WeightDistributionBars({
                 }}
               />
             </div>
-            <span className="text-xs text-slate-300 w-12 text-right font-mono">{pct}%</span>
+            <span className="text-xs text-foreground/80 w-12 text-right font-mono">{pct}%</span>
           </div>
         );
       })}
@@ -362,9 +364,9 @@ function SignalContributionCard({
   const agreementRate = meta?.agreement_rate ?? 0;
 
   return (
-    <Card className="bg-slate-900 border-slate-700/50">
+    <Card className="bg-card border-border/50">
       <CardHeader className="pb-3">
-        <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+        <CardTitle className="text-foreground text-sm flex items-center gap-2">
           <Activity className="w-4 h-4 text-orange-400" />
           信号贡献度分析
         </CardTitle>
@@ -372,7 +374,7 @@ function SignalContributionCard({
       <CardContent className="space-y-4">
         {/* Signal Activity */}
         <div>
-          <p className="text-xs text-slate-400 mb-3">各策略信号活跃度</p>
+          <p className="text-xs text-muted-foreground mb-3">各策略信号活跃度</p>
           <div className="space-y-3">
             {entries.map(([key, stats]) => {
               if (!stats) return null;
@@ -391,8 +393,8 @@ function SignalContributionCard({
               
               return (
                 <div key={key} className="flex items-center gap-3">
-                  <span className="text-xs text-slate-300 w-20 truncate">{getName(key)}</span>
-                  <div className="flex-1 h-5 bg-slate-800 rounded-full overflow-hidden relative">
+                  <span className="text-xs text-foreground/80 w-20 truncate">{getName(key)}</span>
+                  <div className="flex-1 h-5 bg-secondary rounded-full overflow-hidden relative">
                     {/* Buy signal (green from left) */}
                     <div 
                       className="absolute left-0 top-0 h-full bg-green-500/60 rounded-l-full" 
@@ -407,7 +409,7 @@ function SignalContributionCard({
                   <div className="flex items-center gap-2 w-28">
                     <span className="text-[10px] text-green-400">买{buyCount}</span>
                     <span className="text-[10px] text-red-400">卖{sellCount}</span>
-                    <span className="text-[10px] text-slate-500">{(signalRate * 100).toFixed(0)}%</span>
+                    <span className="text-[10px] text-muted-foreground">{(signalRate * 100).toFixed(0)}%</span>
                   </div>
                 </div>
               );
@@ -417,11 +419,11 @@ function SignalContributionCard({
 
         {/* Strategy Agreement Rate */}
         {meta && (
-          <div className="pt-3 border-t border-slate-700/50">
+          <div className="pt-3 border-t border-border/50">
             <div className="flex items-center justify-between">
-              <p className="text-xs text-slate-400">策略信号一致率</p>
+              <p className="text-xs text-muted-foreground">策略信号一致率</p>
               <div className="flex items-center gap-2">
-                <div className="w-24 h-2 bg-slate-800 rounded-full overflow-hidden">
+                <div className="w-24 h-2 bg-secondary rounded-full overflow-hidden">
                   <div 
                     className="h-full bg-amber-500/60 rounded-full" 
                     style={{ width: `${agreementRate * 100}%` }} 
@@ -430,7 +432,7 @@ function SignalContributionCard({
                 <span className="text-xs text-amber-400 font-mono">{(agreementRate * 100).toFixed(1)}%</span>
               </div>
             </div>
-            <p className="text-[10px] text-slate-500 mt-1">
+            <p className="text-[10px] text-muted-foreground mt-1">
               {agreementRate > 0.5 
                 ? "策略之间信号高度一致，组合效果可能有限" 
                 : agreementRate > 0.3 
@@ -444,15 +446,15 @@ function SignalContributionCard({
         <div className="flex items-center gap-4 pt-2">
           <div className="flex items-center gap-1.5">
             <div className="w-3 h-3 bg-green-500/60 rounded" />
-            <span className="text-[10px] text-slate-500">买入信号</span>
+            <span className="text-[10px] text-muted-foreground">买入信号</span>
           </div>
           <div className="flex items-center gap-1.5">
             <div className="w-3 h-3 bg-red-500/60 rounded" />
-            <span className="text-[10px] text-slate-500">卖出信号</span>
+            <span className="text-[10px] text-muted-foreground">卖出信号</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className="w-3 h-3 bg-slate-700 rounded" />
-            <span className="text-[10px] text-slate-500">中性/持仓</span>
+            <div className="w-3 h-3 bg-secondary rounded" />
+            <span className="text-[10px] text-muted-foreground">中性/持仓</span>
           </div>
         </div>
       </CardContent>
@@ -497,9 +499,9 @@ function SummaryEvaluationCard({
   const sharpeImprovement = bestComp.sharpe_ratio - bestAtomic.sharpe_ratio;
 
   return (
-    <Card className="bg-slate-900 border-slate-700/50">
+    <Card className="bg-card border-border/50">
       <CardHeader className="pb-3">
-        <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+        <CardTitle className="text-foreground text-sm flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4 text-green-400" />
           综合评价
         </CardTitle>
@@ -507,34 +509,34 @@ function SummaryEvaluationCard({
       <CardContent>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Return Improvement */}
-          <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700/50">
-            <p className="text-xs text-slate-400 mb-1">组合收益 vs 最佳单策略</p>
+          <div className="p-4 bg-secondary/50 rounded-xl border border-border/50">
+            <p className="text-xs text-muted-foreground mb-1">组合收益 vs 最佳单策略</p>
             <p className={`text-xl font-bold font-mono ${returnImprovement >= 0 ? "text-green-400" : "text-red-400"}`}>
               {returnImprovement >= 0 ? "+" : ""}{returnImprovement.toFixed(2)}%
             </p>
-            <p className="text-[10px] text-slate-500 mt-1">
+            <p className="text-[10px] text-muted-foreground mt-1">
               组合 {bestComp.total_return.toFixed(2)}% vs 单策略 {bestAtomic.total_return.toFixed(2)}%
             </p>
           </div>
 
           {/* Drawdown Improvement */}
-          <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700/50">
-            <p className="text-xs text-slate-400 mb-1">组合回撤 vs 最佳单策略</p>
+          <div className="p-4 bg-secondary/50 rounded-xl border border-border/50">
+            <p className="text-xs text-muted-foreground mb-1">组合回撤 vs 最佳单策略</p>
             <p className={`text-xl font-bold font-mono ${drawdownImprovement >= 0 ? "text-green-400" : "text-red-400"}`}>
               {drawdownImprovement >= 0 ? "改善" : "恶化"} {Math.abs(drawdownImprovement).toFixed(2)}%
             </p>
-            <p className="text-[10px] text-slate-500 mt-1">
+            <p className="text-[10px] text-muted-foreground mt-1">
               组合 -{bestComp.max_drawdown.toFixed(2)}% vs 单策略 -{bestAtomic.max_drawdown.toFixed(2)}%
             </p>
           </div>
 
           {/* Sharpe Ratio */}
-          <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700/50">
-            <p className="text-xs text-slate-400 mb-1">夏普比率对比</p>
-            <p className="text-xl font-bold font-mono text-slate-100">
+          <div className="p-4 bg-secondary/50 rounded-xl border border-border/50">
+            <p className="text-xs text-muted-foreground mb-1">夏普比率对比</p>
+            <p className="text-xl font-bold font-mono text-foreground">
               {bestComp.sharpe_ratio.toFixed(3)}
             </p>
-            <p className="text-[10px] text-slate-500 mt-1">
+            <p className="text-[10px] text-muted-foreground mt-1">
               {sharpeImprovement >= 0 ? "优于" : "低于"}最佳单策略 {bestAtomic.sharpe_ratio.toFixed(3)}
             </p>
           </div>
@@ -563,32 +565,32 @@ function LaunchPaperBotDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+      <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md shadow-2xl">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 bg-green-500/10 rounded-full flex items-center justify-center">
             <Play className="w-5 h-5 text-green-400" />
           </div>
-          <h3 className="text-lg font-bold text-slate-100">启动 Paper Bot</h3>
+          <h3 className="text-lg font-bold text-foreground">启动 Paper Bot</h3>
         </div>
 
         {/* 回测质量提示 */}
-        <div className="bg-slate-800/50 rounded-xl p-3 mb-4 border border-slate-700/50">
-          <p className="text-xs text-slate-400 mb-1">将从以下回测结果创建 Paper Bot：</p>
+        <div className="bg-secondary/50 rounded-xl p-3 mb-4 border border-border/50">
+          <p className="text-xs text-muted-foreground mb-1">将从以下回测结果创建 Paper Bot：</p>
           <div className="flex items-center gap-2 mb-2">
             <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20">
               {result.strategy_type}
             </Badge>
-            <span className="text-sm text-slate-300">{result.symbol} / {result.interval}</span>
+            <span className="text-sm text-foreground/80">{result.symbol} / {result.interval}</span>
           </div>
           <div className="grid grid-cols-2 gap-2 text-xs">
             <div className="flex items-center gap-1">
-              <span className="text-slate-500">夏普:</span>
+              <span className="text-muted-foreground">夏普:</span>
               <span className={sharpeRatio >= 1 ? "text-green-400" : sharpeRatio >= 0.5 ? "text-amber-400" : "text-red-400"}>
                 {sharpeRatio.toFixed(3)}
               </span>
             </div>
             <div className="flex items-center gap-1">
-              <span className="text-slate-500">回撤:</span>
+              <span className="text-muted-foreground">回撤:</span>
               <span className="text-red-400">-{maxDrawdown.toFixed(1)}%</span>
             </div>
           </div>
@@ -602,32 +604,32 @@ function LaunchPaperBotDialog({
         {/* 参数表单 */}
         <div className="space-y-3 mb-5">
           <div>
-            <Label className="text-xs text-slate-400 mb-1 block">Bot 名称</Label>
+            <Label className="text-xs text-muted-foreground mb-1 block">Bot 名称</Label>
             <Input
               value={botName}
               onChange={e => setBotName(e.target.value)}
-              className="bg-slate-800 border-slate-700 text-slate-200 text-xs h-8"
+              className="bg-secondary border-border text-foreground/90 text-xs h-8"
               placeholder="paper_bot_name"
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label className="text-xs text-slate-400 mb-1 block">初始资金 (USDT)</Label>
+              <Label className="text-xs text-muted-foreground mb-1 block">初始资金 (USDT)</Label>
               <Input
                 type="number"
                 value={paperBalance}
                 onChange={e => setPaperBalance(Number(e.target.value))}
-                className="bg-slate-800 border-slate-700 text-slate-200 text-xs h-8"
+                className="bg-secondary border-border text-foreground/90 text-xs h-8"
                 min={100}
               />
             </div>
             <div>
-              <Label className="text-xs text-slate-400 mb-1 block">每笔订单金额</Label>
+              <Label className="text-xs text-muted-foreground mb-1 block">每笔订单金额</Label>
               <Input
                 type="number"
                 value={orderAmount}
                 onChange={e => setOrderAmount(Number(e.target.value))}
-                className="bg-slate-800 border-slate-700 text-slate-200 text-xs h-8"
+                className="bg-secondary border-border text-foreground/90 text-xs h-8"
                 min={1}
               />
             </div>
@@ -638,7 +640,7 @@ function LaunchPaperBotDialog({
           <Button
             onClick={onCancel}
             variant="outline"
-            className="flex-1 bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700"
+            className="flex-1 bg-secondary border-border text-foreground/80 hover:bg-secondary"
           >
             取消
           </Button>
@@ -667,31 +669,31 @@ function DeleteConfirmDialog({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+      <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-sm shadow-2xl">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 bg-red-500/10 rounded-full flex items-center justify-center">
             <Trash2 className="w-5 h-5 text-red-400" />
           </div>
-          <h3 className="text-lg font-bold text-slate-100">确认删除</h3>
+          <h3 className="text-lg font-bold text-foreground">确认删除</h3>
         </div>
-        <p className="text-sm text-slate-400 mb-1">确定要删除以下回测记录吗？</p>
-        <div className="bg-slate-800/50 rounded-xl p-3 mb-5 border border-slate-700/50">
+        <p className="text-sm text-muted-foreground mb-1">确定要删除以下回测记录吗？</p>
+        <div className="bg-secondary/50 rounded-xl p-3 mb-5 border border-border/50">
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20">
               {record.strategy_type}
             </Badge>
-            <span className="text-sm text-slate-300">{record.symbol} / {record.interval}</span>
+            <span className="text-sm text-foreground/80">{record.symbol} / {record.interval}</span>
           </div>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-xs text-muted-foreground mt-1">
             {new Date(record.created_at).toLocaleString()} · {(record.metrics?.total_trades ?? record.trades?.length ?? 0)} 笔交易
           </p>
         </div>
-        <p className="text-xs text-slate-500 mb-5">此操作无法撤销</p>
+        <p className="text-xs text-muted-foreground mb-5">此操作无法撤销</p>
         <div className="flex gap-3">
           <Button
             onClick={onCancel}
             variant="outline"
-            className="flex-1 bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700"
+            className="flex-1 bg-secondary border-border text-foreground/80 hover:bg-secondary"
           >
             取消
           </Button>
@@ -1296,9 +1298,9 @@ export default function BacktestPage() {
   const m = result?.metrics;
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-40">
+      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
         <div className="container mx-auto px-4 py-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -1306,29 +1308,31 @@ export default function BacktestPage() {
                 <BarChart3 className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h1 className="text-lg font-bold text-slate-100">QuantAgent OS</h1>
-                <p className="text-[10px] text-slate-400">策略回测可视化</p>
+                <h1 className="text-lg font-bold text-foreground">QuantAgent OS</h1>
+                <p className="text-[10px] text-muted-foreground">策略回测可视化</p>
               </div>
             </div>
             <nav className="hidden md:flex items-center gap-1">
-              <Link href="/dashboard" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+              <Link href="/dashboard" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 <LayoutDashboard className="w-4 h-4" /> 仪表盘
               </Link>
               <span className="px-3 py-1.5 text-sm text-blue-400 bg-blue-500/10 rounded-lg border border-blue-500/20 font-medium flex items-center gap-1.5">
                 <BarChart2 className="w-4 h-4" /> 回测
               </span>
-              <Link href="/replay" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+              <Link href="/replay" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 <History className="w-4 h-4" /> 历史回放
               </Link>
-              <Link href="/strategies" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+              <Link href="/strategies" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 <BookOpen className="w-4 h-4" /> 策略库
               </Link>
-              <Link href="/terminal" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
+              <Link href="/terminal" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 <Terminal className="w-4 h-4" /> 终端
               </Link>
               <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
                 <Server className="w-4 h-4" /> Hummingbot
               </Link>
+              <Link href="/signals" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Layers className="w-4 h-4" /> 因子/信号</Link>
+              <Link href="/decisions" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Brain className="w-4 h-4" /> 决策中心</Link>
             </nav>
           </div>
         </div>
@@ -1336,13 +1340,13 @@ export default function BacktestPage() {
 
       <main className="container mx-auto px-4 py-6">
         {/* Mode Switcher Tab */}
-        <div className="flex items-center gap-1 bg-slate-800/50 p-1 rounded-xl border border-slate-700/50 mb-6">
+        <div className="flex items-center gap-1 bg-secondary/50 p-1 rounded-xl border border-border/50 mb-6">
           <button
             onClick={() => setBacktestMode("single")}
             className={`px-4 py-2 text-sm rounded-lg transition-all ${
               backtestMode === "single"
                 ? "bg-blue-600/20 text-blue-400 border border-blue-500/30 font-medium"
-                : "text-slate-400 hover:text-slate-200"
+                : "text-muted-foreground hover:text-foreground/90"
             }`}
           >
             <div className="flex items-center gap-2">
@@ -1355,7 +1359,7 @@ export default function BacktestPage() {
             className={`px-4 py-2 text-sm rounded-lg transition-all ${
               backtestMode === "composition"
                 ? "bg-purple-600/20 text-purple-400 border border-purple-500/30 font-medium"
-                : "text-slate-400 hover:text-slate-200"
+                : "text-muted-foreground hover:text-foreground/90"
             }`}
           >
             <div className="flex items-center gap-2">
@@ -1368,7 +1372,7 @@ export default function BacktestPage() {
             className={`px-4 py-2 text-sm rounded-lg transition-all ${
               backtestMode === "wfa"
                 ? "bg-orange-600/20 text-orange-400 border border-orange-500/30 font-medium"
-                : "text-slate-400 hover:text-slate-200"
+                : "text-muted-foreground hover:text-foreground/90"
             }`}
           >
             <div className="flex items-center gap-2">
@@ -1381,7 +1385,7 @@ export default function BacktestPage() {
             className={`px-4 py-2 text-sm rounded-lg transition-all ${
               backtestMode === "optimize"
                 ? "bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 font-medium"
-                : "text-slate-400 hover:text-slate-200"
+                : "text-muted-foreground hover:text-foreground/90"
             }`}
           >
             <div className="flex items-center gap-2">
@@ -1397,9 +1401,9 @@ export default function BacktestPage() {
             {/* ── Left: Config Panel ── */}
             <div className="lg:col-span-1 space-y-4">
             {/* Strategy Selection */}
-            <Card className="bg-slate-900 border-slate-700/50">
+            <Card className="bg-card border-border/50">
               <CardHeader className="pb-3">
-                <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                <CardTitle className="text-foreground text-sm flex items-center gap-2">
                   <div className="w-6 h-6 bg-blue-500/10 rounded flex items-center justify-center border border-blue-500/20">
                     <Activity className="w-3.5 h-3.5 text-blue-400" />
                   </div>
@@ -1415,7 +1419,7 @@ export default function BacktestPage() {
                       className={`w-full text-left p-3 rounded-xl border transition-all ${
                         selectedType === t.id
                           ? "bg-blue-600/20 border-blue-500/50 text-blue-300"
-                          : "bg-slate-800/50 border-slate-700/50 text-slate-400 hover:text-slate-200 hover:border-slate-600"
+                          : "bg-secondary/50 border-border/50 text-muted-foreground hover:text-foreground/90 hover:border-slate-600"
                       }`}
                     >
                       <div className="flex items-center justify-between">
@@ -1431,9 +1435,9 @@ export default function BacktestPage() {
 
             {/* Strategy Parameters */}
             {currentTemplate && currentTemplate.params.length > 0 && (
-              <Card className="bg-slate-900 border-slate-700/50">
+              <Card className="bg-card border-border/50">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                  <CardTitle className="text-foreground text-sm flex items-center gap-2">
                     <div className="w-6 h-6 bg-purple-500/10 rounded flex items-center justify-center border border-purple-500/20">
                       <Activity className="w-3.5 h-3.5 text-purple-400" />
                     </div>
@@ -1445,12 +1449,12 @@ export default function BacktestPage() {
                     <div key={p.key}>
                       <div className="flex items-center justify-between mb-1.5">
                         <div className="flex items-center gap-1.5">
-                          <label className="text-xs text-slate-300">{p.label}</label>
+                          <label className="text-xs text-foreground/80">{p.label}</label>
                           {p.description && (
                             <div className="group relative">
-                              <HelpCircle className="w-3.5 h-3.5 text-slate-500 hover:text-blue-400 cursor-help transition-colors" />
-                              <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-56 p-2.5 bg-slate-800 border border-slate-600 rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
-                                <p className="text-[11px] text-slate-300 leading-relaxed">{p.description}</p>
+                              <HelpCircle className="w-3.5 h-3.5 text-muted-foreground hover:text-blue-400 cursor-help transition-colors" />
+                              <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-56 p-2.5 bg-secondary border border-slate-600 rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+                                <p className="text-[11px] text-foreground/80 leading-relaxed">{p.description}</p>
                                 <div className="absolute left-1/2 -translate-x-1/2 top-full -mt-1 border-4 border-transparent border-t-slate-600" />
                               </div>
                             </div>
@@ -1470,11 +1474,11 @@ export default function BacktestPage() {
                           ...prev,
                           [p.key]: p.type === "int" ? parseInt(e.target.value) : parseFloat(e.target.value),
                         }))}
-                        className="w-full h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-blue-500"
+                        className="w-full h-1.5 bg-secondary rounded-full appearance-none cursor-pointer accent-blue-500"
                       />
                       <div className="flex justify-between mt-0.5">
-                        <span className="text-[9px] text-slate-600">{p.min}</span>
-                        <span className="text-[9px] text-slate-600">{p.max}</span>
+                        <span className="text-[9px] text-muted-foreground/50">{p.min}</span>
+                        <span className="text-[9px] text-muted-foreground/50">{p.max}</span>
                       </div>
                     </div>
                   ))}
@@ -1516,13 +1520,13 @@ export default function BacktestPage() {
           {/* ── Right: Results ── */}
           <div className="lg:col-span-2 space-y-6">
             {!result ? (
-              <div className="flex flex-col items-center justify-center min-h-[400px] text-slate-500 space-y-4">
-                <div className="w-20 h-20 bg-slate-800/50 rounded-2xl flex items-center justify-center border border-slate-700/50">
+              <div className="flex flex-col items-center justify-center min-h-[400px] text-muted-foreground space-y-4">
+                <div className="w-20 h-20 bg-secondary/50 rounded-2xl flex items-center justify-center border border-border/50">
                   <BarChart2 className="w-10 h-10 opacity-30" />
                 </div>
                 <div className="text-center">
-                  <p className="text-base font-medium text-slate-400">选择策略并运行回测</p>
-                  <p className="text-sm text-slate-600 mt-1">结果将在此处显示，包含资产曲线和详细指标</p>
+                  <p className="text-base font-medium text-muted-foreground">选择策略并运行回测</p>
+                  <p className="text-sm text-muted-foreground/50 mt-1">结果将在此处显示，包含资产曲线和详细指标</p>
                 </div>
               </div>
             ) : (
@@ -1533,12 +1537,12 @@ export default function BacktestPage() {
                     <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20 text-xs">
                       {result.strategy_type.toUpperCase()}
                     </Badge>
-                    <Badge variant="outline" className="bg-slate-700 text-slate-300 border-slate-600 text-xs">
+                    <Badge variant="outline" className="bg-secondary text-foreground/80 border-slate-600 text-xs">
                       {result.symbol} / {result.interval}
                     </Badge>
-                    <span className="text-xs text-slate-500">{(result.metrics?.total_trades ?? result.trades?.length ?? 0)} 笔交易</span>
+                    <span className="text-xs text-muted-foreground">{(result.metrics?.total_trades ?? result.trades?.length ?? 0)} 笔交易</span>
                   </div>
-                  <span className="text-xs text-slate-500">{new Date(result.created_at).toLocaleString()}</span>
+                  <span className="text-xs text-muted-foreground">{new Date(result.created_at).toLocaleString()}</span>
                 </div>
 
                 {/* Metrics Grid */}
@@ -1577,12 +1581,12 @@ export default function BacktestPage() {
                 </div>
 
                 {/* Equity Curve */}
-                <Card className="bg-slate-900 border-slate-700/50">
+                <Card className="bg-card border-border/50">
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                    <CardTitle className="text-foreground text-sm flex items-center gap-2">
                       <TrendingUp className="w-4 h-4 text-blue-400" />
                       资产曲线
-                      <span className="text-xs font-normal text-slate-400 ml-1">({(result.equity_curve || []).length} 个数据点)</span>
+                      <span className="text-xs font-normal text-muted-foreground ml-1">({(result.equity_curve || []).length} 个数据点)</span>
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="p-0 pb-2">
@@ -1608,32 +1612,32 @@ export default function BacktestPage() {
 
                 {/* Trade List */}
                 {(result.trades || []).length > 0 && (
-                  <Card className="bg-slate-900 border-slate-700/50">
+                  <Card className="bg-card border-border/50">
                     <CardHeader className="pb-3">
-                      <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                      <CardTitle className="text-foreground text-sm flex items-center gap-2">
                         <Clock className="w-4 h-4 text-purple-400" />
                         交易记录
-                        <span className="text-xs font-normal text-slate-400">（前 {Math.min((result.trades || []).length, 20)} 笔，共 {(result.trades || []).length} 笔）</span>
+                        <span className="text-xs font-normal text-muted-foreground">（前 {Math.min((result.trades || []).length, 20)} 笔，共 {(result.trades || []).length} 笔）</span>
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="p-0 pb-2">
                       <div className="overflow-x-auto">
                         <table className="w-full text-xs">
                           <thead>
-                            <tr className="border-b border-slate-800">
+                            <tr className="border-b border-border">
                               {["建仓时间", "平仓时间", "建仓价", "平仓价", "数量", "盈亏", "盈亏%"].map(h => (
-                                <th key={h} className="px-3 py-2 text-left text-slate-400 font-medium">{h}</th>
+                                <th key={h} className="px-3 py-2 text-left text-muted-foreground font-medium">{h}</th>
                               ))}
                             </tr>
                           </thead>
                           <tbody>
                             {(result.trades || []).slice(0, 20).map((t, i) => (
-                              <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
-                                <td className="px-3 py-2 text-slate-400 font-mono">{t.entry_time.slice(0, 16)}</td>
-                                <td className="px-3 py-2 text-slate-400 font-mono">{t.exit_time.slice(0, 16)}</td>
-                                <td className="px-3 py-2 text-slate-300 font-mono">${Number(t.entry_price).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                                <td className="px-3 py-2 text-slate-300 font-mono">${Number(t.exit_price).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                                <td className="px-3 py-2 text-slate-400 font-mono">{Number(t.quantity).toFixed(6)}</td>
+                              <tr key={i} className="border-b border-border/50 hover:bg-secondary/30 transition-colors">
+                                <td className="px-3 py-2 text-muted-foreground font-mono">{t.entry_time.slice(0, 16)}</td>
+                                <td className="px-3 py-2 text-muted-foreground font-mono">{t.exit_time.slice(0, 16)}</td>
+                                <td className="px-3 py-2 text-foreground/80 font-mono">${Number(t.entry_price).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                                <td className="px-3 py-2 text-foreground/80 font-mono">${Number(t.exit_price).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                                <td className="px-3 py-2 text-muted-foreground font-mono">{Number(t.quantity).toFixed(6)}</td>
                                 <td className={`px-3 py-2 font-mono font-bold ${t.pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
                                   {t.pnl >= 0 ? "+" : ""}${Number(t.pnl).toFixed(2)}
                                 </td>
@@ -1653,39 +1657,39 @@ export default function BacktestPage() {
 
             {/* History */}
             {history.length > 0 && (
-              <Card className="bg-slate-900 border-slate-700/50">
+              <Card className="bg-card border-border/50">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
-                    <Clock className="w-4 h-4 text-slate-400" />
+                  <CardTitle className="text-foreground text-sm flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-muted-foreground" />
                     历史回测记录
-                    <span className="text-xs text-slate-500 font-normal">（{history.length} 条）</span>
+                    <span className="text-xs text-muted-foreground font-normal">（{history.length} 条）</span>
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
                   {history.map((h, i) => {
                     const ret = h.metrics?.total_return ?? 0;
                     return (
-                      <div key={i} className="flex items-center justify-between p-3 bg-slate-800/50 rounded-xl border border-slate-700/50 hover:border-slate-600/50 transition-colors group">
+                      <div key={i} className="flex items-center justify-between p-3 bg-secondary/50 rounded-xl border border-border/50 hover:border-slate-600/50 transition-colors group">
                         <div className="flex items-center gap-3 flex-1 cursor-pointer" onClick={() => setResult(h as any)}>
                           <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20">
                             {h.strategy_type}
                           </Badge>
-                          <span className="text-sm text-slate-300">{h.symbol} / {h.interval}</span>
-                          <span className="text-xs text-slate-500">{(h.metrics?.total_trades ?? h.trades?.length ?? 0)} 笔</span>
+                          <span className="text-sm text-foreground/80">{h.symbol} / {h.interval}</span>
+                          <span className="text-xs text-muted-foreground">{(h.metrics?.total_trades ?? h.trades?.length ?? 0)} 笔</span>
                         </div>
                         <div className="flex items-center gap-3">
                           <span className={`text-sm font-bold ${ret >= 0 ? "text-green-400" : "text-red-400"}`}>
                             {ret >= 0 ? "+" : ""}{ret.toFixed(2)}%
                           </span>
-                          <span className="text-[10px] text-slate-500">{new Date(h.created_at).toLocaleDateString()}</span>
+                          <span className="text-[10px] text-muted-foreground">{new Date(h.created_at).toLocaleDateString()}</span>
                           <button
                             onClick={(e) => { e.stopPropagation(); setDeleteTarget(h); }}
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors opacity-0 group-hover:opacity-100"
+                            className="p-1.5 rounded-lg text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors opacity-0 group-hover:opacity-100"
                             title="删除记录"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
-                          <ChevronRight className="w-4 h-4 text-slate-600" />
+                          <ChevronRight className="w-4 h-4 text-muted-foreground/50" />
                         </div>
                       </div>
                     );
@@ -1703,9 +1707,9 @@ export default function BacktestPage() {
           {/* ── Left: Composition Config Panel ── */}
           <div className="lg:col-span-1 space-y-4">
             {/* Strategy Multi-Select */}
-            <Card className="bg-slate-900 border-slate-700/50">
+            <Card className="bg-card border-border/50">
               <CardHeader className="pb-3">
-                <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                <CardTitle className="text-foreground text-sm flex items-center gap-2">
                   <div className="w-6 h-6 bg-purple-500/10 rounded flex items-center justify-center border border-purple-500/20">
                     <Layers className="w-3.5 h-3.5 text-purple-400" />
                   </div>
@@ -1724,7 +1728,7 @@ export default function BacktestPage() {
                       className={`flex items-center gap-3 p-2.5 rounded-lg border cursor-pointer transition-all ${
                         selectedStrategies.includes(t.id)
                           ? "border-purple-500/50 bg-purple-500/10"
-                          : "border-slate-700/50 hover:border-slate-600/50"
+                          : "border-border/50 hover:border-slate-600/50"
                       }`}
                     >
                       <input
@@ -1740,8 +1744,8 @@ export default function BacktestPage() {
                         className="accent-purple-500 w-4 h-4"
                       />
                       <div className="flex-1">
-                        <p className="text-sm text-slate-200">{t.name}</p>
-                        <p className="text-[10px] text-slate-500">{(t.description || "").slice(0, 50)}</p>
+                        <p className="text-sm text-foreground/90">{t.name}</p>
+                        <p className="text-[10px] text-muted-foreground">{(t.description || "").slice(0, 50)}</p>
                       </div>
                     </label>
                   ))}
@@ -1755,9 +1759,9 @@ export default function BacktestPage() {
             </Card>
 
             {/* Composition Type */}
-            <Card className="bg-slate-900 border-slate-700/50">
+            <Card className="bg-card border-border/50">
               <CardHeader className="pb-3">
-                <CardTitle className="text-slate-100 text-sm">组合方式</CardTitle>
+                <CardTitle className="text-foreground text-sm">组合方式</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
                 {[
@@ -1770,7 +1774,7 @@ export default function BacktestPage() {
                     className={`w-full text-left p-3 rounded-xl border transition-all ${
                       compositionType === opt.value
                         ? "bg-purple-600/20 border-purple-500/50 text-purple-300"
-                        : "bg-slate-800/50 border-slate-700/50 text-slate-400 hover:text-slate-200"
+                        : "bg-secondary/50 border-border/50 text-muted-foreground hover:text-foreground/90"
                     }`}
                   >
                     <p className="font-medium text-sm">{opt.label}</p>
@@ -1814,33 +1818,33 @@ export default function BacktestPage() {
           {/* ── Right: Composition Results ── */}
           <div className="lg:col-span-2 space-y-6">
             {!compositionResult ? (
-              <div className="flex flex-col items-center justify-center min-h-[400px] text-slate-500 space-y-4">
-                <div className="w-20 h-20 bg-slate-800/50 rounded-2xl flex items-center justify-center border border-slate-700/50">
+              <div className="flex flex-col items-center justify-center min-h-[400px] text-muted-foreground space-y-4">
+                <div className="w-20 h-20 bg-secondary/50 rounded-2xl flex items-center justify-center border border-border/50">
                   <Layers className="w-10 h-10 opacity-30" />
                 </div>
                 <div className="text-center">
-                  <p className="text-base font-medium text-slate-400">选择策略组合并运行对比</p>
-                  <p className="text-sm text-slate-600 mt-1">选择至少 2 个策略，运行后查看组合与单策略的对比结果</p>
+                  <p className="text-base font-medium text-muted-foreground">选择策略组合并运行对比</p>
+                  <p className="text-sm text-muted-foreground/50 mt-1">选择至少 2 个策略，运行后查看组合与单策略的对比结果</p>
                 </div>
               </div>
             ) : compositionResult.success === false ? (
-              <div className="flex flex-col items-center justify-center min-h-[400px] text-slate-500 space-y-4">
+              <div className="flex flex-col items-center justify-center min-h-[400px] text-muted-foreground space-y-4">
                 <div className="w-20 h-20 bg-red-500/10 rounded-2xl flex items-center justify-center border border-red-500/20">
                   <AlertTriangle className="w-10 h-10 text-red-400" />
                 </div>
                 <div className="text-center">
                   <p className="text-base font-medium text-red-400">组合对比运行失败</p>
-                  <p className="text-sm text-slate-500 mt-1">{compositionResult.message || "请检查策略参数或数据后重试"}</p>
+                  <p className="text-sm text-muted-foreground mt-1">{compositionResult.message || "请检查策略参数或数据后重试"}</p>
                 </div>
               </div>
             ) : !compositionResult.comparisons || Object.keys(compositionResult.comparisons || {}).length === 0 ? (
-              <div className="flex flex-col items-center justify-center min-h-[400px] text-slate-500 space-y-4">
+              <div className="flex flex-col items-center justify-center min-h-[400px] text-muted-foreground space-y-4">
                 <div className="w-20 h-20 bg-amber-500/10 rounded-2xl flex items-center justify-center border border-amber-500/20">
                   <Info className="w-10 h-10 text-amber-400" />
                 </div>
                 <div className="text-center">
                   <p className="text-base font-medium text-amber-400">无有效对比数据</p>
-                  <p className="text-sm text-slate-500 mt-1">运行完成但未生成有效结果，请检查数据源或策略配置</p>
+                  <p className="text-sm text-muted-foreground mt-1">运行完成但未生成有效结果，请检查数据源或策略配置</p>
                 </div>
               </div>
             ) : (
@@ -1849,20 +1853,20 @@ export default function BacktestPage() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <Badge className="bg-purple-500/10 text-purple-400 border-purple-500/20">策略组合对比</Badge>
-                    <Badge variant="outline" className="bg-slate-700 text-slate-300 border-slate-600 text-xs">
+                    <Badge variant="outline" className="bg-secondary text-foreground/80 border-slate-600 text-xs">
                       {symbol} / {interval}
                     </Badge>
-                    <span className="text-xs text-slate-500">{selectedStrategies.length} 个策略</span>
+                    <span className="text-xs text-muted-foreground">{selectedStrategies.length} 个策略</span>
                   </div>
-                  <span className="text-xs text-slate-500">
+                  <span className="text-xs text-muted-foreground">
                     {compositionResult.comparison_time ? new Date(compositionResult.comparison_time).toLocaleString() : ""}
                   </span>
                 </div>
 
                 {/* Equity Curve Comparison Chart */}
-                <Card className="bg-slate-900 border-slate-700/50">
+                <Card className="bg-card border-border/50">
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                    <CardTitle className="text-foreground text-sm flex items-center gap-2">
                       <TrendingUp className="w-4 h-4 text-purple-400" />
                       权益曲线对比
                     </CardTitle>
@@ -1881,9 +1885,9 @@ export default function BacktestPage() {
                 </Card>
 
                 {/* Metrics Comparison Table */}
-                <Card className="bg-slate-900 border-slate-700/50">
+                <Card className="bg-card border-border/50">
                   <CardHeader className="pb-3">
-                    <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                    <CardTitle className="text-foreground text-sm flex items-center gap-2">
                       <BarChart2 className="w-4 h-4 text-blue-400" />
                       指标对比
                     </CardTitle>
@@ -1899,9 +1903,9 @@ export default function BacktestPage() {
 
                 {/* Weight Distribution */}
                 {compositionResult.weight_distribution && (
-                  <Card className="bg-slate-900 border-slate-700/50">
+                  <Card className="bg-card border-border/50">
                     <CardHeader className="pb-3">
-                      <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                      <CardTitle className="text-foreground text-sm flex items-center gap-2">
                         <Layers className="w-4 h-4 text-green-400" />
                         权重分布
                       </CardTitle>
@@ -1939,9 +1943,9 @@ export default function BacktestPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-1 space-y-4">
               {/* Strategy Selection */}
-              <Card className="bg-slate-900 border-slate-700/50">
+              <Card className="bg-card border-border/50">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                  <CardTitle className="text-foreground text-sm flex items-center gap-2">
                     <div className="w-6 h-6 bg-orange-500/10 rounded flex items-center justify-center border border-orange-500/20">
                       <RefreshCw className="w-3.5 h-3.5 text-orange-400" />
                     </div>
@@ -1950,12 +1954,12 @@ export default function BacktestPage() {
                 </CardHeader>
                 <CardContent>
                   <Select value={selectedType} onValueChange={setSelectedType}>
-                    <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-200">
+                    <SelectTrigger className="bg-secondary border-border text-foreground/90">
                       <SelectValue placeholder="选择策略" />
                     </SelectTrigger>
-                    <SelectContent className="bg-slate-800 border-slate-700">
+                    <SelectContent className="bg-secondary border-border">
                       {templates.map(t => (
-                        <SelectItem key={t.id} value={t.id} className="text-slate-200 focus:bg-slate-700">
+                        <SelectItem key={t.id} value={t.id} className="text-foreground/90 focus:bg-secondary">
                           {t.name}
                         </SelectItem>
                       ))}
@@ -1965,9 +1969,9 @@ export default function BacktestPage() {
               </Card>
 
               {/* WFA Specific Config */}
-              <Card className="bg-slate-900 border-slate-700/50">
+              <Card className="bg-card border-border/50">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                  <CardTitle className="text-foreground text-sm flex items-center gap-2">
                     <div className="w-6 h-6 bg-orange-500/10 rounded flex items-center justify-center border border-orange-500/20">
                       <Layers className="w-3.5 h-3.5 text-orange-400" />
                     </div>
@@ -1976,7 +1980,7 @@ export default function BacktestPage() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div>
-                    <div className="flex justify-between text-xs text-slate-300 mb-1">
+                    <div className="flex justify-between text-xs text-foreground/80 mb-1">
                       <label>训练集比例 (Train Ratio)</label>
                       <span>{(wfaTrainRatio * 100).toFixed(0)}%</span>
                     </div>
@@ -1985,11 +1989,11 @@ export default function BacktestPage() {
                       min={0.3} max={0.9} step={0.05}
                       value={wfaTrainRatio}
                       onChange={e => setWfaTrainRatio(parseFloat(e.target.value))}
-                      className="w-full h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-orange-500"
+                      className="w-full h-1.5 bg-secondary rounded-full appearance-none cursor-pointer accent-orange-500"
                     />
                   </div>
                   <div>
-                    <div className="flex justify-between text-xs text-slate-300 mb-1">
+                    <div className="flex justify-between text-xs text-foreground/80 mb-1">
                       <label>窗口数量 (Windows)</label>
                       <span>{wfaWindowsCount}</span>
                     </div>
@@ -1998,7 +2002,7 @@ export default function BacktestPage() {
                       min={3} max={20} step={1}
                       value={wfaWindowsCount}
                       onChange={e => setWfaWindowsCount(parseInt(e.target.value))}
-                      className="w-full h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-orange-500"
+                      className="w-full h-1.5 bg-secondary rounded-full appearance-none cursor-pointer accent-orange-500"
                     />
                   </div>
                 </CardContent>
@@ -2036,13 +2040,13 @@ export default function BacktestPage() {
 
             <div className="lg:col-span-2 space-y-6">
               {!wfaResult ? (
-                <div className="flex flex-col items-center justify-center min-h-[400px] text-slate-500 space-y-4">
-                  <div className="w-20 h-20 bg-slate-800/50 rounded-2xl flex items-center justify-center border border-slate-700/50">
+                <div className="flex flex-col items-center justify-center min-h-[400px] text-muted-foreground space-y-4">
+                  <div className="w-20 h-20 bg-secondary/50 rounded-2xl flex items-center justify-center border border-border/50">
                     <RefreshCw className="w-10 h-10 opacity-30" />
                   </div>
                   <div className="text-center">
-                    <p className="text-base font-medium text-slate-400">运行推进分析 (Walk-Forward Analysis)</p>
-                    <p className="text-sm text-slate-600 mt-1">通过滚动窗口回测验证策略参数的稳定性和鲁棒性</p>
+                    <p className="text-base font-medium text-muted-foreground">运行推进分析 (Walk-Forward Analysis)</p>
+                    <p className="text-sm text-muted-foreground/50 mt-1">通过滚动窗口回测验证策略参数的稳定性和鲁棒性</p>
                   </div>
                 </div>
               ) : (
@@ -2051,10 +2055,10 @@ export default function BacktestPage() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <Badge className="bg-orange-500/10 text-orange-400 border-orange-500/20">WFA 结果</Badge>
-                      <Badge variant="outline" className="bg-slate-700 text-slate-300 border-slate-600 text-xs">
+                      <Badge variant="outline" className="bg-secondary text-foreground/80 border-slate-600 text-xs">
                         {symbol} / {interval}
                       </Badge>
-                      <span className="text-xs text-slate-500">{wfaResult.windows?.length || 0} 个窗口</span>
+                      <span className="text-xs text-muted-foreground">{wfaResult.windows?.length || 0} 个窗口</span>
                     </div>
                   </div>
 
@@ -2083,9 +2087,9 @@ export default function BacktestPage() {
                   </div>
 
                   {/* Equity Curve with Window Boundaries */}
-                  <Card className="bg-slate-900 border-slate-700/50 overflow-hidden relative z-0">
+                  <Card className="bg-card border-border/50 overflow-hidden relative z-0">
                     <CardHeader className="pb-2">
-                      <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                      <CardTitle className="text-foreground text-sm flex items-center gap-2">
                         <TrendingUp className="w-4 h-4 text-orange-400" />
                         样本外拼接净值曲线 (OOS Equity Curve)
                       </CardTitle>
@@ -2105,9 +2109,9 @@ export default function BacktestPage() {
 
                   {/* WFE and Param Stability Charts */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <Card className="bg-slate-900 border-slate-700/50">
+                    <Card className="bg-card border-border/50">
                       <CardHeader className="pb-2">
-                        <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                        <CardTitle className="text-foreground text-sm flex items-center gap-2">
                           <BarChart3 className="w-4 h-4 text-orange-400" />
                           各窗口 WFE 对比
                         </CardTitle>
@@ -2117,9 +2121,9 @@ export default function BacktestPage() {
                       </CardContent>
                     </Card>
 
-                    <Card className="bg-slate-900 border-slate-700/50">
+                    <Card className="bg-card border-border/50">
                       <CardHeader className="pb-2">
-                        <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                        <CardTitle className="text-foreground text-sm flex items-center gap-2">
                           <Activity className="w-4 h-4 text-orange-400" />
                           最优参数演变
                         </CardTitle>
@@ -2131,10 +2135,10 @@ export default function BacktestPage() {
                   </div>
 
                   {/* Window Details Table */}
-                  <Card className="bg-slate-900 border-slate-700/50">
+                  <Card className="bg-card border-border/50">
                     <CardHeader className="pb-3">
-                      <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
-                        <Layers className="w-4 h-4 text-slate-400" />
+                      <CardTitle className="text-foreground text-sm flex items-center gap-2">
+                        <Layers className="w-4 h-4 text-muted-foreground" />
                         滚动窗口详情
                       </CardTitle>
                     </CardHeader>
@@ -2142,14 +2146,14 @@ export default function BacktestPage() {
                       <div className="overflow-x-auto">
                         <table className="w-full text-xs">
                           <thead>
-                            <tr className="border-b border-slate-800 bg-slate-900">
-                              <th className="px-3 py-2 text-left text-slate-400 font-medium">窗口</th>
-                              <th className="px-3 py-2 text-left text-slate-400 font-medium">训练集周期</th>
-                              <th className="px-3 py-2 text-left text-slate-400 font-medium">测试集周期</th>
-                              <th className="px-3 py-2 text-right text-slate-400 font-medium">IS 年化</th>
-                              <th className="px-3 py-2 text-right text-slate-400 font-medium">OOS 年化</th>
-                              <th className="px-3 py-2 text-right text-slate-400 font-medium">WFE</th>
-                              <th className="px-3 py-2 text-left text-slate-400 font-medium">最优参数</th>
+                            <tr className="border-b border-border bg-card">
+                              <th className="px-3 py-2 text-left text-muted-foreground font-medium">窗口</th>
+                              <th className="px-3 py-2 text-left text-muted-foreground font-medium">训练集周期</th>
+                              <th className="px-3 py-2 text-left text-muted-foreground font-medium">测试集周期</th>
+                              <th className="px-3 py-2 text-right text-muted-foreground font-medium">IS 年化</th>
+                              <th className="px-3 py-2 text-right text-muted-foreground font-medium">OOS 年化</th>
+                              <th className="px-3 py-2 text-right text-muted-foreground font-medium">WFE</th>
+                              <th className="px-3 py-2 text-left text-muted-foreground font-medium">最优参数</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -2158,12 +2162,12 @@ export default function BacktestPage() {
                               const isReturn = w.train_metrics?.annual_return || 0;
                               const oosReturn = w.test_metrics?.annual_return || 0;
                               return (
-                                <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
-                                  <td className="px-3 py-2 text-slate-300 font-medium">W{w.window_index}</td>
-                                  <td className="px-3 py-2 text-slate-500 font-mono text-[10px]">
+                                <tr key={i} className="border-b border-border/50 hover:bg-secondary/30 transition-colors">
+                                  <td className="px-3 py-2 text-foreground/80 font-medium">W{w.window_index}</td>
+                                  <td className="px-3 py-2 text-muted-foreground font-mono text-[10px]">
                                     {new Date(w.train_start).toLocaleDateString()} - {new Date(w.train_end).toLocaleDateString()}
                                   </td>
-                                  <td className="px-3 py-2 text-slate-500 font-mono text-[10px]">
+                                  <td className="px-3 py-2 text-muted-foreground font-mono text-[10px]">
                                     {new Date(w.test_start).toLocaleDateString()} - {new Date(w.test_end).toLocaleDateString()}
                                   </td>
                                   <td className={`px-3 py-2 text-right font-mono ${isReturn >= 0 ? "text-green-400" : "text-red-400"}`}>
@@ -2178,7 +2182,7 @@ export default function BacktestPage() {
                                   <td className="px-3 py-2">
                                     <div className="flex flex-wrap gap-1">
                                       {Object.entries(w.best_params || {}).map(([k, v]) => (
-                                        <Badge key={k} variant="outline" className="text-[9px] px-1 py-0 bg-slate-800 border-slate-700 text-slate-400">
+                                        <Badge key={k} variant="outline" className="text-[9px] px-1 py-0 bg-secondary border-border text-muted-foreground">
                                           {k}: {String(v)}
                                         </Badge>
                                       ))}
@@ -2203,9 +2207,9 @@ export default function BacktestPage() {
             {/* ── Left Config Panel ── */}
             <div className="xl:col-span-1 space-y-4">
               {/* Strategy Selection */}
-              <Card className="bg-slate-900 border-slate-700/50">
+              <Card className="bg-card border-border/50">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                  <CardTitle className="text-foreground text-sm flex items-center gap-2">
                     <div className="w-6 h-6 bg-emerald-500/10 rounded flex items-center justify-center border border-emerald-500/20">
                       <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
                     </div>
@@ -2214,12 +2218,12 @@ export default function BacktestPage() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <Select value={selectedType} onValueChange={setSelectedType}>
-                    <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-200">
+                    <SelectTrigger className="bg-secondary border-border text-foreground/90">
                       <SelectValue placeholder="选择策略" />
                     </SelectTrigger>
-                    <SelectContent className="bg-slate-800 border-slate-700">
+                    <SelectContent className="bg-secondary border-border">
                       {templates.map(t => (
-                        <SelectItem key={t.id} value={t.id} className="text-slate-200 focus:bg-slate-700">
+                        <SelectItem key={t.id} value={t.id} className="text-foreground/90 focus:bg-secondary">
                           {t.name}
                         </SelectItem>
                       ))}
@@ -2255,9 +2259,9 @@ export default function BacktestPage() {
               </Card>
 
               {/* Algorithm & Optimization Config */}
-              <Card className="bg-slate-900 border-slate-700/50">
+              <Card className="bg-card border-border/50">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                  <CardTitle className="text-foreground text-sm flex items-center gap-2">
                     <div className="w-6 h-6 bg-emerald-500/10 rounded flex items-center justify-center border border-emerald-500/20">
                       <BarChart3 className="w-3.5 h-3.5 text-emerald-400" />
                     </div>
@@ -2267,14 +2271,14 @@ export default function BacktestPage() {
                 <CardContent className="space-y-4">
                   {/* Algorithm Select */}
                   <div>
-                    <label className="text-xs text-slate-400 mb-1.5 block">优化算法</label>
+                    <label className="text-xs text-muted-foreground mb-1.5 block">优化算法</label>
                     <div className="flex gap-2">
                       <button
                         onClick={() => setOptAlgorithm("grid")}
                         className={`flex-1 py-2 text-xs rounded-lg border transition-all ${
                           optAlgorithm === "grid"
                             ? "bg-emerald-600/20 border-emerald-500/50 text-emerald-400 font-medium"
-                            : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                            : "bg-secondary border-border text-muted-foreground hover:text-foreground/90"
                         }`}
                       >
                         Grid Search
@@ -2284,20 +2288,20 @@ export default function BacktestPage() {
                         className={`flex-1 py-2 text-xs rounded-lg border transition-all ${
                           optAlgorithm === "optuna"
                             ? "bg-emerald-600/20 border-emerald-500/50 text-emerald-400 font-medium"
-                            : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                            : "bg-secondary border-border text-muted-foreground hover:text-foreground/90"
                         }`}
                       >
                         Optuna
                       </button>
                     </div>
-                    <p className="text-[10px] text-slate-500 mt-1">
+                    <p className="text-[10px] text-muted-foreground mt-1">
                       {optAlgorithm === "grid" ? "穷举所有参数组合，精确但耗时" : "贝叶斯优化，效率高但有随机性"}
                     </p>
                   </div>
 
                   {/* Target Metric */}
                   <div>
-                    <label className="text-xs text-slate-400 mb-1.5 block">目标指标</label>
+                    <label className="text-xs text-muted-foreground mb-1.5 block">目标指标</label>
                     <div className="grid grid-cols-3 gap-1">
                       {[
                         { value: "sharpe", label: "Sharpe" },
@@ -2310,7 +2314,7 @@ export default function BacktestPage() {
                           className={`py-1.5 text-[10px] rounded-lg border transition-all ${
                             optTargetMetric === m.value
                               ? "bg-emerald-600/20 border-emerald-500/50 text-emerald-400 font-medium"
-                              : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                              : "bg-secondary border-border text-muted-foreground hover:text-foreground/90"
                           }`}
                         >
                           {m.label}
@@ -2322,7 +2326,7 @@ export default function BacktestPage() {
                   {/* Optuna Trials */}
                   {optAlgorithm === "optuna" && (
                     <div>
-                      <div className="flex justify-between text-xs text-slate-300 mb-1">
+                      <div className="flex justify-between text-xs text-foreground/80 mb-1">
                         <label>搜索次数</label>
                         <span className="font-mono text-emerald-400">{optNTrials}</span>
                       </div>
@@ -2340,9 +2344,9 @@ export default function BacktestPage() {
 
                   {/* Commission */}
                   <div>
-                    <label className="text-xs text-slate-400 mb-1.5 block">
+                    <label className="text-xs text-muted-foreground mb-1.5 block">
                       手续费率 (%)
-                      <span className="ml-1 font-mono text-slate-500">{optCommission > 0 ? (optCommission * 100).toFixed(3) : "默认 0.1%"}</span>
+                      <span className="ml-1 font-mono text-muted-foreground">{optCommission > 0 ? (optCommission * 100).toFixed(3) : "默认 0.1%"}</span>
                     </label>
                     <input
                       type="number"
@@ -2351,15 +2355,15 @@ export default function BacktestPage() {
                       max="0.01"
                       value={optCommission}
                       onChange={e => setOptCommission(Math.max(0, parseFloat(e.target.value) || 0))}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      className="w-full bg-secondary border border-border rounded-lg px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-emerald-500"
                     />
                   </div>
 
                   {/* Slippage */}
                   <div>
-                    <label className="text-xs text-slate-400 mb-1.5 block">
+                    <label className="text-xs text-muted-foreground mb-1.5 block">
                       滑点率 (%)
-                      <span className="ml-1 font-mono text-slate-500">{optSlippage > 0 ? (optSlippage * 100).toFixed(3) : "默认 0.05%"}</span>
+                      <span className="ml-1 font-mono text-muted-foreground">{optSlippage > 0 ? (optSlippage * 100).toFixed(3) : "默认 0.05%"}</span>
                     </label>
                     <input
                       type="number"
@@ -2368,16 +2372,16 @@ export default function BacktestPage() {
                       max="0.01"
                       value={optSlippage}
                       onChange={e => setOptSlippage(Math.max(0, parseFloat(e.target.value) || 0))}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      className="w-full bg-secondary border border-border rounded-lg px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-emerald-500"
                     />
                   </div>
                 </CardContent>
               </Card>
 
               {/* Parameter Ranges Config */}
-              <Card className="bg-slate-900 border-slate-700/50">
+              <Card className="bg-card border-border/50">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                  <CardTitle className="text-foreground text-sm flex items-center gap-2">
                     <div className="w-6 h-6 bg-purple-500/10 rounded flex items-center justify-center border border-purple-500/20">
                       <Activity className="w-3.5 h-3.5 text-purple-400" />
                     </div>
@@ -2386,19 +2390,19 @@ export default function BacktestPage() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   {Object.keys(optParamRanges).length === 0 ? (
-                    <p className="text-xs text-slate-500 text-center py-4">
+                    <p className="text-xs text-muted-foreground text-center py-4">
                       选择策略后自动加载参数范围
                     </p>
                   ) : (
                     Object.entries(optParamRanges).map(([key, cfg]) => {
                       const tplParam = templates.find(t => t.id === selectedType)?.params.find(p => p.key === key);
                       return (
-                        <div key={key} className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50 space-y-2">
+                        <div key={key} className="p-3 bg-secondary/50 rounded-lg border border-border/50 space-y-2">
                           <div className="flex items-center justify-between">
-                            <span className="text-xs text-slate-300 font-medium">
+                            <span className="text-xs text-foreground/80 font-medium">
                               {tplParam?.label || key}
                             </span>
-                            <span className="text-[10px] text-slate-500 font-mono">
+                            <span className="text-[10px] text-muted-foreground font-mono">
                               {cfg.values.length > 0
                                 ? `${cfg.values.length} 个值`
                                 : `步长 ${cfg.step}`}
@@ -2406,7 +2410,7 @@ export default function BacktestPage() {
                           </div>
                           <div className="grid grid-cols-3 gap-2">
                             <div>
-                              <label className="text-[10px] text-slate-500 block mb-0.5">最小</label>
+                              <label className="text-[10px] text-muted-foreground block mb-0.5">最小</label>
                               <input
                                 type="number"
                                 value={cfg.min}
@@ -2414,11 +2418,11 @@ export default function BacktestPage() {
                                   ...prev,
                                   [key]: { ...cfg, min: parseFloat(e.target.value) || 0, values: [] }
                                 }))}
-                                className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-[11px] text-slate-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                className="w-full bg-secondary border border-slate-600 rounded px-2 py-1 text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-emerald-500"
                               />
                             </div>
                             <div>
-                              <label className="text-[10px] text-slate-500 block mb-0.5">最大</label>
+                              <label className="text-[10px] text-muted-foreground block mb-0.5">最大</label>
                               <input
                                 type="number"
                                 value={cfg.max}
@@ -2426,11 +2430,11 @@ export default function BacktestPage() {
                                   ...prev,
                                   [key]: { ...cfg, max: parseFloat(e.target.value) || 0, values: [] }
                                 }))}
-                                className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-[11px] text-slate-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                className="w-full bg-secondary border border-slate-600 rounded px-2 py-1 text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-emerald-500"
                               />
                             </div>
                             <div>
-                              <label className="text-[10px] text-slate-500 block mb-0.5">步长</label>
+                              <label className="text-[10px] text-muted-foreground block mb-0.5">步长</label>
                               <input
                                 type="number"
                                 step="1"
@@ -2439,7 +2443,7 @@ export default function BacktestPage() {
                                   ...prev,
                                   [key]: { ...cfg, step: Math.max(0.001, parseFloat(e.target.value) || 1), values: [] }
                                 }))}
-                                className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-[11px] text-slate-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                className="w-full bg-secondary border border-slate-600 rounded px-2 py-1 text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-emerald-500"
                               />
                             </div>
                           </div>
@@ -2449,12 +2453,12 @@ export default function BacktestPage() {
                               { length: Math.min(6, Math.ceil((cfg.max - cfg.min) / cfg.step) + 1) },
                               (_, i) => Math.round((cfg.min + i * cfg.step) * 1000) / 1000
                             )).slice(0, 8).map((v, i) => (
-                              <Badge key={i} variant="outline" className="text-[9px] px-1 py-0 bg-slate-700 border-slate-600 text-slate-400">
+                              <Badge key={i} variant="outline" className="text-[9px] px-1 py-0 bg-secondary border-slate-600 text-muted-foreground">
                                 {typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(2)) : v}
                               </Badge>
                             ))}
                             {cfg.values.length > 8 && (
-                              <Badge variant="outline" className="text-[9px] px-1 py-0 bg-slate-700 border-slate-600 text-slate-500">
+                              <Badge variant="outline" className="text-[9px] px-1 py-0 bg-secondary border-slate-600 text-muted-foreground">
                                 +{cfg.values.length - 8}
                               </Badge>
                             )}
@@ -2465,8 +2469,8 @@ export default function BacktestPage() {
                   )}
                   {/* Combo count estimate */}
                   {Object.keys(optParamRanges).length > 0 && (
-                    <div className="pt-2 border-t border-slate-700/50">
-                      <p className="text-[10px] text-slate-500">
+                    <div className="pt-2 border-t border-border/50">
+                      <p className="text-[10px] text-muted-foreground">
                         预估组合数: ~{Object.values(optParamRanges).reduce((acc, cfg) => {
                           const count = cfg.values.length > 0
                             ? cfg.values.length
@@ -2485,7 +2489,7 @@ export default function BacktestPage() {
                 disabled={optRunning || Object.keys(optParamRanges).length === 0}
                 className={`w-full gap-2 ${
                   optRunning
-                    ? "bg-slate-700 text-slate-400 cursor-not-allowed"
+                    ? "bg-secondary text-muted-foreground cursor-not-allowed"
                     : "bg-emerald-600 hover:bg-emerald-500 text-white"
                 }`}
               >
@@ -2513,11 +2517,11 @@ export default function BacktestPage() {
             {/* ── Right Results Panel ── */}
             <div className="xl:col-span-3 space-y-4">
               {!optResult ? (
-                <div className="flex flex-col items-center justify-center h-96 text-slate-500 border border-slate-800 rounded-2xl">
+                <div className="flex flex-col items-center justify-center h-96 text-muted-foreground border border-border rounded-2xl">
                   <TrendingUp className="w-16 h-16 mb-4 opacity-30" />
                   <p className="text-lg font-medium">等待参数优化结果</p>
                   <p className="text-sm mt-1">配置策略和参数范围后点击「开始参数优化」</p>
-                  <p className="text-[10px] mt-3 text-slate-600">支持 Grid Search / Optuna 算法 · 实时防过拟合预警</p>
+                  <p className="text-[10px] mt-3 text-muted-foreground/50">支持 Grid Search / Optuna 算法 · 实时防过拟合预警</p>
                 </div>
               ) : (
                 <>
@@ -2548,13 +2552,13 @@ export default function BacktestPage() {
                     <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-xs px-2 py-1">
                       ✓ 优化完成
                     </Badge>
-                    <Badge variant="outline" className="bg-slate-800 text-slate-300 border-slate-600 text-xs">
+                    <Badge variant="outline" className="bg-secondary text-foreground/80 border-slate-600 text-xs">
                       {optResult.symbol} / {optResult.interval} / {optResult.algorithm === "grid" ? "Grid" : "Optuna"}
                     </Badge>
-                    <Badge variant="outline" className="bg-slate-800 text-slate-300 border-slate-600 text-xs">
+                    <Badge variant="outline" className="bg-secondary text-foreground/80 border-slate-600 text-xs">
                       共 {optResult.total_combos.toLocaleString()} 个组合
                     </Badge>
-                    <span className="text-[10px] text-slate-500 ml-auto">
+                    <span className="text-[10px] text-muted-foreground ml-auto">
                       {optResult.target_metric === "sharpe" ? "目标: Sharpe" : optResult.target_metric === "return" ? "目标: 收益率" : "目标: 收益/回撤"}
                     </span>
                   </div>
@@ -2579,11 +2583,11 @@ export default function BacktestPage() {
                       positive={optResult.best_max_drawdown < 15}
                       sub={`年化 ${(optResult.best_return / Math.max(0.01, optResult.best_max_drawdown)).toFixed(2)}x`}
                     />
-                    <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700/50">
-                      <p className="text-xs text-slate-400 uppercase tracking-wider mb-1">最优参数</p>
+                    <div className="p-4 bg-secondary/50 rounded-xl border border-border/50">
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">最优参数</p>
                       <div className="flex flex-wrap gap-1 mt-1">
                         {Object.entries(optResult.best_params).map(([k, v]) => (
-                          <Badge key={k} variant="outline" className="text-[10px] px-1.5 py-0 bg-slate-700 border-slate-600 text-slate-300">
+                          <Badge key={k} variant="outline" className="text-[10px] px-1.5 py-0 bg-secondary border-slate-600 text-foreground/80">
                             {k}: {typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(3)) : v}
                           </Badge>
                         ))}
@@ -2627,9 +2631,9 @@ export default function BacktestPage() {
 
                   {/* Charts: Equity + Drawdown */}
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    <Card className="bg-slate-900 border-slate-700/50 overflow-hidden">
+                    <Card className="bg-card border-border/50 overflow-hidden">
                       <CardHeader className="pb-2">
-                        <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                        <CardTitle className="text-foreground text-sm flex items-center gap-2">
                           <TrendingUp className="w-4 h-4 text-emerald-400" />
                           最优参数权益曲线
                         </CardTitle>
@@ -2642,9 +2646,9 @@ export default function BacktestPage() {
                         />
                       </CardContent>
                     </Card>
-                    <Card className="bg-slate-900 border-slate-700/50 overflow-hidden">
+                    <Card className="bg-card border-border/50 overflow-hidden">
                       <CardHeader className="pb-2">
-                        <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                        <CardTitle className="text-foreground text-sm flex items-center gap-2">
                           <TrendingDown className="w-4 h-4 text-red-400" />
                           回撤曲线
                         </CardTitle>
@@ -2659,9 +2663,9 @@ export default function BacktestPage() {
                   </div>
 
                   {/* Top N Leaderboard */}
-                  <Card className="bg-slate-900 border-slate-700/50">
+                  <Card className="bg-card border-border/50">
                     <CardHeader className="pb-3">
-                      <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+                      <CardTitle className="text-foreground text-sm flex items-center gap-2">
                         <BarChart3 className="w-4 h-4 text-purple-400" />
                         参数排行榜 Top 20
                         {optSelectedRank > 0 && (
@@ -2675,15 +2679,15 @@ export default function BacktestPage() {
                       <div className="overflow-x-auto">
                         <table className="w-full text-xs">
                           <thead>
-                            <tr className="border-b border-slate-800 bg-slate-900">
-                              <th className="px-3 py-2 text-left text-slate-400 font-medium">#</th>
-                              <th className="px-3 py-2 text-right text-slate-400 font-medium">Sharpe</th>
-                              <th className="px-3 py-2 text-right text-slate-400 font-medium">收益率</th>
-                              <th className="px-3 py-2 text-right text-slate-400 font-medium">最大回撤</th>
-                              <th className="px-3 py-2 text-right text-slate-400 font-medium">胜率</th>
-                              <th className="px-3 py-2 text-right text-slate-400 font-medium">交易数</th>
-                              <th className="px-3 py-2 text-left text-slate-400 font-medium">参数</th>
-                              <th className="px-3 py-2 text-center text-slate-400 font-medium">操作</th>
+                            <tr className="border-b border-border bg-card">
+                              <th className="px-3 py-2 text-left text-muted-foreground font-medium">#</th>
+                              <th className="px-3 py-2 text-right text-muted-foreground font-medium">Sharpe</th>
+                              <th className="px-3 py-2 text-right text-muted-foreground font-medium">收益率</th>
+                              <th className="px-3 py-2 text-right text-muted-foreground font-medium">最大回撤</th>
+                              <th className="px-3 py-2 text-right text-muted-foreground font-medium">胜率</th>
+                              <th className="px-3 py-2 text-right text-muted-foreground font-medium">交易数</th>
+                              <th className="px-3 py-2 text-left text-muted-foreground font-medium">参数</th>
+                              <th className="px-3 py-2 text-center text-muted-foreground font-medium">操作</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -2693,22 +2697,22 @@ export default function BacktestPage() {
                               return (
                                 <tr
                                   key={i}
-                                  className={`border-b border-slate-800/50 transition-colors cursor-pointer ${
+                                  className={`border-b border-border/50 transition-colors cursor-pointer ${
                                     isSelected
                                       ? "bg-emerald-500/10"
-                                      : "hover:bg-slate-800/30"
+                                      : "hover:bg-secondary/30"
                                   } ${isBest ? "bg-yellow-500/5" : ""}`}
                                   onClick={() => handleOptSelectRank(item, i)}
                                 >
                                   <td className="px-3 py-2">
                                     <span className={`font-bold font-mono ${
-                                      isBest ? "text-yellow-400" : isSelected ? "text-emerald-400" : "text-slate-400"
+                                      isBest ? "text-yellow-400" : isSelected ? "text-emerald-400" : "text-muted-foreground"
                                     }`}>
                                       {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : i + 1}
                                     </span>
                                   </td>
                                   <td className={`px-3 py-2 text-right font-mono font-medium ${
-                                    item.sharpe >= 1 ? "text-green-400" : item.sharpe >= 0 ? "text-slate-100" : "text-red-400"
+                                    item.sharpe >= 1 ? "text-green-400" : item.sharpe >= 0 ? "text-foreground" : "text-red-400"
                                   }`}>
                                     {item.sharpe.toFixed(3)}
                                   </td>
@@ -2722,16 +2726,16 @@ export default function BacktestPage() {
                                   }`}>
                                     -{item.max_drawdown.toFixed(2)}%
                                   </td>
-                                  <td className="px-3 py-2 text-right font-mono text-slate-300">
+                                  <td className="px-3 py-2 text-right font-mono text-foreground/80">
                                     {item.win_rate.toFixed(1)}%
                                   </td>
-                                  <td className="px-3 py-2 text-right font-mono text-slate-400">
+                                  <td className="px-3 py-2 text-right font-mono text-muted-foreground">
                                     {item.total_trades}
                                   </td>
                                   <td className="px-3 py-2">
                                     <div className="flex flex-wrap gap-1">
                                       {Object.entries(item.params).map(([k, v]) => (
-                                        <Badge key={k} variant="outline" className="text-[9px] px-1 py-0 bg-slate-800 border-slate-700 text-slate-400 whitespace-nowrap">
+                                        <Badge key={k} variant="outline" className="text-[9px] px-1 py-0 bg-secondary border-border text-muted-foreground whitespace-nowrap">
                                           {k}: {typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(2)) : v}
                                         </Badge>
                                       ))}
@@ -2741,14 +2745,14 @@ export default function BacktestPage() {
                                     <div className="flex items-center justify-center gap-1">
                                       <button
                                         onClick={(e) => { e.stopPropagation(); handleOptApplyToBacktest(); setOptSelectedParams(item.params); setOptSelectedRank(i); }}
-                                        className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-blue-400 transition-colors"
+                                        className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-blue-400 transition-colors"
                                         title="应用到回测"
                                       >
                                         <Play className="w-3 h-3" />
                                       </button>
                                       <button
                                         onClick={(e) => { e.stopPropagation(); setOptSaveDialogOpen(true); setOptSelectedParams(item.params); setOptSelectedRank(i); }}
-                                        className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-purple-400 transition-colors"
+                                        className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-purple-400 transition-colors"
                                         title="保存为模板"
                                       >
                                         <CheckCircle2 className="w-3 h-3" />
@@ -2801,20 +2805,20 @@ export default function BacktestPage() {
       {/* Save Template Dialog */}
       {optSaveDialogOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md shadow-2xl">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 bg-purple-500/10 rounded-full flex items-center justify-center">
                 <CheckCircle2 className="w-5 h-5 text-purple-400" />
               </div>
-              <h3 className="text-lg font-bold text-slate-100">保存为策略模板</h3>
+              <h3 className="text-lg font-bold text-foreground">保存为策略模板</h3>
             </div>
-            <p className="text-sm text-slate-400 mb-4">
-              将以下参数保存为 <span className="text-slate-200 font-medium">{optResult?.strategy_type}</span> 的新默认参数：
+            <p className="text-sm text-muted-foreground mb-4">
+              将以下参数保存为 <span className="text-foreground/90 font-medium">{optResult?.strategy_type}</span> 的新默认参数：
             </p>
-            <div className="bg-slate-800/50 rounded-xl p-3 mb-4 border border-slate-700/50">
+            <div className="bg-secondary/50 rounded-xl p-3 mb-4 border border-border/50">
               <div className="flex flex-wrap gap-2">
                 {Object.entries(optSelectedParams || optResult?.best_params || {}).map(([k, v]) => (
-                  <Badge key={k} variant="outline" className="text-xs bg-slate-700 border-slate-600 text-slate-200">
+                  <Badge key={k} variant="outline" className="text-xs bg-secondary border-slate-600 text-foreground/90">
                     {k}: {typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(3)) : v}
                   </Badge>
                 ))}
@@ -2823,7 +2827,7 @@ export default function BacktestPage() {
             <div className="flex gap-3">
               <Button
                 onClick={() => setOptSaveDialogOpen(false)}
-                className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300"
+                className="flex-1 bg-secondary hover:bg-secondary text-foreground/80"
               >
                 取消
               </Button>
@@ -2920,7 +2924,7 @@ function DrawdownCurveChart({ data, height = 280 }: DrawdownCurveChartProps) {
   return (
     <div className="relative overflow-hidden">
       <div ref={containerRef} className="w-full" style={{ height: `${height}px` }} />
-      <div className="absolute top-2 left-3 text-[10px] text-slate-400">最大回撤: <span className="text-red-400 font-mono">-{maxDD.toFixed(2)}%</span></div>
+      <div className="absolute top-2 left-3 text-[10px] text-muted-foreground">最大回撤: <span className="text-red-400 font-mono">-{maxDD.toFixed(2)}%</span></div>
     </div>
   );
 }
@@ -2974,9 +2978,9 @@ function HeatmapSection({ results, paramRanges }: HeatmapSectionProps) {
   };
 
   return (
-    <Card className="bg-slate-900 border-slate-700/50">
+    <Card className="bg-card border-border/50">
       <CardHeader className="pb-3">
-        <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+        <CardTitle className="text-foreground text-sm flex items-center gap-2">
           <BarChart3 className="w-4 h-4 text-purple-400" />
           参数热力图
         </CardTitle>
@@ -2991,7 +2995,7 @@ function HeatmapSection({ results, paramRanges }: HeatmapSectionProps) {
               className={`px-3 py-1.5 text-xs rounded-lg border transition-all ${
                 selectedMetric === m.key
                   ? "bg-emerald-600/20 border-emerald-500/50 text-emerald-400 font-medium"
-                  : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                  : "bg-secondary border-border text-muted-foreground hover:text-foreground/90"
               }`}
             >
               {m.label}
@@ -3002,9 +3006,9 @@ function HeatmapSection({ results, paramRanges }: HeatmapSectionProps) {
           <table className="border-collapse">
             <thead>
               <tr>
-                <th className="p-1 text-[10px] text-slate-500 font-normal"></th>
+                <th className="p-1 text-[10px] text-muted-foreground font-normal"></th>
                 {secondaryVals.map(sv => (
-                  <th key={sv} className="p-1 text-[10px] text-slate-400 font-normal text-center min-w-[60px]">
+                  <th key={sv} className="p-1 text-[10px] text-muted-foreground font-normal text-center min-w-[60px]">
                     {sv}
                   </th>
                 ))}
@@ -3013,7 +3017,7 @@ function HeatmapSection({ results, paramRanges }: HeatmapSectionProps) {
             <tbody>
               {primaryVals.map(pv => (
                 <tr key={pv}>
-                  <td className="p-1 text-[10px] text-slate-400 font-normal text-right pr-2">{pv}</td>
+                  <td className="p-1 text-[10px] text-muted-foreground font-normal text-right pr-2">{pv}</td>
                   {secondaryVals.map(sv => {
                     const val = getCellValue(pv, sv);
                     const hasData = val !== null;
@@ -3021,7 +3025,7 @@ function HeatmapSection({ results, paramRanges }: HeatmapSectionProps) {
                       <td key={sv} className="p-0.5">
                         <div
                           className={`rounded text-center text-[10px] font-mono px-2 py-1 min-w-[60px] ${
-                            hasData ? getColor(val) + " text-slate-200" : "bg-slate-800 text-slate-600"
+                            hasData ? getColor(val) + " text-foreground/90" : "bg-secondary text-muted-foreground/50"
                           }`}
                           title={hasData ? `${metricCfg.label}: ${metricCfg.format(val)}` : "无数据"}
                         >
@@ -3036,7 +3040,7 @@ function HeatmapSection({ results, paramRanges }: HeatmapSectionProps) {
           </table>
         </div>
         {/* Color legend */}
-        <div className="flex items-center gap-2 mt-3 text-[10px] text-slate-500">
+        <div className="flex items-center gap-2 mt-3 text-[10px] text-muted-foreground">
           <span>{metricCfg.higherBetter ? "低" : "高"}</span>
           <div className="flex gap-0.5">
             <div className="w-6 h-3 rounded bg-red-900/60" />
@@ -3077,9 +3081,9 @@ function ParamStabilityScoreCard({ results }: ParamStabilityScoreCardProps) {
   const scoreBg = stabilityScore >= 70 ? "bg-green-500/10 border-green-500/20" : stabilityScore >= 40 ? "bg-amber-500/10 border-amber-500/20" : "bg-red-500/10 border-red-500/20";
 
   return (
-    <Card className="bg-slate-900 border-slate-700/50">
+    <Card className="bg-card border-border/50">
       <CardHeader className="pb-3">
-        <CardTitle className="text-slate-100 text-sm flex items-center gap-2">
+        <CardTitle className="text-foreground text-sm flex items-center gap-2">
           <Activity className="w-4 h-4 text-purple-400" />
           参数稳定性评估
         </CardTitle>
@@ -3087,29 +3091,29 @@ function ParamStabilityScoreCard({ results }: ParamStabilityScoreCardProps) {
       <CardContent>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className={`p-4 rounded-xl border text-center ${scoreBg}`}>
-            <p className="text-xs text-slate-400 mb-1">稳定性评分</p>
+            <p className="text-xs text-muted-foreground mb-1">稳定性评分</p>
             <p className={`text-3xl font-bold font-mono ${scoreColor}`}>{stabilityScore}</p>
-            <p className="text-[10px] text-slate-500 mt-1">/ 100</p>
+            <p className="text-[10px] text-muted-foreground mt-1">/ 100</p>
           </div>
-          <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700/50">
-            <p className="text-xs text-slate-400 mb-1">Sharpe 标准差</p>
-            <p className="text-xl font-bold font-mono text-slate-200">{std.toFixed(3)}</p>
-            <p className="text-[10px] text-slate-500 mt-1">离散程度</p>
+          <div className="p-4 bg-secondary/50 rounded-xl border border-border/50">
+            <p className="text-xs text-muted-foreground mb-1">Sharpe 标准差</p>
+            <p className="text-xl font-bold font-mono text-foreground/90">{std.toFixed(3)}</p>
+            <p className="text-[10px] text-muted-foreground mt-1">离散程度</p>
           </div>
-          <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700/50">
-            <p className="text-xs text-slate-400 mb-1">变异系数 (CV)</p>
+          <div className="p-4 bg-secondary/50 rounded-xl border border-border/50">
+            <p className="text-xs text-muted-foreground mb-1">变异系数 (CV)</p>
             <p className={`text-xl font-bold font-mono ${cv < 0.3 ? "text-green-400" : cv < 0.6 ? "text-amber-400" : "text-red-400"}`}>
               {cv.toFixed(3)}
             </p>
-            <p className="text-[10px] text-slate-500 mt-1">CV 越低越稳定</p>
+            <p className="text-[10px] text-muted-foreground mt-1">CV 越低越稳定</p>
           </div>
-          <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700/50">
-            <p className="text-xs text-slate-400 mb-1">IQR</p>
-            <p className="text-xl font-bold font-mono text-slate-200">{iqr.toFixed(3)}</p>
-            <p className="text-[10px] text-slate-500 mt-1">四分位距</p>
+          <div className="p-4 bg-secondary/50 rounded-xl border border-border/50">
+            <p className="text-xs text-muted-foreground mb-1">IQR</p>
+            <p className="text-xl font-bold font-mono text-foreground/90">{iqr.toFixed(3)}</p>
+            <p className="text-[10px] text-muted-foreground mt-1">四分位距</p>
           </div>
         </div>
-        <p className="text-xs text-slate-500 mt-3">
+        <p className="text-xs text-muted-foreground mt-3">
           {stabilityScore >= 70
             ? "✓ 参数稳定性良好，不同参数组合的收益表现较为一致，过拟合风险较低"
             : stabilityScore >= 40

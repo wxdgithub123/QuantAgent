@@ -424,6 +424,10 @@ def build_controller_config_payload(
     # 转换风控百分比为 Decimal（schema 要求 Decimal 类型）
     stop_loss_decimal = Decimal(str(round(stop_loss_pct / 100.0, 6)))
     take_profit_decimal = Decimal(str(round(take_profit_pct / 100.0, 6)))
+    # 转换为 float 以便 JSON 序列化
+    stop_loss_val = float(stop_loss_decimal)
+    take_profit_val = float(take_profit_decimal)
+    total_amount_val = float(paper_initial_balance)
     # cooldown_time: schema 要求整数（秒）
     cooldown_seconds = int(cooldown_minutes * 60)
     # time_limit: schema 默认 2700 秒（45 分钟）
@@ -431,18 +435,22 @@ def build_controller_config_payload(
     time_limit_seconds = int(max_runtime_minutes * 60)
 
     # ── 所有 directional_trading controller 的共同基础字段 ─────────────────────
+    connector_name = f"{connector}_paper_trade"
     base = {
         "id": config_id,
         "controller_type": controller_type,
         "controller_name": controller_name,
-        # connector_name：使用现货 connector（如 binance），schema 默认 binance_perpetual
-        "connector_name": connector,
+        # connector_name：Paper Trade 需要使用 _paper_trade 后缀
+        "connector_name": connector_name,
         "trading_pair": trading_pair.upper(),
-        # total_amount_quote：schema 要求 Decimal
-        "total_amount_quote": Decimal(str(paper_initial_balance)),
+        # candles_connector：使用普通 connector（公开 API 获取 K 线数据，无需 _paper_trade）
+        "candles_connector": connector,
+        "candles_trading_pair": trading_pair.upper(),
+        # total_amount_quote
+        "total_amount_quote": total_amount_val,
         # 通用风控（schema 中 stop_loss/take_profit 是 Decimal，值 0.03=3%）
-        "stop_loss": stop_loss_decimal,
-        "take_profit": take_profit_decimal,
+        "stop_loss": stop_loss_val,
+        "take_profit": take_profit_val,
         # cooldown_time：schema 要求整数（秒），默认值 300
         "cooldown_time": cooldown_seconds if cooldown_seconds >= 60 else 300,
         # time_limit：schema 默认 2700 秒（45 分钟）

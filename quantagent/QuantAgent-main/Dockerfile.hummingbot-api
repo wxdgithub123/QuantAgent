@@ -22,3 +22,9 @@ ENV BOTS_PATH=/hummingbot-api
 # 修正 DATABASE_URL：必须指向 hummingbot-postgres（hummingbot 自己创建的 postgres 容器）
 # 不能指向 quantagent-postgres（那是 QuantAgent 的 DB，用户名不匹配）
 ENV DATABASE_URL=postgresql+asyncpg://hbot:hummingbot-api@hummingbot-postgres:5432/hummingbot_api
+
+# 替换 docker_service.py：修复 Docker Desktop Windows 上的路径问题
+# 1. 移除 os.path.abspath()（在 Linux 容器中会破坏 Windows 路径）
+# 2. 使用 BOTS_HOST_PATH 环境变量作为宿主机路径
+# 3. 修复 network_mode="bridge"（兼容 Docker Desktop Windows）
+COPY hummingbot-api-docker_service.py /hummingbot-api/services/docker_service.py

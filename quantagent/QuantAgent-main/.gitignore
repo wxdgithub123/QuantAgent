@@ -111,9 +111,16 @@ config/mcporter.json
 frontend/.swc/
 frontend/DDesktopQuantAgentfrontend/
 
-# ── Test output files ──
-test_output*.txt
-backend/test_output*.txt
+# ── Runtime data ──────────────────────────────────────────────────────────────
+hummingbot_data/
+backend/data/pipeline/
+backend/data/market/
+*.duckdb
+*.duckdb.wal
+
+# ── Temp/one-off scripts ──────────────────────────────────────────────────────
+check_patch.py
+hummingbot-api-docker_service.py
 
 # ── Personal notes & checklists ──
 焚诀.md
