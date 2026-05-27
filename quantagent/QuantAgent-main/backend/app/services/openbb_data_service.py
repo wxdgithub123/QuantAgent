@@ -372,7 +372,7 @@ class OpenBBDataService:
                 result = await asyncio.get_event_loop().run_in_executor(
                     None,
                     lambda p=candidate: _obb.crypto.price.historical(
-                        obb_symbol, interval="1d", limit=1, provider=p
+                        symbol=obb_symbol, interval="1d", provider=p
                     ),
                 )
                 df = result.to_dataframe() if hasattr(result, "to_dataframe") else result
@@ -515,6 +515,8 @@ class OpenBBDataService:
             return None
 
         kwargs: Dict[str, Any] = {"symbol": series_id}
+        if provider:
+            kwargs["provider"] = provider
         if start:
             kwargs["start_date"] = start.strftime("%Y-%m-%d")
         if end:

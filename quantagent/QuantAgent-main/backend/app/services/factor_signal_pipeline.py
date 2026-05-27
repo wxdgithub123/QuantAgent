@@ -80,7 +80,7 @@ class FactorSignalPipeline:
         include_wait_signals: bool = True,
         persist_fetched_bars: bool = True,
         refresh_from_source: bool = False,
-        provider: str = "yfinance",
+        provider: Optional[str] = None,
         fallback_providers: Optional[List[str]] = None,
         include_context: bool = True,
     ) -> Dict[str, Any]:
@@ -89,6 +89,7 @@ class FactorSignalPipeline:
         instrument = Instrument.from_raw(symbol)
         canonical_symbol = instrument.symbol
         normalized_asset_type = self._normalize_asset_type(asset_type)
+        provider = provider or "yfinance"
         selected_strategies = self._normalize_strategies(strategies)
         limit = max(60, min(int(limit), 5000))
 
@@ -583,7 +584,7 @@ class FactorSignalPipeline:
                         SignalEventDB.timestamp <= end,
                         SignalEventDB.strategy_id.in_(strategy_ids),
                     )
-        )
+                )
             if factor_rows:
                 session.add_all(factor_rows)
             if signal_rows:
@@ -637,7 +638,7 @@ class FactorSignalPipeline:
                 from app.services.openbb_data_service import openbb_data_service
 
                 snapshots = await openbb_data_service.get_macro_events(
-                    provider=provider,
+                    provider="fred",
                     fallback_providers=fallback_providers,
                 )
                 if not snapshots:

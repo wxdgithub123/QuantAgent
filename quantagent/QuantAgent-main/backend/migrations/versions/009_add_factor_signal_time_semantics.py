@@ -49,6 +49,19 @@ def _drop_index_if_exists(index_name: str, table_name: str) -> None:
         op.drop_index(index_name, table_name=table_name)
 
 
+def _alter_varchar_if_present(table_name: str, column_name: str, length: int) -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing = {c["name"] for c in inspector.get_columns(table_name)}
+    if column_name in existing:
+        op.alter_column(
+            table_name,
+            column_name,
+            type_=sa.String(length),
+            existing_type=sa.String(),
+        )
+
+
 def upgrade() -> None:
     for table_name, schema_version in [
         ("factor_snapshots", "factor_snapshot.v1"),
@@ -58,19 +71,33 @@ def upgrade() -> None:
         _add_column_if_missing(table_name, sa.Column("event_time", sa.DateTime(timezone=True), nullable=True))
         _add_column_if_missing(table_name, sa.Column("available_time", sa.DateTime(timezone=True), nullable=True))
         _add_column_if_missing(table_name, sa.Column("as_of_time", sa.DateTime(timezone=True), nullable=True))
-        _add_column_if_missing(table_name, sa.Column("interval", sa.String(20), nullable=True))
-        _add_column_if_missing(table_name, sa.Column("provider", sa.String(50), nullable=True))
-        _add_column_if_missing(table_name, sa.Column("data_source", sa.String(50), nullable=True))
-        _add_column_if_missing(table_name, sa.Column("source_version", sa.String(50), nullable=True))
+        _add_column_if_missing(table_name, sa.Column("interval", sa.String(50), nullable=True))
+        _add_column_if_missing(table_name, sa.Column("provider", sa.String(100), nullable=True))
+        _add_column_if_missing(table_name, sa.Column("data_source", sa.String(100), nullable=True))
+        _add_column_if_missing(table_name, sa.Column("source_version", sa.String(100), nullable=True))
         _add_column_if_missing(
             table_name,
             sa.Column(
                 "schema_version",
-                sa.String(50),
+                sa.String(100),
                 nullable=False,
                 server_default=schema_version,
             ),
         )
+
+    _alter_varchar_if_present("factor_snapshots", "factor_name", 100)
+    _alter_varchar_if_present("factor_snapshots", "interval", 50)
+    _alter_varchar_if_present("factor_snapshots", "provider", 100)
+    _alter_varchar_if_present("factor_snapshots", "data_source", 100)
+    _alter_varchar_if_present("factor_snapshots", "source_version", 100)
+    _alter_varchar_if_present("factor_snapshots", "schema_version", 100)
+    _alter_varchar_if_present("signal_events", "source_strategy", 100)
+    _alter_varchar_if_present("signal_events", "strategy_id", 120)
+    _alter_varchar_if_present("signal_events", "interval", 50)
+    _alter_varchar_if_present("signal_events", "provider", 100)
+    _alter_varchar_if_present("signal_events", "data_source", 100)
+    _alter_varchar_if_present("signal_events", "source_version", 100)
+    _alter_varchar_if_present("signal_events", "schema_version", 100)
 
     _create_index_if_missing(
         "idx_factor_available_time",

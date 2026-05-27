@@ -6,6 +6,7 @@ Extends the existing DuckDB service pattern with new tables.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import threading
@@ -87,7 +88,7 @@ class PipelineStore:
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS news_articles (
-                id           BIGINT PRIMARY KEY DEFAULT (ABS(CAST(XXHASH64(url) AS BIGINT))),
+                id           BIGINT PRIMARY KEY,
                 title        VARCHAR NOT NULL,
                 source       VARCHAR NOT NULL,
                 url          VARCHAR NOT NULL,
@@ -283,6 +284,7 @@ class PipelineStore:
         rows = []
         for a in articles:
             rows.append({
+                "id": self._stable_id(a.url or a.raw_payload_id or a.title),
                 "title": a.title,
                 "source": a.source,
                 "url": a.url,
@@ -319,12 +321,12 @@ class PipelineStore:
             if not new_rows.empty:
                 conn.sql("""
                     INSERT INTO news_articles (
-                        title, source, url, summary, body, excerpt, language,
+                        id, title, source, url, summary, body, excerpt, language,
                         published_at, event_time, available_time, as_of_time,
                         symbols, topics, event_tags, sentiment_score, provider,
                         source_version, schema_version, raw_payload_id, metadata, ingested_at
                     )
-                    SELECT title, source, url, summary, body, excerpt, language,
+                    SELECT id, title, source, url, summary, body, excerpt, language,
                            published_at, event_time, available_time, as_of_time,
                            symbols, topics, event_tags, sentiment_score, provider,
                            source_version, schema_version, raw_payload_id, metadata, ingested_at
@@ -374,6 +376,10 @@ class PipelineStore:
             if raw.endswith(suffix) and len(raw) > len(suffix):
                 candidates.add(raw[: -len(suffix)])
         return sorted(candidates)
+
+    def _stable_id(self, value: str) -> int:
+        digest = hashlib.sha256((value or "").encode("utf-8")).digest()
+        return int.from_bytes(digest[:8], "big", signed=False) & ((1 << 63) - 1)
 
 
 pipeline_store = PipelineStore.get_instance()

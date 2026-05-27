@@ -48,7 +48,7 @@
 <div class="container">
 
 <h1>QuantAgent PRD 10.1-10.3 完成验收报告</h1>
-<p class="meta">更新时间：2026-05-27 | 分支：<code>codex/prd-standardization-plan</code> | 工作副本：<code>QuantAgent-master-work/quantagent/QuantAgent-main</code></p>
+<p class="meta">更新时间：2026-05-27 | 分支：<code>yhy</code> | 工作副本：<code>QuantAgent-master-work/quantagent/QuantAgent-main</code></p>
 
 <div class="card">
   <h2>一、完成结论</h2>
@@ -187,14 +187,27 @@ GET /api/v1/system/health</pre>
 <h2>七、验证结果</h2>
 <div class="card">
   <ul>
-    <li><span class="ok">通过：</span><code>python -m compileall backend/app/models backend/app/pipeline backend/app/services backend/app/api/v1/endpoints/signals.py backend/app/api/v1/endpoints/system_health.py backend/migrations/versions/009_add_factor_signal_time_semantics.py</code></li>
+    <li><span class="ok">通过：</span><code>python -m compileall backend/app backend/migrations</code></li>
     <li><span class="ok">通过：</span>新闻 enrichment 样例验证：能输出正向情绪、<code>etf</code> 事件标签、<code>BTC</code> 资产映射。</li>
     <li><span class="ok">通过：</span><code>MacroSnapshot</code>、<code>AnalysisContext</code>、<code>FactorSignalPipeline</code> 可导入和实例化。</li>
-    <li><span class="scope">环境说明：</span>本次完成代码层闭环与导入/编译验证；完整接口联调需要启动 PostgreSQL、DuckDB/ClickHouse、OpenBB 依赖和后端服务。</li>
+    <li><span class="ok">通过：</span>DuckDB 宏观/新闻表实际建表、写入、按 <code>BTCUSDT</code> 查询 <code>BTC</code> 新闻。</li>
+    <li><span class="ok">通过：</span>L5 内部路径测试：技术因子、<code>news_sentiment_mean</code>、<code>news_event_*</code>、<code>macro_*</code> 与新闻情绪信号生成正常。</li>
+    <li><span class="scope">环境说明：</span>本次完成代码层闭环和局部实写验证；完整接口联调仍需启动 PostgreSQL、OpenBB、后端服务和实际行情网络。</li>
   </ul>
 </div>
 
-<h2>八、后续工作</h2>
+<h2>八、质量复查修复项</h2>
+<div class="card">
+  <ul>
+    <li><span class="ok">已修复：</span>DuckDB 不支持 <code>XXHASH64(url)</code> 默认主键，改为 Python 侧稳定哈希生成 <code>id</code>，并完成实写验证。</li>
+    <li><span class="ok">已修复：</span>PostgreSQL 因子/信号表字符串字段偏短，已放宽 <code>factor_name</code>、<code>strategy_id</code>、<code>provider</code>、<code>schema_version</code> 等字段并同步迁移。</li>
+    <li><span class="ok">已修复：</span>L5 窗口替换逻辑的缩进可读性问题，避免后续维护误判。</li>
+    <li><span class="ok">已修复：</span>OpenBB crypto ticker 调用由位置参数改为 keyword 参数，减少 SDK 版本差异导致的失败。</li>
+    <li><span class="ok">已修复：</span>宏观数据拉取固定使用 FRED provider，避免被行情默认 provider 误传。</li>
+  </ul>
+</div>
+
+<h2>九、后续工作</h2>
 <div class="grid">
   <div class="card">
     <h3>数据源联调与样本验证</h3>
@@ -230,13 +243,16 @@ GET /api/v1/system/health</pre>
   </div>
 </div>
 
-<h2>九、非本次范围但需要继续衔接</h2>
+<h2>十、超出本次任务范围的问题</h2>
 <div class="card">
   <ul>
-    <li><span class="scope">L6 决策层：</span>TradingAgents/CoordinatorAgent 已有消费入口，下一步是正式将 <code>AnalysisContext</code> 作为唯一输入口径。</li>
-    <li><span class="scope">回测/执行/审计：</span>需要继续把 L6 输出、风控结果、订单意图、执行结果写入审计与回放链路。</li>
-    <li><span class="scope">前端：</span>需要增加 provider 选择、管线触发、标准化数据查看、上下文查看页面。</li>
-    <li><span class="scope">运行环境：</span>完整演示前需要确认 OpenBB、PostgreSQL、DuckDB/ClickHouse、Redis 等依赖服务可用。</li>
+    <li><span class="scope">旧文档口径冲突：</span><code>NEXT_STEPS.html</code> 仍写着 L5-L6 待建设、FactorEngine 未实现，这是任务二同学旧阶段判断；本分支已经完成 PRD 10.1-10.3，对外汇报应以本报告为准。</li>
+    <li><span class="scope">L6 决策层：</span>TradingAgents/CoordinatorAgent 已有消费入口，但把 <code>AnalysisContext</code> 作为唯一输入口径属于 PRD 10.4，不在本次 10.1-10.3 范围内。</li>
+    <li><span class="scope">回测/执行/审计：</span>把 L6 输出、风控结果、订单意图、执行结果写入完整审计与回放链路，属于 PRD 10.5 范围。</li>
+    <li><span class="scope">前端控制台：</span>provider 选择、管线触发、标准化数据查看、上下文查看页面属于 PRD 10.6 范围。</li>
+    <li><span class="scope">旧系统认证 TODO：</span><code>auth.py</code> 中仍有认证/注册 TODO，和本次数据接入、标准化、因子信号任务无直接关系，未在本分支修改。</li>
+    <li><span class="scope">旧系统风险控制 TODO：</span><code>risk_manager.py</code> 中仍有取消订单事件发布 TODO，属于风控执行链路，未在本分支修改。</li>
+    <li><span class="scope">完整运行环境：</span>最终演示仍需确认 PostgreSQL、OpenBB、DuckDB/ClickHouse、Redis、外网数据源可用；这属于部署联调，不是本次代码质量修复能完全覆盖的部分。</li>
   </ul>
 </div>
 
