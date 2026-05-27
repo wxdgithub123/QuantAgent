@@ -245,13 +245,22 @@ class HistoricalReplayAdapter(DataAdapter):
             self.data = [
                 BarData(
                     symbol=symbol,
+                    instrument_id=symbol,
+                    exchange="clickhouse",
+                    provider="clickhouse",
+                    source_version="stored-klines",
+                    schema_version="bar.v1",
                     datetime=r["open_time"],
+                    event_time=r["open_time"],
+                    available_time=r["open_time"],
+                    as_of_time=self.config.end_time,
                     open=r["open"],
                     high=r["high"],
                     low=r["low"],
                     close=r["close"],
                     volume=r["volume"],
                     interval=interval,
+                    timeframe=interval,
                 )
                 for r in rows
             ]

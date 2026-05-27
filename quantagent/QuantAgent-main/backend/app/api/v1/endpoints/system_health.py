@@ -156,6 +156,22 @@ async def get_system_health() -> Dict[str, Any]:
     except Exception as e:
         l5_checks["models"] = {"status": "error", "detail": str(e)[:100]}
 
+    try:
+        from app.services.factor_signal_pipeline import DEFAULT_STRATEGIES, factor_signal_pipeline
+        from app.services.analysis_context_builder import analysis_context_builder
+        from app.services.news_enrichment_service import news_enrichment_service
+
+        l5_checks["pipeline"] = {
+            "status": "ok",
+            "detail": "On-demand L1-L5 factor/signal generation, news enrichment, and AnalysisContext assembly available",
+            "default_strategies": DEFAULT_STRATEGIES,
+            "service": type(factor_signal_pipeline).__name__,
+            "context_builder": type(analysis_context_builder).__name__,
+            "news_enrichment": type(news_enrichment_service).__name__,
+        }
+    except Exception as e:
+        l5_checks["pipeline"] = {"status": "error", "detail": str(e)[:100]}
+
     # Check table counts if DB is connected
     try:
         from app.services.database import get_db
@@ -168,9 +184,15 @@ async def get_system_health() -> Dict[str, Any]:
                 factor_count = r.scalar() or 0
                 r = await session.execute(text("SELECT COUNT(*) FROM signal_events"))
                 signal_count = r.scalar() or 0
+                r = await session.execute(text("SELECT MAX(timestamp) FROM factor_snapshots"))
+                latest_factor_ts = r.scalar()
+                r = await session.execute(text("SELECT MAX(timestamp) FROM signal_events"))
+                latest_signal_ts = r.scalar()
                 l5_checks["counts"] = {
                     "factor_snapshots": factor_count,
                     "signal_events": signal_count,
+                    "latest_factor_timestamp": latest_factor_ts.isoformat() if latest_factor_ts else None,
+                    "latest_signal_timestamp": latest_signal_ts.isoformat() if latest_signal_ts else None,
                     "status": "ok",
                 }
             except Exception as e:

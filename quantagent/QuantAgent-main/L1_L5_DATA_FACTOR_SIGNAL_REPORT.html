@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuantAgent PRD 10.1-10.3 完成验收报告</title>
+<style>
+  :root {
+    --bg: #0d1117; --fg: #c9d1d9; --border: #30363d;
+    --accent: #58a6ff; --green: #3fb950; --amber: #d2991d;
+    --red: #f85149; --card: #161b22; --muted: #8b949e;
+    --code: #21262d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--fg); line-height: 1.72; padding: 2rem;
+  }
+  .container { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 1.8rem; border-bottom: 2px solid var(--border); padding-bottom: .6rem; margin-bottom: 1rem; }
+  h2 { color: var(--accent); font-size: 1.18rem; margin: 2rem 0 .8rem; }
+  h3 { font-size: 1rem; margin: 1rem 0 .5rem; }
+  .meta { color: var(--muted); font-size: .86rem; margin-bottom: 1.4rem; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem; margin: 1rem 0; }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: .75rem; font-weight: 700; margin-right: .4rem; }
+  .tag.done { background: #3fb95022; color: var(--green); border: 1px solid #3fb95055; }
+  .tag.scope { background: #d2991d22; color: var(--amber); border: 1px solid #d2991d55; }
+  .tag.info { background: #1f6feb22; color: var(--accent); border: 1px solid #1f6feb55; }
+  ul { padding-left: 1.2rem; margin: .4rem 0; }
+  li { margin: .32rem 0; font-size: .92rem; }
+  code { background: var(--code); border-radius: 4px; padding: 2px 6px; font-size: .86em; }
+  pre { background: #080c12; border: 1px solid var(--border); border-radius: 6px; padding: 1rem; overflow-x: auto; font-size: .84rem; line-height: 1.55; margin: .7rem 0; }
+  table { width: 100%; border-collapse: collapse; margin: .8rem 0; font-size: .88rem; }
+  th, td { border: 1px solid var(--border); padding: .55rem .65rem; vertical-align: top; text-align: left; }
+  th { background: #101722; color: var(--accent); white-space: nowrap; }
+  .flow { font-family: Consolas, "SF Mono", monospace; white-space: pre; overflow-x: auto; }
+  .muted { color: var(--muted); }
+  .ok { color: var(--green); font-weight: 700; }
+  .scope { color: var(--amber); font-weight: 700; }
+  @media (max-width: 760px) {
+    body { padding: 1rem; }
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>QuantAgent PRD 10.1-10.3 完成验收报告</h1>
+<p class="meta">更新时间：2026-05-27 | 分支：<code>codex/prd-standardization-plan</code> | 工作副本：<code>QuantAgent-master-work/quantagent/QuantAgent-main</code></p>
+
+<div class="card">
+  <h2>一、完成结论</h2>
+  <p>本次按需求文档完成 PRD 10.1 数据接入、10.2 标准化与存储、10.3 因子与信号的代码闭环。系统现在具备 crypto / 股票 / 新闻 / 宏观统一接入，OpenBB provider 切换与降级，平台标准对象与版本/三时间语义字段，PostgreSQL + DuckDB + Parquet 分层存储，以及技术指标、新闻情绪、事件标签、宏观因子、信号触发和 AnalysisContext 组装能力。</p>
+  <pre class="flow">外部数据源
+  -> OpenBB 统一接入 + 自定义备用源
+  -> 标准化对象(BarData / NewsEvent / MacroEvent / FactorSnapshot / SignalEvent)
+  -> PostgreSQL + DuckDB + Parquet
+  -> 技术因子 + 新闻情绪/事件标签 + 宏观因子
+  -> SignalEvent + AnalysisContext
+  -> L6 TradingAgents / CoordinatorAgent 消费入口</pre>
+</div>
+
+<h2>二、PRD 10.1 数据接入验收</h2>
+<table>
+  <tr><th>需求</th><th>完成实现</th><th>关键文件</th></tr>
+  <tr>
+    <td>支持 crypto 行情</td>
+    <td><span class="ok">完成。</span>OpenBB crypto historical 输出标准 <code>BarData</code>，失败时 L5 管线可降级到 Binance/CCXT。</td>
+    <td><code>backend/app/services/openbb_data_service.py</code><br><code>backend/app/services/factor_signal_pipeline.py</code></td>
+  </tr>
+  <tr>
+    <td>支持股票行情</td>
+    <td><span class="ok">完成。</span>新增 <code>get_equity_historical</code>、<code>get_equity_ticker</code>，<code>/signals/run</code> 支持 <code>asset_type=equity</code>。</td>
+    <td><code>backend/app/services/openbb_data_service.py</code><br><code>backend/app/api/v1/endpoints/signals.py</code></td>
+  </tr>
+  <tr>
+    <td>支持新闻</td>
+    <td><span class="ok">完成。</span>OpenBB 新闻进入 <code>NewsArticle/NewsEvent</code>，入库前完成去重、资产映射、情绪分、事件标签、主题标签。</td>
+    <td><code>backend/app/pipeline/adapters/news_adapter.py</code><br><code>backend/app/services/news_enrichment_service.py</code></td>
+  </tr>
+  <tr>
+    <td>支持宏观数据</td>
+    <td><span class="ok">完成。</span>OpenBB FRED 宏观序列进入 <code>MacroSnapshot/MacroEvent</code>，保留 provider、source_version、schema_version 与时间语义字段。</td>
+    <td><code>backend/app/services/openbb_data_service.py</code><br><code>backend/app/pipeline/adapters/macro_adapter.py</code></td>
+  </tr>
+  <tr>
+    <td>OpenBB provider 切换</td>
+    <td><span class="ok">完成。</span>行情、新闻、宏观入口支持 <code>provider</code> 和 <code>fallback_providers</code> 参数。</td>
+    <td><code>backend/app/services/openbb_data_service.py</code></td>
+  </tr>
+  <tr>
+    <td>备用数据源降级</td>
+    <td><span class="ok">完成。</span>provider chain 失败后继续尝试 fallback；crypto 行情在 OpenBB 不可用时降级到 Binance/CCXT。</td>
+    <td><code>backend/app/services/factor_signal_pipeline.py</code></td>
+  </tr>
+</table>
+
+<h2>三、PRD 10.2 标准化与存储验收</h2>
+<div class="grid">
+  <div class="card">
+    <h3><span class="tag done">完成</span>平台对象</h3>
+    <ul>
+      <li><code>BarData</code> 补齐 <code>instrument_id</code>、<code>exchange</code>、<code>provider</code>、<code>source_version</code>、<code>schema_version</code>、<code>timeframe</code>。</li>
+      <li><code>BarData</code> 支持 <code>bar_start_time</code>、<code>bar_end_time</code>、<code>vwap</code>、<code>transactions</code>、<code>volume_notional</code>。</li>
+      <li><code>MacroEvent</code>、<code>NewsEvent</code> 已标准化，保留兼容旧代码的 <code>MacroSnapshot</code>、<code>NewsArticle</code>。</li>
+      <li>新增 <code>AnalysisContext</code>，作为 L6 Agent 只能访问的标准化上下文。</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3><span class="tag done">完成</span>分层存储</h3>
+    <ul>
+      <li>PostgreSQL：<code>factor_snapshots</code>、<code>signal_events</code> 显式保存 <code>provider</code>、<code>source_version</code>、<code>schema_version</code>、<code>available_time</code>、<code>as_of_time</code>。</li>
+      <li>DuckDB：<code>macro_indicators</code>、<code>news_articles</code> 显式保存标准字段、情绪分、事件标签、主题标签。</li>
+      <li>Parquet：<code>duckdb_service</code> 继续按 <code>data/market/{symbol}/{interval}/YYYY/MM/DD.parquet</code> 归档行情。</li>
+      <li>迁移：新增 <code>009_add_factor_signal_time_semantics.py</code>，为因子/信号表补字段和查询索引。</li>
+    </ul>
+  </div>
+</div>
+
+<h2>四、PRD 10.3 因子与信号验收</h2>
+<table>
+  <tr><th>需求</th><th>完成实现</th><th>关键文件</th></tr>
+  <tr>
+    <td>技术指标计算</td>
+    <td><span class="ok">完成。</span>L5 管线调用已有 <code>indicators.py</code>，生成 SMA、EMA、BOLL、RSI、MACD、ATR 等因子并入库。</td>
+    <td><code>backend/app/services/factor_signal_pipeline.py</code><br><code>backend/app/services/indicators.py</code></td>
+  </tr>
+  <tr>
+    <td>新闻情绪与事件标签</td>
+    <td><span class="ok">完成。</span>新增规则型 enrichment，输出 <code>sentiment_score</code>、<code>event_tags</code>、<code>topics</code>、标准化 symbols，并转成 <code>news_sentiment_mean</code> 与 <code>news_event_*</code> 因子。</td>
+    <td><code>backend/app/services/news_enrichment_service.py</code><br><code>backend/app/services/factor_signal_pipeline.py</code></td>
+  </tr>
+  <tr>
+    <td>宏观因子</td>
+    <td><span class="ok">完成。</span>宏观事件进入 DuckDB 后，L5 管线写入 <code>macro_*</code> 因子快照。</td>
+    <td><code>backend/app/services/openbb_data_service.py</code><br><code>backend/app/pipeline/storage/duckdb_store.py</code></td>
+  </tr>
+  <tr>
+    <td>信号触发</td>
+    <td><span class="ok">完成。</span>调用 <code>strategy_templates.py</code> 生成多策略 <code>BUY/SELL/WAIT</code> 信号；新闻情绪也生成独立 <code>news_sentiment</code> 信号。</td>
+    <td><code>backend/app/services/factor_signal_pipeline.py</code></td>
+  </tr>
+  <tr>
+    <td>上下文组装</td>
+    <td><span class="ok">完成。</span>新增 <code>AnalysisContextBuilder</code>，汇总 bars、factors、signals、macro、news、data_versions、input_snapshot_ids，并执行 <code>available_time <= as_of_time</code>。</td>
+    <td><code>backend/app/models/analysis_context.py</code><br><code>backend/app/services/analysis_context_builder.py</code></td>
+  </tr>
+</table>
+
+<h2>五、API 验收入口</h2>
+<div class="card">
+  <pre>POST /api/v1/signals/run
+{
+  "symbol": "BTCUSDT",
+  "asset_type": "crypto",
+  "interval": "1h",
+  "limit": 300,
+  "provider": "yfinance",
+  "fallback_providers": ["fmp", "tiingo"],
+  "strategies": ["ma", "rsi", "boll", "macd"],
+  "include_wait_signals": true,
+  "persist_fetched_bars": true,
+  "refresh_from_source": false,
+  "include_context": true
+}</pre>
+  <pre>GET /api/v1/signals/context/BTCUSDT?interval=1h
+GET /api/v1/signals/factors?symbol=BTCUSDT&limit=50
+GET /api/v1/signals/events?symbol=BTCUSDT&limit=50
+GET /api/v1/signals/summary
+GET /api/v1/system/health</pre>
+</div>
+
+<h2>六、关键代码清单</h2>
+<table>
+  <tr><th>文件</th><th>本次作用</th></tr>
+  <tr><td><code>backend/app/services/openbb_data_service.py</code></td><td>统一接入 crypto、equity、news、macro，支持 provider chain 与 fallback。</td></tr>
+  <tr><td><code>backend/app/services/factor_signal_pipeline.py</code></td><td>L1-L5 主流水线：拉取/读取行情、计算技术因子、融合新闻/宏观、触发信号、写 PostgreSQL、返回 AnalysisContext。</td></tr>
+  <tr><td><code>backend/app/services/news_enrichment_service.py</code></td><td>新闻去重辅助、资产映射、情绪评分、事件标签、主题标签。</td></tr>
+  <tr><td><code>backend/app/services/analysis_context_builder.py</code></td><td>按 point-in-time 规则组装 L6 标准上下文。</td></tr>
+  <tr><td><code>backend/app/pipeline/storage/duckdb_store.py</code></td><td>DuckDB 宏观/新闻标准字段落库与查询。</td></tr>
+  <tr><td><code>backend/migrations/versions/009_add_factor_signal_time_semantics.py</code></td><td>PostgreSQL 因子/信号表补元数据与时间语义字段。</td></tr>
+  <tr><td><code>backend/app/api/v1/endpoints/signals.py</code></td><td>运行管线、查询因子/信号、获取 AnalysisContext 的 API。</td></tr>
+</table>
+
+<h2>七、验证结果</h2>
+<div class="card">
+  <ul>
+    <li><span class="ok">通过：</span><code>python -m compileall backend/app/models backend/app/pipeline backend/app/services backend/app/api/v1/endpoints/signals.py backend/app/api/v1/endpoints/system_health.py backend/migrations/versions/009_add_factor_signal_time_semantics.py</code></li>
+    <li><span class="ok">通过：</span>新闻 enrichment 样例验证：能输出正向情绪、<code>etf</code> 事件标签、<code>BTC</code> 资产映射。</li>
+    <li><span class="ok">通过：</span><code>MacroSnapshot</code>、<code>AnalysisContext</code>、<code>FactorSignalPipeline</code> 可导入和实例化。</li>
+    <li><span class="scope">环境说明：</span>本次完成代码层闭环与导入/编译验证；完整接口联调需要启动 PostgreSQL、DuckDB/ClickHouse、OpenBB 依赖和后端服务。</li>
+  </ul>
+</div>
+
+<h2>八、后续工作</h2>
+<div class="grid">
+  <div class="card">
+    <h3>数据源联调与样本验证</h3>
+    <ul>
+      <li>启动后端依赖，执行 <code>alembic upgrade head</code>。</li>
+      <li>分别用 crypto：<code>BTCUSDT</code>、equity：<code>AAPL</code> 跑 <code>/signals/run</code>。</li>
+      <li>记录 OpenBB provider、fallback provider 的成功/失败情况和返回行数。</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>因子信号验收与样例集</h3>
+    <ul>
+      <li>核对 <code>factor_snapshots</code> 是否包含技术因子、<code>news_sentiment_mean</code>、<code>news_event_*</code>、<code>macro_*</code>。</li>
+      <li>核对 <code>signal_events</code> 是否包含策略信号和 <code>news_sentiment</code> 信号。</li>
+      <li>整理 2-3 个 symbol 的验收截图和表计数。</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>AnalysisContext 到 L6 接入</h3>
+    <ul>
+      <li>调用 <code>/signals/context/{symbol}</code>，确认 bars/factors/signals/news/macro 都有标准字段。</li>
+      <li>把 <code>AnalysisContext.to_agent_payload()</code> 接到 <code>CoordinatorAgent</code> 或 TradingAgents adapter 的输入。</li>
+      <li>将 L6 输出继续写入 <code>coordination_history</code>，形成可审计链路。</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>端到端汇报材料</h3>
+    <ul>
+      <li>准备一张 PRD 主线图：OpenBB -> 标准化 -> 存储 -> 因子信号 -> AnalysisContext -> Agent。</li>
+      <li>展示 <code>/signals/run</code> 返回、<code>/signals/context</code> 返回、PostgreSQL/DuckDB 表字段。</li>
+      <li>说明本次完成 10.1-10.3，后续工作聚焦 L6 决策、风控执行、审计回放和前端控制台。</li>
+    </ul>
+  </div>
+</div>
+
+<h2>九、非本次范围但需要继续衔接</h2>
+<div class="card">
+  <ul>
+    <li><span class="scope">L6 决策层：</span>TradingAgents/CoordinatorAgent 已有消费入口，下一步是正式将 <code>AnalysisContext</code> 作为唯一输入口径。</li>
+    <li><span class="scope">回测/执行/审计：</span>需要继续把 L6 输出、风控结果、订单意图、执行结果写入审计与回放链路。</li>
+    <li><span class="scope">前端：</span>需要增加 provider 选择、管线触发、标准化数据查看、上下文查看页面。</li>
+    <li><span class="scope">运行环境：</span>完整演示前需要确认 OpenBB、PostgreSQL、DuckDB/ClickHouse、Redis 等依赖服务可用。</li>
+  </ul>
+</div>
+
+</div>
+</body>
+</html>

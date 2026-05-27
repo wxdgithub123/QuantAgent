@@ -32,26 +32,47 @@ class KlineData(BaseModel):
     low: float
     close: float
     volume: float
+    close_time: Optional[datetime] = None
     quote_volume: Optional[float] = None
     trades: Optional[int] = None
 
-    def to_bar_data(self, symbol: str, interval: str) -> "BarData":
-        """Convert to unified BarData with three-time semantics."""
+    def to_bar_data(
+        self,
+        symbol: str,
+        interval: str,
+        provider: str = "unknown",
+        exchange: str = "unknown",
+        source_version: Optional[str] = None,
+        instrument_id: Optional[str] = None,
+        available_time: Optional[datetime] = None,
+    ) -> "BarData":
+        """Convert raw exchange K-line data into the canonical BarData model."""
         from app.models.trading import BarData
 
+        ingested_at = available_time or datetime.utcnow()
         return BarData(
             symbol=symbol,
+            instrument_id=instrument_id or symbol,
+            exchange=exchange,
+            provider=provider,
+            source_version=source_version,
+            schema_version="bar.v1",
             datetime=self.timestamp,
+            bar_start_time=self.timestamp,
+            bar_end_time=self.close_time or self.timestamp,
             event_time=self.timestamp,
-            available_time=datetime.utcnow(),
+            available_time=ingested_at,
             open=self.open,
             high=self.high,
             low=self.low,
             close=self.close,
             volume=self.volume,
+            volume_notional=self.quote_volume,
+            transactions=self.trades,
             quote_volume=self.quote_volume,
             trades=self.trades,
             interval=interval,
+            timeframe=interval,
         )
 
 

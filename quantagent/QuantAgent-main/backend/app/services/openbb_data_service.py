@@ -17,6 +17,7 @@ BinanceService is retained for WebSocket streaming only.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 from datetime import datetime
@@ -25,7 +26,9 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from app.models.market_data import TickerData, SymbolInfo
+from app.pipeline.models import MacroSnapshot, NewsArticle
 from app.models.trading import BarData
+from app.services.news_enrichment_service import news_enrichment_service
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +102,7 @@ def _from_openbb_symbol(obb_symbol: str) -> str:
 class OpenBBDataService:
     """Unified data service wrapping the OpenBB SDK.
 
-    Provides crypto historical, ticker, price, and FRED economic data
+    Provides crypto/equity historical, ticker, price, news, and FRED economic data
     through a single interface.  Singleton — use ``get_instance()``.
     """
 
@@ -141,6 +144,16 @@ class OpenBBDataService:
         self._initialized = True
         return _OPENBB_AVAILABLE
 
+    # ── Provider helpers ───────────────────────────────────────────────────
+
+    def _provider_chain(self, provider: str, fallbacks: Optional[List[str]] = None) -> List[str]:
+        chain = [p.strip() for p in [provider, *(fallbacks or [])] if p and p.strip()]
+        deduped: List[str] = []
+        for p in chain:
+            if p not in deduped:
+                deduped.append(p)
+        return deduped or ["yfinance"]
+
     # ── Crypto historical (replaces binance_service.get_klines) ─────────────
 
     async def get_crypto_historical(
@@ -151,6 +164,7 @@ class OpenBBDataService:
         end: Optional[datetime] = None,
         limit: int = 100,
         provider: str = "yfinance",
+        fallback_providers: Optional[List[str]] = None,
     ) -> List[BarData]:
         """Fetch OHLCV bars via OpenBB crypto price historical.
 
@@ -160,6 +174,28 @@ class OpenBBDataService:
         if not await self.ensure_initialized():
             return []
 
+        for candidate in self._provider_chain(provider, fallback_providers):
+            bars = await self._get_crypto_historical_once(
+                symbol=symbol,
+                interval=interval,
+                start=start,
+                end=end,
+                limit=limit,
+                provider=candidate,
+            )
+            if bars:
+                return bars
+        return []
+
+    async def _get_crypto_historical_once(
+        self,
+        symbol: str,
+        interval: str,
+        start: Optional[datetime],
+        end: Optional[datetime],
+        limit: int,
+        provider: str,
+    ) -> List[BarData]:
         obb_symbol = _to_openbb_symbol(symbol)
         interval_map = {
             "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
@@ -194,70 +230,228 @@ class OpenBBDataService:
             return []
 
         bars = []
+        ingested_at = datetime.utcnow()
         for idx, row in df.iterrows():
             ts = idx if isinstance(idx, datetime) else pd.Timestamp(idx).to_pydatetime()
             bars.append(
                 BarData(
                     symbol=symbol,
+                    instrument_id=symbol,
+                    exchange=provider,
+                    provider=f"openbb:{provider}",
+                    source_version="openbb-sdk",
+                    schema_version="bar.v1",
                     datetime=ts,
+                    bar_start_time=ts,
+                    bar_end_time=ts,
                     event_time=ts,
-                    available_time=datetime.utcnow(),
+                    available_time=ingested_at,
                     open=float(row["open"]),
                     high=float(row["high"]),
                     low=float(row["low"]),
                     close=float(row["close"]),
                     volume=float(row.get("volume", 0.0)),
+                    vwap=float(row["vwap"]) if "vwap" in row and pd.notna(row["vwap"]) else None,
+                    volume_notional=float(row["volume_notional"]) if "volume_notional" in row and pd.notna(row["volume_notional"]) else None,
+                    transactions=int(row["transactions"]) if "transactions" in row and pd.notna(row["transactions"]) else None,
                     interval=interval,
+                    timeframe=interval,
                 )
             )
         return bars[-limit:] if len(bars) > limit else bars
 
+    # ── Equity historical / ticker ─────────────────────────────────────────
+
+    async def get_equity_historical(
+        self,
+        symbol: str,
+        interval: str = "1d",
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        limit: int = 100,
+        provider: str = "yfinance",
+        fallback_providers: Optional[List[str]] = None,
+    ) -> List[BarData]:
+        """Fetch stock/equity OHLCV bars via OpenBB with provider fallback."""
+        if not await self.ensure_initialized():
+            return []
+
+        for candidate in self._provider_chain(provider, fallback_providers):
+            try:
+                kwargs: Dict[str, Any] = {"symbol": symbol.upper(), "provider": candidate}
+                if start:
+                    kwargs["start_date"] = start.strftime("%Y-%m-%d")
+                if end:
+                    kwargs["end_date"] = end.strftime("%Y-%m-%d")
+                if interval:
+                    kwargs["interval"] = interval
+
+                result = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: _obb.equity.price.historical(**kwargs),
+                )
+                df = result.to_dataframe() if hasattr(result, "to_dataframe") else result
+                if df is None or df.empty:
+                    continue
+
+                ingested_at = datetime.utcnow()
+                bars: List[BarData] = []
+                for idx, row in df.iterrows():
+                    ts = idx if isinstance(idx, datetime) else pd.Timestamp(idx).to_pydatetime()
+                    bars.append(
+                        BarData(
+                            symbol=symbol.upper(),
+                            instrument_id=symbol.upper(),
+                            exchange=candidate,
+                            provider=f"openbb:{candidate}",
+                            source_version="openbb-sdk",
+                            schema_version="bar.v1",
+                            datetime=ts,
+                            bar_start_time=ts,
+                            bar_end_time=ts,
+                            event_time=ts,
+                            available_time=ingested_at,
+                            open=float(row["open"]),
+                            high=float(row["high"]),
+                            low=float(row["low"]),
+                            close=float(row["close"]),
+                            volume=float(row.get("volume", 0.0)),
+                            vwap=float(row["vwap"]) if "vwap" in row and pd.notna(row["vwap"]) else None,
+                            volume_notional=float(row["volume_notional"]) if "volume_notional" in row and pd.notna(row["volume_notional"]) else None,
+                            transactions=int(row["transactions"]) if "transactions" in row and pd.notna(row["transactions"]) else None,
+                            interval=interval,
+                            timeframe=interval,
+                        )
+                    )
+                if bars:
+                    return bars[-limit:] if len(bars) > limit else bars
+            except Exception as e:
+                logger.debug(f"OpenBB equity.historical({symbol}, provider={candidate}) failed: {e}")
+        return []
+
+    async def get_equity_ticker(
+        self, symbol: str, provider: str = "yfinance", fallback_providers: Optional[List[str]] = None
+    ) -> Optional[TickerData]:
+        """Fetch stock/equity latest price via OpenBB with provider fallback."""
+        bars = await self.get_equity_historical(
+            symbol=symbol,
+            interval="1d",
+            limit=2,
+            provider=provider,
+            fallback_providers=fallback_providers,
+        )
+        if not bars:
+            return None
+        latest = bars[-1]
+        prev = bars[-2] if len(bars) > 1 else None
+        change = latest.close - prev.close if prev else 0.0
+        pct = (change / prev.close * 100) if prev and prev.close else 0.0
+        return TickerData(
+            symbol=symbol.upper(),
+            price=latest.close,
+            change_24h=change,
+            change_percent=pct,
+            volume=latest.volume,
+            high_24h=latest.high,
+            low_24h=latest.low,
+            timestamp=latest.available_time or datetime.utcnow(),
+        )
+
     # ── Crypto ticker / price (replaces binance_service.get_ticker/get_price) ──
 
     async def get_crypto_ticker(
-        self, symbol: str, provider: str = "yfinance"
+        self, symbol: str, provider: str = "yfinance", fallback_providers: Optional[List[str]] = None
     ) -> Optional[TickerData]:
         """Fetch current ticker via OpenBB."""
         if not await self.ensure_initialized():
             return None
 
         obb_symbol = _to_openbb_symbol(symbol)
-        try:
-            result = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: _obb.crypto.price.historical(
-                    obb_symbol, interval="1d", limit=1, provider=provider
-                ),
-            )
-        except Exception as e:
-            logger.error(f"OpenBB ticker({symbol}) failed: {e}")
-            return None
-
-        if result is None:
-            return None
-
-        df = result.to_dataframe() if hasattr(result, "to_dataframe") else result
-        if df is None or df.empty:
-            return None
-
-        row = df.iloc[-1]
-        return TickerData(
-            symbol=symbol,
-            price=float(row["close"]),
-            change_24h=0.0,
-            change_percent=0.0,
-            volume=float(row.get("volume", 0.0)),
-            high_24h=float(row.get("high", row["close"])),
-            low_24h=float(row.get("low", row["close"])),
-            timestamp=datetime.utcnow(),
-        )
+        for candidate in self._provider_chain(provider, fallback_providers):
+            try:
+                result = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda p=candidate: _obb.crypto.price.historical(
+                        obb_symbol, interval="1d", limit=1, provider=p
+                    ),
+                )
+                df = result.to_dataframe() if hasattr(result, "to_dataframe") else result
+                if df is None or df.empty:
+                    continue
+                row = df.iloc[-1]
+                return TickerData(
+                    symbol=symbol,
+                    price=float(row["close"]),
+                    change_24h=0.0,
+                    change_percent=0.0,
+                    volume=float(row.get("volume", 0.0)),
+                    high_24h=float(row.get("high", row["close"])),
+                    low_24h=float(row.get("low", row["close"])),
+                    timestamp=datetime.utcnow(),
+                )
+            except Exception as e:
+                logger.debug(f"OpenBB ticker({symbol}, provider={candidate}) failed: {e}")
+        return None
 
     async def get_crypto_price(
-        self, symbol: str, provider: str = "yfinance"
+        self, symbol: str, provider: str = "yfinance", fallback_providers: Optional[List[str]] = None
     ) -> Optional[float]:
         """Fetch current price. Returns None on failure so callers can fall back."""
-        ticker = await self.get_crypto_ticker(symbol, provider)
+        ticker = await self.get_crypto_ticker(symbol, provider, fallback_providers)
         return ticker.price if ticker else None
+
+    # ── News ───────────────────────────────────────────────────────────────
+
+    async def get_news(
+        self,
+        symbol: str,
+        limit: int = 20,
+        provider: str = "yfinance",
+        fallback_providers: Optional[List[str]] = None,
+    ) -> List[NewsArticle]:
+        """Fetch and normalize news via OpenBB provider chain."""
+        if not await self.ensure_initialized():
+            return []
+
+        for candidate in self._provider_chain(provider, fallback_providers):
+            try:
+                ticker = _to_openbb_symbol(symbol) if symbol.upper().endswith(("USDT", "USD")) else symbol.upper()
+                result = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda p=candidate: _obb.news.company(symbol=ticker, limit=limit, provider=p),
+                )
+                if result is None or not getattr(result, "results", None):
+                    continue
+                now = datetime.utcnow()
+                articles: List[NewsArticle] = []
+                for item in result.results:
+                    url = getattr(item, "url", "") or ""
+                    title = getattr(item, "title", "") or ""
+                    summary = getattr(item, "summary", "") or ""
+                    pub_date = getattr(item, "date", None)
+                    payload_id = hashlib.sha256(f"{url}|{title}".encode("utf-8")).hexdigest()
+                    articles.append(
+                        NewsArticle(
+                            title=title,
+                            source=getattr(item, "source", "") or candidate,
+                            url=url,
+                            summary=summary,
+                            body=summary,
+                            excerpt=summary[:300] or title[:300],
+                            language="en",
+                            published_at=pub_date if isinstance(pub_date, datetime) else now,
+                            symbols=[symbol.upper()],
+                            ingested_at=now,
+                            provider=f"openbb:{candidate}",
+                            source_version="openbb-sdk",
+                            raw_payload_id=payload_id,
+                        )
+                    )
+                if articles:
+                    return news_enrichment_service.enrich_many(articles, requested_symbols=[symbol.upper()])
+            except Exception as e:
+                logger.debug(f"OpenBB news({symbol}, provider={candidate}) failed: {e}")
+        return []
 
     # ── Symbol search ────────────────────────────────────────────────────────
 
@@ -306,6 +500,7 @@ class OpenBBDataService:
         series_id: str,
         start: Optional[datetime] = None,
         end: Optional[datetime] = None,
+        provider: str = "fred",
     ) -> Optional[pd.DataFrame]:
         """Fetch a FRED economic series via OpenBB economy module.
 
@@ -339,6 +534,65 @@ class OpenBBDataService:
 
         df = result.to_dataframe() if hasattr(result, "to_dataframe") else result
         return df if df is not None and not df.empty else None
+
+    async def get_macro_events(
+        self,
+        series_map: Optional[Dict[str, str]] = None,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        provider: str = "fred",
+        fallback_providers: Optional[List[str]] = None,
+    ) -> List[MacroSnapshot]:
+        """Fetch macro series and normalize them into MacroEvent objects."""
+        default_series = {
+            "fed_funds_rate": "FEDFUNDS",
+            "treasury_10y": "DGS10",
+            "inflation_expect": "T10YIE",
+            "m2_money_supply": "M2SL",
+        }
+        series_map = series_map or default_series
+        if not await self.ensure_initialized():
+            return []
+
+        events: List[MacroSnapshot] = []
+        ingested_at = datetime.utcnow()
+        for indicator, series_id in series_map.items():
+            for candidate in self._provider_chain(provider, fallback_providers):
+                if candidate != "fred":
+                    continue
+                df = await self.get_economic_indicator(
+                    series_id=series_id,
+                    start=start,
+                    end=end,
+                    provider=candidate,
+                )
+                if df is None or df.empty:
+                    continue
+                value_col = series_id if series_id in df.columns else None
+                if value_col is None:
+                    numeric_cols = [col for col in df.columns if pd.api.types.is_numeric_dtype(df[col])]
+                    value_col = numeric_cols[0] if numeric_cols else df.columns[-1]
+                for idx, row in df.iterrows():
+                    value = row.get(value_col)
+                    if pd.isna(value):
+                        continue
+                    ts = idx if isinstance(idx, datetime) else pd.Timestamp(idx).to_pydatetime()
+                    events.append(
+                        MacroSnapshot(
+                            indicator=indicator,
+                            value=float(value),
+                            source=candidate,
+                            timestamp=ts,
+                            event_time=ts,
+                            available_time=ingested_at,
+                            provider=f"openbb:{candidate}",
+                            source_version="openbb-sdk",
+                            metadata={"series_id": series_id},
+                        )
+                    )
+                if events:
+                    break
+        return events
 
 
 # ── Module-level singleton ─────────────────────────────────────────────────────

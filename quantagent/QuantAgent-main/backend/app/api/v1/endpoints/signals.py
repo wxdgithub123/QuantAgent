@@ -3,13 +3,95 @@
 import logging
 from typing import Any, Dict, List, Optional
 
+from datetime import datetime
+
 from fastapi import APIRouter, Query
-from sqlalchemy import text, func
+from pydantic import BaseModel, Field
+from sqlalchemy import text
 
 from app.services.database import get_db
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+class SignalPipelineRunRequest(BaseModel):
+    """Request body for one on-demand L1-L5 pipeline run."""
+
+    symbol: str = Field(default="BTCUSDT", description="Canonical symbol, e.g. BTCUSDT")
+    asset_type: str = Field(default="crypto", description="crypto or equity")
+    interval: str = Field(default="1h", description="K-line interval, e.g. 1m/15m/1h/1d")
+    limit: int = Field(default=300, ge=60, le=5000)
+    provider: str = Field(default="yfinance", description="OpenBB provider name")
+    fallback_providers: Optional[List[str]] = Field(default=None, description="Provider fallback chain")
+    strategies: Optional[List[str]] = Field(
+        default=None,
+        description="Strategy ids from strategy_templates.py. Defaults to core sync strategies.",
+    )
+    include_wait_signals: bool = True
+    persist_fetched_bars: bool = True
+    refresh_from_source: bool = False
+    include_context: bool = True
+
+
+@router.post("/run")
+async def run_signal_pipeline(req: SignalPipelineRunRequest) -> Dict[str, Any]:
+    """Run L1-L5 once: load/fetch bars, compute factors, persist signals."""
+    try:
+        from app.services.factor_signal_pipeline import factor_signal_pipeline
+
+        return await factor_signal_pipeline.run(
+            symbol=req.symbol,
+            asset_type=req.asset_type,
+            interval=req.interval,
+            limit=req.limit,
+            provider=req.provider,
+            fallback_providers=req.fallback_providers,
+            strategies=req.strategies,
+            include_wait_signals=req.include_wait_signals,
+            persist_fetched_bars=req.persist_fetched_bars,
+            refresh_from_source=req.refresh_from_source,
+            include_context=req.include_context,
+        )
+    except Exception as e:
+        logger.error(f"Failed to run signal pipeline: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "symbol": req.symbol,
+            "interval": req.interval,
+            "error": str(e),
+        }
+
+
+@router.get("/context/{symbol}")
+async def get_analysis_context(
+    symbol: str,
+    interval: str = Query("1h"),
+    as_of_time: Optional[datetime] = Query(None),
+    bar_limit: int = Query(120, ge=1, le=1000),
+    factor_limit: int = Query(60, ge=1, le=500),
+    signal_limit: int = Query(40, ge=1, le=500),
+    news_limit: int = Query(20, ge=0, le=200),
+    macro_limit: int = Query(30, ge=0, le=200),
+) -> Dict[str, Any]:
+    """Assemble PRD AnalysisContext with point-in-time filtering."""
+    try:
+        from app.services.analysis_context_builder import analysis_context_builder
+
+        context = await analysis_context_builder.build(
+            symbol=symbol,
+            interval=interval,
+            as_of_time=as_of_time,
+            bar_limit=bar_limit,
+            factor_limit=factor_limit,
+            signal_limit=signal_limit,
+            news_limit=news_limit,
+            macro_limit=macro_limit,
+        )
+        return context.to_agent_payload()
+    except Exception as e:
+        logger.error(f"Failed to build AnalysisContext: {e}", exc_info=True)
+        return {"status": "error", "symbol": symbol, "error": str(e)}
 
 
 @router.get("/factors")
@@ -39,7 +121,8 @@ async def get_factors(
             total = r.scalar() or 0
 
             # Query
-            query_sql = f"""SELECT id, symbol, timestamp, factor_name, factor_value, parameters, source
+            query_sql = f"""SELECT id, symbol, timestamp, factor_name, factor_value, parameters, source,
+interval, provider, data_source, source_version, schema_version, available_time, as_of_time
 FROM factor_snapshots WHERE {where_clause}
 ORDER BY timestamp DESC LIMIT :limit OFFSET :offset"""
             params["limit"] = limit
@@ -55,6 +138,13 @@ ORDER BY timestamp DESC LIMIT :limit OFFSET :offset"""
                     "factor_value": row[4],
                     "parameters": row[5] or {},
                     "source": row[6],
+                    "interval": row[7],
+                    "provider": row[8],
+                    "data_source": row[9],
+                    "source_version": row[10],
+                    "schema_version": row[11],
+                    "available_time": row[12].isoformat() if row[12] else None,
+                    "as_of_time": row[13].isoformat() if row[13] else None,
                 })
 
             return {"data": rows, "total": total, "limit": limit, "offset": offset}
@@ -120,7 +210,8 @@ async def get_events(
             r = await session.execute(text(count_sql), params)
             total = r.scalar() or 0
 
-            query_sql = f"""SELECT id, symbol, timestamp, signal_type, signal_value, confidence, source_strategy, strategy_id, factors
+            query_sql = f"""SELECT id, symbol, timestamp, signal_type, signal_value, confidence, source_strategy, strategy_id, factors,
+interval, provider, data_source, source_version, schema_version, available_time, as_of_time
 FROM signal_events WHERE {where_clause}
 ORDER BY timestamp DESC LIMIT :limit OFFSET :offset"""
             params["limit"] = limit
@@ -138,6 +229,13 @@ ORDER BY timestamp DESC LIMIT :limit OFFSET :offset"""
                     "source_strategy": row[6],
                     "strategy_id": row[7],
                     "factors": row[8] or {},
+                    "interval": row[9],
+                    "provider": row[10],
+                    "data_source": row[11],
+                    "source_version": row[12],
+                    "schema_version": row[13],
+                    "available_time": row[14].isoformat() if row[14] else None,
+                    "as_of_time": row[15].isoformat() if row[15] else None,
                 })
 
             return {"data": rows, "total": total, "limit": limit, "offset": offset}

@@ -6,11 +6,13 @@ into NewsArticle records for DuckDB storage.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from datetime import datetime
 from typing import List
 
 from app.pipeline.models import NewsArticle
+from app.services.news_enrichment_service import news_enrichment_service
 
 logger = logging.getLogger(__name__)
 
@@ -60,13 +62,22 @@ class NewsAdapter:
                             source=getattr(item, "source", ""),
                             url=url,
                             summary=(getattr(item, "summary", "") or "")[:2000],
+                            body=(getattr(item, "summary", "") or "")[:4000],
+                            excerpt=(getattr(item, "summary", "") or getattr(item, "title", ""))[:300],
+                            language="en",
                             published_at=pub_date if isinstance(pub_date, datetime) else datetime.utcnow(),
                             symbols=[symbol],
                             ingested_at=now,
+                            event_time=pub_date if isinstance(pub_date, datetime) else datetime.utcnow(),
+                            available_time=now,
+                            provider="openbb:yfinance",
+                            source_version="openbb-sdk",
+                            raw_payload_id=hashlib.sha256(f"{url}|{getattr(item, 'title', '')}".encode("utf-8")).hexdigest(),
                         ))
             except Exception as e:
                 logger.debug(f"[news-adapter] {symbol}: {e}")
 
+        articles = news_enrichment_service.enrich_many(articles, requested_symbols=syms)
         logger.info(f"[news-adapter] Fetched {len(articles)} articles")
         return articles
 

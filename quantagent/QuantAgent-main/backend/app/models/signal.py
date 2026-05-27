@@ -20,11 +20,20 @@ class FactorSnapshot(BaseModel):
     """
 
     symbol: str
+    instrument_id: Optional[str] = None
     timestamp: datetime
+    event_time: Optional[datetime] = None
+    available_time: Optional[datetime] = None
+    as_of_time: Optional[datetime] = None
     factor_name: str  # e.g. "sma_10", "rsi_14", "macd_dif"
     factor_value: float
     parameters: Dict[str, Any] = Field(default_factory=dict)  # e.g. {"period": 10}
     source: str = "indicators"  # "indicators", "macro", "custom"
+    interval: Optional[str] = None
+    provider: Optional[str] = None
+    data_source: Optional[str] = None
+    source_version: Optional[str] = None
+    schema_version: str = "factor_snapshot.v1"
 
 
 class SignalEvent(BaseModel):
@@ -35,7 +44,11 @@ class SignalEvent(BaseModel):
     """
 
     symbol: str
+    instrument_id: Optional[str] = None
     timestamp: datetime
+    event_time: Optional[datetime] = None
+    available_time: Optional[datetime] = None
+    as_of_time: Optional[datetime] = None
     signal_type: str  # "BUY", "SELL", "WAIT", "LONG_REVERSAL", "SHORT_REVERSAL"
     signal_value: float = 0.0  # -1.0 to 1.0 (directional strength)
     confidence: float = 0.5  # 0.0 to 1.0
@@ -43,3 +56,8 @@ class SignalEvent(BaseModel):
     strategy_id: str = ""  # database ID of the generating strategy
     factors: Dict[str, float] = Field(default_factory=dict)
     extra_data: Dict[str, Any] = Field(default_factory=dict)
+    interval: Optional[str] = None
+    provider: Optional[str] = None
+    data_source: Optional[str] = None
+    source_version: Optional[str] = None
+    schema_version: str = "signal_event.v1"

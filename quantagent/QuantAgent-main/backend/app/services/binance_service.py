@@ -196,7 +196,10 @@ class BinanceService:
                     high=float(item[2]),
                     low=float(item[3]),
                     close=float(item[4]),
-                    volume=float(item[5])
+                    volume=float(item[5]),
+                    close_time=datetime.fromtimestamp(item[6] / 1000) if len(item) > 6 else None,
+                    quote_volume=float(item[7]) if len(item) > 7 and item[7] is not None else None,
+                    trades=int(item[8]) if len(item) > 8 and item[8] is not None else None,
                 ))
             
             # 后台异步写入 ClickHouse（不阻塞当前调用）
@@ -227,7 +230,7 @@ class BinanceService:
                     "low":        k.low,
                     "close":      k.close,
                     "volume":     k.volume,
-                    "close_time": k.timestamp,  # approximate; real close_time not in KlineData
+                    "close_time": k.close_time or k.timestamp,
                 })
             symbol_clean = symbol.replace("/", "")
             inserted = await clickhouse_service.insert_klines(symbol_clean, timeframe, rows)

@@ -204,12 +204,22 @@ class StrategyRunnerService:
                 
             bar = BarData(
                 symbol=symbol,
+                instrument_id=symbol,
+                exchange="clickhouse",
+                provider="clickhouse",
+                source_version="stored-klines",
+                schema_version="bar.v1",
                 datetime=bar_time,
+                event_time=bar_time,
+                available_time=bar_time,
+                as_of_time=bar_time,
                 open=float(row["open"]),
                 high=float(row["high"]),
                 low=float(row["low"]),
                 close=float(row["close"]),
-                volume=float(row["volume"])
+                volume=float(row["volume"]),
+                interval=DYNAMIC_SELECTION_CONFIG["interval"],
+                timeframe=DYNAMIC_SELECTION_CONFIG["interval"],
             )
             
             await self.strategy.on_bar(bar)
@@ -267,12 +277,21 @@ class StrategyRunnerService:
         if self.last_bar_time is None or current_bar_time > self.last_bar_time:
             bar = BarData(
                 symbol=symbol,
+                instrument_id=symbol,
+                exchange="binance",
+                provider="binance",
+                source_version="ccxt",
+                schema_version="bar.v1",
                 datetime=current_bar_time,
+                event_time=current_bar_time,
+                available_time=datetime.now(timezone.utc),
                 open=float(latest_row["open"]),
                 high=float(latest_row["high"]),
                 low=float(latest_row["low"]),
                 close=float(latest_row["close"]),
-                volume=float(latest_row["volume"])
+                volume=float(latest_row["volume"]),
+                interval=interval,
+                timeframe=interval,
             )
             
             # Execute on_bar. If a signal is generated, NATSTradingBus will publish it.

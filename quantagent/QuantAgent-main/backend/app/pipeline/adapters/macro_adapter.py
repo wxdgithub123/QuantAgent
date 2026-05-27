@@ -60,6 +60,7 @@ class MacroAdapter:
                 pass
 
         results: List[MacroSnapshot] = []
+        ingested_at = datetime.utcnow()
 
         # FRED series
         for name, source, series_id in FRED_INDICATORS:
@@ -81,6 +82,10 @@ class MacroAdapter:
                                 value=float(val),
                                 source=source,
                                 timestamp=item.date if isinstance(item.date, datetime) else datetime.combine(item.date, datetime.min.time()),
+                                event_time=item.date if isinstance(item.date, datetime) else datetime.combine(item.date, datetime.min.time()),
+                                available_time=ingested_at,
+                                provider=f"openbb:{source}",
+                                source_version="openbb-sdk",
                             ))
             except Exception as e:
                 logger.debug(f"[macro-adapter] {name} ({source}): {e}")
@@ -105,6 +110,10 @@ class MacroAdapter:
                                 value=float(val),
                                 source=source,
                                 timestamp=d if isinstance(d, datetime) else datetime.combine(d, datetime.min.time()),
+                                event_time=d if isinstance(d, datetime) else datetime.combine(d, datetime.min.time()),
+                                available_time=ingested_at,
+                                provider="openbb:oecd",
+                                source_version="openbb-sdk",
                             ))
             except Exception as e:
                 logger.debug(f"[macro-adapter] {name} (oecd): {e}")

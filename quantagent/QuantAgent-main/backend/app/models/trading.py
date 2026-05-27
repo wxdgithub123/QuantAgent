@@ -20,7 +20,7 @@ class OrderStatus(str, Enum):
     REJECTED = "REJECTED"
 
 class BarData(BaseModel):
-    """K-line bar with three-time semantics (anti-future-looking compliance).
+    """Canonical K-line bar with source metadata and three-time semantics.
 
     event_time     — when the bar occurred on the exchange (candle open time)
     available_time — when our system received/ingested this bar
@@ -28,7 +28,15 @@ class BarData(BaseModel):
     """
 
     symbol: str
+    instrument_id: Optional[str] = None  # Stable canonical id, defaults to symbol
+    exchange: str = "unknown"
+    provider: str = "unknown"
+    source_version: Optional[str] = None
+    schema_version: str = "bar.v1"
+
     datetime: datetime  # Candle open time (canonical)
+    bar_start_time: Optional[datetime] = None
+    bar_end_time: Optional[datetime] = None
     event_time: Optional[datetime] = None  # Defaults to datetime if not set
     available_time: Optional[datetime] = None  # Set on ingestion
     as_of_time: Optional[datetime] = None  # For historical replay
@@ -38,16 +46,36 @@ class BarData(BaseModel):
     low: float
     close: float
     volume: float
+    vwap: Optional[float] = None
+    volume_notional: Optional[float] = None
+    transactions: Optional[int] = None
     quote_volume: Optional[float] = None
     trades: Optional[int] = None
-    interval: str
+    interval: str = "1h"
+    timeframe: Optional[str] = None  # Alias used by some external tools
 
     def model_post_init(self, __context):
-        """Ensure event_time defaults to datetime if not provided."""
+        """Fill canonical defaults without forcing every producer to repeat them."""
         if self.event_time is None:
             self.event_time = self.datetime
+        if self.bar_start_time is None:
+            self.bar_start_time = self.datetime
+        if self.bar_end_time is None:
+            self.bar_end_time = self.event_time
         if self.available_time is None:
-            self.available_time = self.datetime
+            self.available_time = datetime.utcnow()
+        if self.timeframe is None:
+            self.timeframe = self.interval
+        if not self.interval and self.timeframe:
+            self.interval = self.timeframe
+        if self.instrument_id is None:
+            self.instrument_id = self.symbol
+        if self.transactions is None and self.trades is not None:
+            self.transactions = self.trades
+        if self.trades is None and self.transactions is not None:
+            self.trades = self.transactions
+        if self.volume_notional is None and self.quote_volume is not None:
+            self.volume_notional = self.quote_volume
 
 class TickData(BaseModel):
     """Tick data model"""

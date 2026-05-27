@@ -158,6 +158,11 @@ class BacktestDataAdapter(DataAdapter):
             bars.append(
                 BarData(
                     symbol=symbol,
+                    instrument_id=symbol,
+                    exchange="storage",
+                    provider=type(storage).__name__,
+                    source_version="active-storage",
+                    schema_version="bar.v1",
                     datetime=dt,
                     event_time=dt,
                     available_time=datetime.utcnow(),
@@ -167,6 +172,7 @@ class BacktestDataAdapter(DataAdapter):
                     close=row["close"],
                     volume=row["volume"],
                     interval=interval,
+                    timeframe=interval,
                 )
             )
         return bars
@@ -205,6 +211,11 @@ class LiveDataAdapter(DataAdapter):
             bars.append(
                 BarData(
                     symbol=symbol,
+                    instrument_id=symbol,
+                    exchange="binance",
+                    provider="binance",
+                    source_version="ccxt",
+                    schema_version="bar.v1",
                     datetime=k.timestamp,
                     event_time=k.timestamp,
                     available_time=datetime.utcnow(),
@@ -214,6 +225,7 @@ class LiveDataAdapter(DataAdapter):
                     close=k.close,
                     volume=k.volume,
                     interval=interval,
+                    timeframe=interval,
                 )
             )
         return bars

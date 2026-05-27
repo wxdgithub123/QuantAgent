@@ -151,7 +151,10 @@ class ExchangeService:
                     high=float(item[2]),
                     low=float(item[3]),
                     close=float(item[4]),
-                    volume=float(item[5])
+                    volume=float(item[5]),
+                    close_time=datetime.fromtimestamp(item[6] / 1000) if len(item) > 6 else None,
+                    quote_volume=float(item[7]) if len(item) > 7 and item[7] is not None else None,
+                    trades=int(item[8]) if len(item) > 8 and item[8] is not None else None,
                 ))
             
             return klines
