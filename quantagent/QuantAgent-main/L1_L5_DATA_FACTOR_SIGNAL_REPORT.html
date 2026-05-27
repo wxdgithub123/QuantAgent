@@ -243,16 +243,16 @@ GET /api/v1/system/health</pre>
   </div>
 </div>
 
-<h2>十、超出本次任务范围的问题</h2>
+<h2>十、质量复查发现的问题</h2>
 <div class="card">
   <ul>
-    <li><span class="scope">旧文档口径冲突：</span><code>NEXT_STEPS.html</code> 仍写着 L5-L6 待建设、FactorEngine 未实现，这是任务二同学旧阶段判断；本分支已经完成 PRD 10.1-10.3，对外汇报应以本报告为准。</li>
-    <li><span class="scope">L6 决策层：</span>TradingAgents/CoordinatorAgent 已有消费入口，但把 <code>AnalysisContext</code> 作为唯一输入口径属于 PRD 10.4，不在本次 10.1-10.3 范围内。</li>
-    <li><span class="scope">回测/执行/审计：</span>把 L6 输出、风控结果、订单意图、执行结果写入完整审计与回放链路，属于 PRD 10.5 范围。</li>
-    <li><span class="scope">前端控制台：</span>provider 选择、管线触发、标准化数据查看、上下文查看页面属于 PRD 10.6 范围。</li>
-    <li><span class="scope">旧系统认证 TODO：</span><code>auth.py</code> 中仍有认证/注册 TODO，和本次数据接入、标准化、因子信号任务无直接关系，未在本分支修改。</li>
-    <li><span class="scope">旧系统风险控制 TODO：</span><code>risk_manager.py</code> 中仍有取消订单事件发布 TODO，属于风控执行链路，未在本分支修改。</li>
-    <li><span class="scope">完整运行环境：</span>最终演示仍需确认 PostgreSQL、OpenBB、DuckDB/ClickHouse、Redis、外网数据源可用；这属于部署联调，不是本次代码质量修复能完全覆盖的部分。</li>
+    <li><span class="scope">旧文档口径需要更新：</span><code>NEXT_STEPS.html</code> 仍写着 L5-L6 待建设、FactorEngine 未实现，这是任务二同学旧阶段判断；本分支已经完成 PRD 10.1-10.3，对外汇报应以本报告为准。</li>
+    <li><span class="scope">L6 决策输入需要统一：</span>TradingAgents/CoordinatorAgent 已有消费入口，后续应把 <code>AnalysisContext</code> 固化为 Agent 的唯一输入口径。</li>
+    <li><span class="scope">审计回放链路还需继续打通：</span>L6 输出、风控结果、订单意图、执行结果需要继续写入完整审计与回放链路。</li>
+    <li><span class="scope">前端控制台需要补页面：</span>provider 选择、管线触发、标准化数据查看、上下文查看页面还需要前端承接。</li>
+    <li><span class="scope">旧系统认证仍有 TODO：</span><code>auth.py</code> 中仍有认证/注册 TODO，后续需要单独处理权限闭环。</li>
+    <li><span class="scope">旧系统风控执行仍有 TODO：</span><code>risk_manager.py</code> 中仍有取消订单事件发布 TODO，后续需要接入真实风控执行事件。</li>
+    <li><span class="scope">完整运行环境需要联调：</span>最终演示仍需确认 PostgreSQL、OpenBB、DuckDB/ClickHouse、Redis、外网数据源可用。</li>
   </ul>
 </div>
 
