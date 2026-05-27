@@ -19,7 +19,8 @@ class OllamaProvider(LLMProvider):
         Ollama runs locally (localhost / host.docker.internal), so it must
         never go through an HTTP proxy.
         """
-        return aiohttp.ClientSession(trust_env=False)
+        timeout = aiohttp.ClientTimeout(total=600, connect=10)
+        return aiohttp.ClientSession(trust_env=False, timeout=timeout)
 
     async def generate(self, prompt: str, system_prompt: str = None, **kwargs) -> str:
         """

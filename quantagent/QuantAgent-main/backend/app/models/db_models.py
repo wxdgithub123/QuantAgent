@@ -985,4 +985,11 @@ class CoordinationHistoryDB(Base):
     risk_veto = Column(Boolean, nullable=False, default=False)
     summary = Column(Text, nullable=False, default="")
     agent_signals = Column(JSONB, nullable=False, default=[])
+    # PRD 10.4: Multi-role debate fields
+    bull_view = Column(Text, nullable=False, default="")
+    bear_view = Column(Text, nullable=False, default="")
+    input_snapshot_ids = Column(JSONB, nullable=False, default={})
+    role_opinions = Column(JSONB, nullable=False, default=[])
+    position_advice = Column(JSONB, nullable=False, default={})
+    risk_notes = Column(Text, nullable=False, default="")
     created_at = Column(DateTime(timezone=True), server_default=func.now())

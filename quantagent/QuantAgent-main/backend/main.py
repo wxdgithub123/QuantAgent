@@ -264,9 +264,10 @@ async def lifespan(app: FastAPI):
 
     # Test LLM
     try:
-        from app.services.market_analysis_service import market_analysis_service
-        if market_analysis_service.llm:
-            logger.info(f"LLM ready: {type(market_analysis_service.llm).__name__}")
+        from app.agents.trend_agent import TrendAgent
+        agent = TrendAgent()
+        if agent.llm:
+            logger.info(f"LLM ready: {type(agent.llm).__name__}")
         else:
             logger.warning("LLM provider not initialized.")
     except Exception as e:

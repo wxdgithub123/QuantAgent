@@ -220,15 +220,18 @@ async def compare_prices(symbol: str):
 async def coordinate_agents(
     symbol: str,
     interval: str = "1h",
-    provider: Optional[str] = Query(None, description="LLM Provider (ollama, openai, openrouter)")
+    provider: Optional[str] = Query(None, description="LLM Provider (ollama, openai, openrouter)"),
+    fast: bool = Query(False, description="Fast mode: skip bull/bear debate to save time"),
 ):
     """
     协调者端点：聚合所有 Agent 信号并生成综合决策
+
+    支持 fast=true 跳过辩论轮次（4 次 LLM 调用 vs 7 次），适合本地 Ollama。
     """
     from app.agents.coordinator_agent import CoordinatorAgent
-    
+
     try:
-        coordinator = CoordinatorAgent(provider_name=provider)
+        coordinator = CoordinatorAgent(provider_name=provider, fast_mode=fast)
         formatted_symbol = f"{symbol[:-4]}/{symbol[-4:]}" if len(symbol) > 4 else symbol
         result = await coordinator.coordinate(formatted_symbol, interval)
         return result.to_dict()
@@ -368,42 +371,39 @@ async def coordinate_aggregate(req: CoordinateRequest):
 @router.get("/agent-analysis/{agent_type}/{symbol}")
 async def analyze_market_v2(
     agent_type: str,
-    symbol: str, 
+    symbol: str,
     interval: str = "1h",
     provider: Optional[str] = Query(None, description="LLM Provider (openai, ollama, openrouter)")
 ):
     """
     Use specialized AI Agents to analyze market data
     """
-    from app.services.market_analysis_service import (
-        TrendAgentService, 
-        MeanReversionAgentService, 
-        RiskAgentService
-    )
-    
+    from app.agents.trend_agent import TrendAgent
+    from app.agents.mean_reversion_agent import MeanReversionAgent
+    from app.agents.risk_agent import RiskAgent
+
     try:
-        # Map agent_type to service class
         agent_map = {
-            "trend": TrendAgentService,
-            "mean_reversion": MeanReversionAgentService,
-            "risk": RiskAgentService
+            "trend": TrendAgent,
+            "mean_reversion": MeanReversionAgent,
+            "risk": RiskAgent
         }
-        
-        service_class = agent_map.get(agent_type.lower())
-        if not service_class:
+
+        agent_class = agent_map.get(agent_type.lower())
+        if not agent_class:
             raise HTTPException(status_code=400, detail=f"Invalid agent type: {agent_type}")
-            
-        # Create service instance
-        service = service_class(provider_name=provider)
-        
-        # Format symbol
+
+        agent = agent_class(provider_name=provider)
         formatted_symbol = f"{symbol[:-4]}/{symbol[-4:]}" if len(symbol) > 4 else symbol
-        
-        analysis = await service.analyze(formatted_symbol, interval)
+        sig = await agent.run(formatted_symbol, interval)
         return {
-            "symbol": symbol, 
+            "symbol": symbol,
             "agent_type": agent_type,
-            "analysis": analysis, 
+            "analysis": sig.reasoning,
+            "signal": sig.signal.value,
+            "confidence": sig.confidence,
+            "agent_name": sig.agent_name,
+            "indicators": sig.indicators,
             "provider": provider or "default"
         }
     except Exception as e:
@@ -414,20 +414,27 @@ async def analyze_market_v2(
 
 @router.get("/analysis/{symbol}")
 async def analyze_market(
-    symbol: str, 
+    symbol: str,
     interval: str = "1h",
     provider: Optional[str] = Query(None, description="LLM Provider (openai, ollama)")
 ):
     """
     Legacy endpoint for market analysis
     """
-    from app.services.market_analysis_service import MarketAnalysisService
-    
+    from app.agents.trend_agent import TrendAgent
+
     try:
-        service = MarketAnalysisService(provider_name=provider)
+        agent = TrendAgent(provider_name=provider)
         formatted_symbol = f"{symbol[:-4]}/{symbol[-4:]}" if len(symbol) > 4 else symbol
-        analysis = await service.analyze_market(formatted_symbol, interval)
-        return {"symbol": symbol, "analysis": analysis, "provider": provider or "default"}
+        sig = await agent.run(formatted_symbol, interval)
+        return {
+            "symbol": symbol,
+            "analysis": sig.reasoning,
+            "signal": sig.signal.value,
+            "confidence": sig.confidence,
+            "agent_name": sig.agent_name,
+            "provider": provider or "default"
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI analysis failed: {str(e)}")
 
@@ -443,29 +450,27 @@ async def analyze_market_stream(
     流式 SSE 端点：使用 AI Agent 分析市场数据，逐 chunk 推送输出。
     主要用于 Ollama 本地模型，支持思考链（<think>...</think>）实时展示。
     """
-    from app.services.market_analysis_service import (
-        TrendAgentService,
-        MeanReversionAgentService,
-        RiskAgentService
-    )
+    from app.agents.trend_agent import TrendAgent
+    from app.agents.mean_reversion_agent import MeanReversionAgent
+    from app.agents.risk_agent import RiskAgent
 
     agent_map = {
-        "trend": TrendAgentService,
-        "mean_reversion": MeanReversionAgentService,
-        "risk": RiskAgentService
+        "trend": TrendAgent,
+        "mean_reversion": MeanReversionAgent,
+        "risk": RiskAgent
     }
 
-    service_class = agent_map.get(agent_type.lower())
-    if not service_class:
+    agent_class = agent_map.get(agent_type.lower())
+    if not agent_class:
         raise HTTPException(status_code=400, detail=f"Invalid agent type: {agent_type}")
 
     formatted_symbol = f"{symbol[:-4]}/{symbol[-4:]}" if len(symbol) > 4 else symbol
-    service = service_class(provider_name=provider)
+    agent = agent_class(provider_name=provider)
 
     async def event_generator() -> AsyncGenerator[str, None]:
         accumulated = ""
         try:
-            async for chunk in service.analyze_stream(formatted_symbol, interval):
+            async for chunk in agent.run_stream(formatted_symbol, interval):
                 accumulated += chunk
                 payload = json.dumps({"chunk": chunk}, ensure_ascii=False)
                 yield f"data: {payload}\n\n"
@@ -474,11 +479,10 @@ async def analyze_market_stream(
             yield f"data: {error_payload}\n\n"
         finally:
             # Extract signal and confidence from accumulated analysis
-            signal = service._extract_signal(accumulated) if accumulated else None
-            confidence = 0.8 if signal else 0.6
+            signal_type, confidence = agent.parse_signal(accumulated) if accumulated else (None, 0.5)
             done_payload = json.dumps({
                 "done": True,
-                "signal": signal,
+                "signal": signal_type.value if signal_type else None,
                 "confidence": confidence
             }, ensure_ascii=False)
             yield f"data: {done_payload}\n\n"

@@ -32,7 +32,9 @@ async def get_coordination_history(
             r = await session.execute(text(count_sql), params)
             total = r.scalar() or 0
 
-            query_sql = f"""SELECT id, symbol, timestamp, final_signal, confidence, vote_breakdown, risk_veto, summary, agent_signals
+            query_sql = f"""SELECT id, symbol, timestamp, final_signal, confidence,
+    vote_breakdown, risk_veto, summary, agent_signals,
+    bull_view, bear_view, input_snapshot_ids, role_opinions, position_advice, risk_notes
 FROM coordination_history WHERE {where_clause}
 ORDER BY timestamp DESC LIMIT :limit OFFSET :offset"""
             params["limit"] = limit
@@ -50,6 +52,12 @@ ORDER BY timestamp DESC LIMIT :limit OFFSET :offset"""
                     "risk_veto": row[6],
                     "summary": row[7] or "",
                     "agent_signals": row[8] or [],
+                    "bull_view": row[9] or "",
+                    "bear_view": row[10] or "",
+                    "input_snapshot_ids": row[11] or {},
+                    "role_opinions": row[12] or [],
+                    "position_advice": row[13] or {},
+                    "risk_notes": row[14] or "",
                 })
             return {"data": rows, "total": total, "limit": limit, "offset": offset}
     except Exception as e:
@@ -64,12 +72,15 @@ async def get_latest_coordination(
     """Return the most recent coordination decision."""
     try:
         async with get_db() as session:
+            COLS = """id, symbol, timestamp, final_signal, confidence,
+    vote_breakdown, risk_veto, summary, agent_signals,
+    bull_view, bear_view, input_snapshot_ids, role_opinions, position_advice, risk_notes"""
             if symbol:
-                sql = """SELECT id, symbol, timestamp, final_signal, confidence, vote_breakdown, risk_veto, summary, agent_signals
+                sql = f"""SELECT {COLS}
 FROM coordination_history WHERE symbol = :symbol ORDER BY timestamp DESC LIMIT 1"""
                 r = await session.execute(text(sql), {"symbol": symbol})
             else:
-                sql = """SELECT id, symbol, timestamp, final_signal, confidence, vote_breakdown, risk_veto, summary, agent_signals
+                sql = f"""SELECT {COLS}
 FROM coordination_history ORDER BY timestamp DESC LIMIT 1"""
                 r = await session.execute(text(sql))
 
@@ -86,6 +97,12 @@ FROM coordination_history ORDER BY timestamp DESC LIMIT 1"""
                 "risk_veto": row[6],
                 "summary": row[7] or "",
                 "agent_signals": row[8] or [],
+                "bull_view": row[9] or "",
+                "bear_view": row[10] or "",
+                "input_snapshot_ids": row[11] or {},
+                "role_opinions": row[12] or [],
+                "position_advice": row[13] or {},
+                "risk_notes": row[14] or "",
             }}
     except Exception as e:
         logger.error(f"Failed to fetch latest coordination: {e}")
@@ -142,7 +159,10 @@ async def get_coordination_detail(decision_id: int) -> Dict[str, Any]:
     try:
         async with get_db() as session:
             r = await session.execute(text(
-                "SELECT id, symbol, timestamp, final_signal, confidence, vote_breakdown, risk_veto, summary, agent_signals FROM coordination_history WHERE id = :id"
+                "SELECT id, symbol, timestamp, final_signal, confidence, "
+                "vote_breakdown, risk_veto, summary, agent_signals, "
+                "bull_view, bear_view, input_snapshot_ids, role_opinions, position_advice, risk_notes "
+                "FROM coordination_history WHERE id = :id"
             ), {"id": decision_id})
             row = r.fetchone()
             if not row:
@@ -157,6 +177,12 @@ async def get_coordination_detail(decision_id: int) -> Dict[str, Any]:
                 "risk_veto": row[6],
                 "summary": row[7] or "",
                 "agent_signals": row[8] or [],
+                "bull_view": row[9] or "",
+                "bear_view": row[10] or "",
+                "input_snapshot_ids": row[11] or {},
+                "role_opinions": row[12] or [],
+                "position_advice": row[13] or {},
+                "risk_notes": row[14] or "",
             }}
     except Exception as e:
         logger.error(f"Failed to fetch coordination detail: {e}")
