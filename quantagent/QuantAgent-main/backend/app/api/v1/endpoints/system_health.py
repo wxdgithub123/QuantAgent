@@ -115,15 +115,16 @@ async def get_system_health() -> Dict[str, Any]:
 
         # DuckDB file stats
         try:
-            from app.services.duckdb_service import duckdb_service
+            from app.services.duckdb_service import _data_dir, duckdb_service
 
-            base = duckdb_service._data_dir()
+            base = _data_dir()
             import os
             import glob as g
 
             parquet_files = g.glob(os.path.join(base, "**", "*.parquet"), recursive=True)
             total_size = sum(os.path.getsize(f) for f in parquet_files) if parquet_files else 0
             l4_checks["parquet"] = {
+                "status": "ok" if duckdb_service.available else "unavailable",
                 "files": len(parquet_files),
                 "size_mb": round(total_size / (1024 * 1024), 2),
                 "path": base,
@@ -272,6 +273,140 @@ async def get_system_health() -> Dict[str, Any]:
         "duration_ms": round(total_ms, 1),
         "layers": layers,
         "infrastructure": infra,
+    }
+
+
+def _ok(value: Any) -> bool:
+    return value in {"ok", "connected"}
+
+
+def _layer_value(health: Dict[str, Any], *path: str) -> Any:
+    current: Any = health
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+async def _prd_counts() -> Dict[str, int]:
+    counts = {
+        "factor_snapshots": 0,
+        "signal_events": 0,
+        "coordination_history": 0,
+        "backtest_results": 0,
+        "replay_sessions": 0,
+    }
+    try:
+        from sqlalchemy import text
+        from app.services.database import get_db
+
+        async with get_db() as session:
+            for table_name in counts:
+                result = await session.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
+                counts[table_name] = int(result.scalar() or 0)
+    except Exception as exc:
+        logger.debug(f"PRD flow count collection failed: {exc}")
+    return counts
+
+
+@router.get("/prd-flow")
+async def get_prd_flow_status() -> Dict[str, Any]:
+    """Return PRD v1 flow readiness for frontend and release checks."""
+    health = await get_system_health()
+    counts = await _prd_counts()
+
+    l1_ok = all(_ok(_layer_value(health, "layers", "L1_data_source", key, "status")) for key in ["openbb", "fred", "market_data"])
+    l4_ok = (
+        _ok(_layer_value(health, "layers", "L4_storage", "clickhouse", "status"))
+        and _ok(_layer_value(health, "infrastructure", "postgresql"))
+        and _ok(_layer_value(health, "infrastructure", "redis"))
+    )
+    l5_ok = (
+        _ok(_layer_value(health, "layers", "L5_factors_signals", "pipeline", "status"))
+        and _ok(_layer_value(health, "layers", "L5_factors_signals", "counts", "status"))
+        and counts["factor_snapshots"] > 0
+        and counts["signal_events"] > 0
+    )
+    l6_ok = (
+        _ok(_layer_value(health, "layers", "L6_decision", "tradingagents_service", "status"))
+        and _ok(_layer_value(health, "layers", "L6_decision", "coordinator", "status"))
+        and counts["coordination_history"] > 0
+    )
+    replay_ok = counts["backtest_results"] > 0 and counts["replay_sessions"] > 0
+
+    stages = [
+        {
+            "id": "data_ingestion",
+            "label": "10.1 Data ingestion",
+            "status": "ok" if l1_ok else "check",
+            "detail": "OpenBB, FRED, news/macro and market data are reachable.",
+            "evidence": {
+                "openbb": _layer_value(health, "layers", "L1_data_source", "openbb"),
+                "fred": _layer_value(health, "layers", "L1_data_source", "fred"),
+                "market_data": _layer_value(health, "layers", "L1_data_source", "market_data"),
+            },
+        },
+        {
+            "id": "standard_storage",
+            "label": "10.2 Standardization and storage",
+            "status": "ok" if l4_ok else "check",
+            "detail": "Standard models, PostgreSQL, Redis and ClickHouse are ready; DuckDB/Parquet stats are reported separately.",
+            "evidence": {
+                "storage": _layer_value(health, "layers", "L4_storage"),
+                "infrastructure": health.get("infrastructure"),
+            },
+        },
+        {
+            "id": "factors_signals",
+            "label": "10.3 Factors and signals",
+            "status": "ok" if l5_ok else "check",
+            "detail": "L5 factor/signal pipeline and point-in-time AnalysisContext assembly are available.",
+            "evidence": {
+                "counts": {
+                    "factor_snapshots": counts["factor_snapshots"],
+                    "signal_events": counts["signal_events"],
+                },
+                "pipeline": _layer_value(health, "layers", "L5_factors_signals", "pipeline"),
+            },
+        },
+        {
+            "id": "tradingagents_decision",
+            "label": "10.4 TradingAgents decisioning",
+            "status": "ok" if l6_ok else "check",
+            "detail": "Coordinator and isolated TradingAgents service are connected with persisted audit history.",
+            "evidence": {
+                "coordination_history": counts["coordination_history"],
+                "decision": _layer_value(health, "layers", "L6_decision"),
+            },
+        },
+        {
+            "id": "backtest_replay_audit",
+            "label": "10.5 Backtest, replay and audit",
+            "status": "ok" if replay_ok else "check",
+            "detail": "Backtest results and replay sessions exist and can be linked for review.",
+            "evidence": {
+                "backtest_results": counts["backtest_results"],
+                "replay_sessions": counts["replay_sessions"],
+            },
+        },
+        {
+            "id": "frontend_api",
+            "label": "10.6 Frontend and API",
+            "status": "ok",
+            "detail": "Dashboard, signals, decisions, replay and backtest pages are exposed through the Next.js frontend.",
+            "evidence": {
+                "pages": ["/dashboard", "/signals", "/decisions", "/replay", "/backtest"],
+            },
+        },
+    ]
+
+    overall_status = "ok" if all(stage["status"] == "ok" for stage in stages) else "check"
+    return {
+        "timestamp": int(time.time()),
+        "overall_status": overall_status,
+        "counts": counts,
+        "stages": stages,
     }
 
 

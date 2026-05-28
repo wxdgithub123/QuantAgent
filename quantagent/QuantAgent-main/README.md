@@ -66,6 +66,17 @@ python backend/scripts/prd10_4_smoke.py
 
 Expected result: all five checks print `PASS`, covering system health, market backfill status, L5 signal generation, the default coordinator, and the isolated TradingAgents service.
 
+### PRD v1 Full Acceptance
+For the complete PRD v1 flow, run:
+
+```bash
+python backend/scripts/prd_v1_acceptance.py --write-checks
+```
+
+Expected result: every check prints `PASS`. This validates L1 data ingestion, standard storage, L5 AnalysisContext, L6 decisioning, coordination audit history, replay/backtest readiness, frontend visibility, and a real backtest plus replay-session creation.
+
+The full flow status is also available at `GET /api/v1/system/prd-flow` and on the dashboard `PRD v1 Full Flow` panel. See `docs/prd_v1_acceptance.md` for the PRD mapping and latest local acceptance evidence.
+
 ---
 
 <a id="chinese"></a>
