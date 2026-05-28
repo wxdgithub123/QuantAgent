@@ -44,6 +44,7 @@ binance-connector>=3.9.0
 # providers this project uses to avoid pulling the full OpenBB universe.
 openbb-core==1.6.10
 openbb-crypto==1.6.2
+openbb-equity==1.6.2
 openbb-news==1.6.2
 openbb-economy==1.6.2
 openbb-fred==1.6.1

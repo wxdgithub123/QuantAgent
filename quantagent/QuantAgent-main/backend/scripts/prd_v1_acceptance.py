@@ -112,6 +112,7 @@ def check_l1_data(client: AcceptanceClient) -> CheckResult:
     overview = client.get_api("/api/v1/market/overview")
     macro = client.get_api("/api/v1/market/macro")
     news = client.get_api("/api/v1/market/news", {"symbol": "BTC", "limit": 5})
+    equity = client.get_api("/api/v1/market/equity/ticker/SPY", {"provider": "yfinance"})
 
     tickers = _as_list(overview.get("tickers"))
     headlines = _as_list(overview.get("headlines"))
@@ -123,10 +124,15 @@ def check_l1_data(client: AcceptanceClient) -> CheckResult:
         return CheckResult("l1_data", False, "news endpoints returned no articles")
     if not indicators:
         return CheckResult("l1_data", False, "macro endpoint returned no indicators")
+    if not equity.get("price"):
+        return CheckResult("l1_data", False, f"equity ticker missing price: {equity}")
     return CheckResult(
         "l1_data",
         True,
-        f"tickers={len(tickers)}, headlines={len(headlines) or len(articles)}, macro={len(indicators)}",
+        (
+            f"crypto_tickers={len(tickers)}, headlines={len(headlines) or len(articles)}, "
+            f"macro={len(indicators)}, equity=SPY@{equity.get('price')}"
+        ),
     )
 
 
@@ -245,6 +251,25 @@ def check_replay_backtest_readiness(client: AcceptanceClient, symbol: str, inter
     )
 
 
+def check_parquet_archive_write(client: AcceptanceClient, symbol: str, interval: str) -> CheckResult:
+    archive = client.post_api(
+        "/api/v1/market/archive/parquet",
+        {"symbols": [symbol], "intervals": [interval], "limit": 360},
+    )
+    if archive.get("status") != "ok" or (archive.get("total_written") or 0) <= 0:
+        return CheckResult("parquet_archive_write", False, f"archive failed: {archive}")
+
+    health = client.get_api("/api/v1/system/health")
+    parquet = _path(health, "layers", "L4_storage", "parquet") or {}
+    if (parquet.get("files") or 0) <= 0:
+        return CheckResult("parquet_archive_write", False, f"health parquet stats empty: {parquet}")
+    return CheckResult(
+        "parquet_archive_write",
+        True,
+        f"rows={archive.get('total_written')}, files={parquet.get('files')}, path={archive.get('archive_path')}",
+    )
+
+
 def check_backtest_and_replay_write(client: AcceptanceClient, symbol: str, interval: str, capital: float) -> CheckResult:
     date_range = client.get_api(f"/api/v1/replay/valid-date-range/{symbol}", {"interval": interval})
     min_dt = _parse_dt(date_range["min_date"])
@@ -329,6 +354,12 @@ def run(args: argparse.Namespace) -> int:
         ("frontend_visibility", lambda: check_frontend(client)),
     ]
     if args.write_checks:
+        checks.append(
+            (
+                "parquet_archive_write",
+                lambda: check_parquet_archive_write(client, args.symbol, args.interval),
+            )
+        )
         checks.append(
             (
                 "replay_backtest_write",

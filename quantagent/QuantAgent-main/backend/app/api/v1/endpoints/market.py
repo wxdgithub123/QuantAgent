@@ -15,7 +15,7 @@ from app.services.binance_service import binance_service
 from app.services.coingecko_service import coingecko_service
 from app.services.market_data_gateway import market_data_gateway
 from app.models.instrument import Instrument
-from app.models.market_data import KlineResponse, TickerData, MarketOverview, PriceComparison
+from app.models.market_data import KlineData, KlineResponse, TickerData, MarketOverview, PriceComparison
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -56,6 +56,20 @@ def _as_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def _bar_to_kline_data(bar: Any) -> KlineData:
+    return KlineData(
+        timestamp=bar.datetime,
+        open=float(bar.open),
+        high=float(bar.high),
+        low=float(bar.low),
+        close=float(bar.close),
+        volume=float(bar.volume or 0.0),
+        close_time=bar.bar_end_time or bar.datetime,
+        quote_volume=bar.volume_notional,
+        trades=bar.transactions,
+    )
+
+
 @router.get("/klines/{symbol}", response_model=KlineResponse)
 async def get_klines(
     symbol: str,
@@ -86,6 +100,79 @@ async def get_klines(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch klines: {str(e)}")
+
+
+@router.get("/equity/klines/{symbol}", response_model=KlineResponse)
+async def get_equity_klines(
+    symbol: str,
+    interval: str = Query("1d", description="Equity interval supported by the selected OpenBB provider"),
+    limit: int = Query(100, ge=1, le=1000),
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
+    provider: str = Query("yfinance", description="OpenBB equity provider"),
+    fallback_providers: Optional[str] = Query(None, description="Comma-separated fallback providers"),
+):
+    """Fetch stock/equity OHLCV bars through the OpenBB unified data entry."""
+    from app.services.openbb_data_service import openbb_data_service
+
+    fallbacks = [item.strip() for item in (fallback_providers or "").split(",") if item.strip()]
+    bars = await openbb_data_service.get_equity_historical(
+        symbol=symbol,
+        interval=interval,
+        start=start_time,
+        end=end_time,
+        limit=limit,
+        provider=provider,
+        fallback_providers=fallbacks,
+    )
+    if not bars:
+        raise HTTPException(status_code=404, detail=f"Equity data unavailable for {symbol}")
+    return KlineResponse(
+        symbol=symbol.upper(),
+        interval=interval,
+        data=[_bar_to_kline_data(bar) for bar in bars],
+        source=f"openbb:{provider}",
+    )
+
+
+@router.get("/equity/ticker/{symbol}", response_model=TickerData)
+async def get_equity_ticker(
+    symbol: str,
+    provider: str = Query("yfinance", description="OpenBB equity provider"),
+    fallback_providers: Optional[str] = Query(None, description="Comma-separated fallback providers"),
+):
+    """Fetch a stock/equity ticker through the OpenBB unified data entry."""
+    from app.services.openbb_data_service import openbb_data_service
+
+    fallbacks = [item.strip() for item in (fallback_providers or "").split(",") if item.strip()]
+    ticker = await openbb_data_service.get_equity_ticker(
+        symbol=symbol,
+        provider=provider,
+        fallback_providers=fallbacks,
+    )
+    if ticker is None:
+        raise HTTPException(status_code=404, detail=f"Equity ticker unavailable for {symbol}")
+    return ticker
+
+
+@router.get("/equity/price/{symbol}")
+async def get_equity_price(
+    symbol: str,
+    provider: str = Query("yfinance", description="OpenBB equity provider"),
+    fallback_providers: Optional[str] = Query(None, description="Comma-separated fallback providers"),
+):
+    """Fetch the latest stock/equity price through OpenBB."""
+    from app.services.openbb_data_service import openbb_data_service
+
+    fallbacks = [item.strip() for item in (fallback_providers or "").split(",") if item.strip()]
+    ticker = await openbb_data_service.get_equity_ticker(
+        symbol=symbol,
+        provider=provider,
+        fallback_providers=fallbacks,
+    )
+    if ticker is None:
+        raise HTTPException(status_code=404, detail=f"Equity price unavailable for {symbol}")
+    return {"symbol": symbol.upper(), "price": ticker.price, "source": f"openbb:{provider}", "timestamp": ticker.timestamp}
 
 
 @router.get("/ticker/{symbol}", response_model=TickerData)
@@ -569,6 +656,14 @@ class BackfillRequest(BaseModel):
     mode: str = "sync"              # "full" or "sync"
 
 
+class ParquetArchiveRequest(BaseModel):
+    symbols: Optional[List[str]] = None
+    intervals: Optional[List[str]] = None
+    limit: int = 500
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+
+
 @router.post("/backfill", status_code=202)
 async def trigger_backfill(req: BackfillRequest):
     """
@@ -684,6 +779,53 @@ async def _run_backfill(symbols: List[str], intervals: List[str], mode: str):
             total += count
 
     logger.info(f"[backfill] All done. Total {total} bars written.")
+
+
+@router.post("/archive/parquet")
+async def archive_parquet(req: ParquetArchiveRequest):
+    """Archive standardized ClickHouse K-lines into DuckDB/Parquet partitions."""
+    from app.core.config import settings
+    from app.services.clickhouse_service import clickhouse_service
+    from app.services.duckdb_service import _data_dir, duckdb_service
+
+    symbols = req.symbols or list(settings.SYMBOLS)
+    intervals = req.intervals or ["1h"]
+    limit = max(1, min(req.limit, 10000))
+    total_read = 0
+    total_written = 0
+    archived: List[Dict[str, Any]] = []
+
+    initialized = await duckdb_service.async_init_tables()
+    if not initialized:
+        raise HTTPException(status_code=503, detail="DuckDB/Parquet archive storage unavailable")
+
+    for symbol in symbols:
+        clean_symbol = symbol.upper().replace("/", "")
+        for interval in intervals:
+            rows = await clickhouse_service.query_klines(
+                clean_symbol,
+                interval,
+                start=req.start_time,
+                end=req.end_time,
+                limit=limit,
+            )
+            written = await duckdb_service.insert_klines(clean_symbol, interval, rows)
+            total_read += len(rows)
+            total_written += written
+            archived.append({
+                "symbol": clean_symbol,
+                "interval": interval,
+                "rows_read": len(rows),
+                "rows_written": written,
+            })
+
+    return {
+        "status": "ok" if total_written > 0 else "empty",
+        "total_read": total_read,
+        "total_written": total_written,
+        "archive_path": str(_data_dir()),
+        "archived": archived,
+    }
 
 
 # ── Data Range Health Check ──────────────────────────────────────────────────────

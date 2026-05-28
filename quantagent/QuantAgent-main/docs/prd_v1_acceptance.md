@@ -29,6 +29,7 @@ The `--write-checks` mode performs DB-writing checks:
 - Runs a real MA backtest against ClickHouse historical data.
 - Persists the backtest result.
 - Creates a replay session linked to that backtest id.
+- Archives standardized ClickHouse K-lines into DuckDB/Parquet partitions.
 
 For a faster read-mostly readiness check:
 
@@ -42,14 +43,15 @@ Latest local acceptance run:
 
 ```text
 [PASS] prd_health: L1/L4/L5/L6/infrastructure healthy
-[PASS] l1_data: tickers=6, headlines=12, macro=6
+[PASS] l1_data: crypto_tickers=6, headlines=12, macro=6, equity=SPY@750.4600219726562
 [PASS] standard_storage: 30 symbol/interval rows ok
 [PASS] prd_flow_api: 6 PRD stages ok
 [PASS] l5_signal_context: bars=120, factors=1766, signals=961, news=20, macro=30
 [PASS] l6_decision_audit: default=WAIT, tradingagents=WAIT, history_rows=5
 [PASS] replay_backtest_readiness: templates=8, replay_range=2026-04-28T18:00:00..2026-05-28T08:00:00
 [PASS] frontend_visibility: pages=/dashboard,/signals,/decisions,/replay,/backtest
-[PASS] replay_backtest_write: backtest_id=5, replay_session_id=REPLAY_20260528_8b2176, final_capital=9221.432001704117
+[PASS] parquet_archive_write: rows=360, files=16, path=data/market
+[PASS] replay_backtest_write: backtest_id=7, replay_session_id=REPLAY_20260528_b57a23, final_capital=9221.432001704117
 ```
 
 ## API Visibility
@@ -72,8 +74,8 @@ The dashboard also displays this as the `PRD v1 Full Flow` panel.
 
 | PRD section | Evidence |
 | --- | --- |
-| 10.1 Data ingestion | `/api/v1/system/health`, `/api/v1/market/overview`, `/api/v1/market/macro`, `/api/v1/market/news` |
-| 10.2 Standardization and storage | `/api/v1/market/backfill/status`, ClickHouse/PostgreSQL/Redis health, DuckDB/Parquet stats |
+| 10.1 Data ingestion | `/api/v1/system/health`, `/api/v1/market/overview`, `/api/v1/market/macro`, `/api/v1/market/news`, `/api/v1/market/equity/ticker/SPY` |
+| 10.2 Standardization and storage | `/api/v1/market/backfill/status`, `/api/v1/market/archive/parquet`, ClickHouse/PostgreSQL/Redis health, DuckDB/Parquet stats |
 | 10.3 Factors and signals | `/api/v1/signals/run`, `/api/v1/signals/context/{symbol}`, `/api/v1/signals/summary` |
 | 10.4 TradingAgents analysis | `/api/v1/market/coordinate/{symbol}?use_tradingagents=true`, TradingAgents service health |
 | 10.5 Backtest and audit | `/api/v1/strategy/backtest/run`, `/api/v1/replay/create`, `/api/v1/coordination/history` |

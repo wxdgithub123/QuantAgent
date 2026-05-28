@@ -58,6 +58,19 @@ async def get_system_health() -> Dict[str, Any]:
     except Exception as e:
         l1_checks["fred"] = {"status": "error", "detail": str(e)[:100]}
 
+    # Equity/stock data via OpenBB
+    try:
+        from app.services.openbb_data_service import openbb_data_service
+
+        ticker = await openbb_data_service.get_equity_ticker("SPY")
+        l1_checks["equity"] = {
+            "status": "ok" if ticker is not None else "unavailable",
+            "symbol": "SPY",
+            "detail": f"SPY = {ticker.price}" if ticker else "OpenBB equity data unavailable",
+        }
+    except Exception as e:
+        l1_checks["equity"] = {"status": "error", "detail": str(e)[:100]}
+
     layers["L1_data_source"] = l1_checks
 
     # ── L2: Unified Access ───────────────────────────────────────────
@@ -316,7 +329,10 @@ async def get_prd_flow_status() -> Dict[str, Any]:
     health = await get_system_health()
     counts = await _prd_counts()
 
-    l1_ok = all(_ok(_layer_value(health, "layers", "L1_data_source", key, "status")) for key in ["openbb", "fred", "market_data"])
+    l1_ok = all(
+        _ok(_layer_value(health, "layers", "L1_data_source", key, "status"))
+        for key in ["openbb", "fred", "market_data", "equity"]
+    )
     l4_ok = (
         _ok(_layer_value(health, "layers", "L4_storage", "clickhouse", "status"))
         and _ok(_layer_value(health, "infrastructure", "postgresql"))
@@ -345,6 +361,7 @@ async def get_prd_flow_status() -> Dict[str, Any]:
                 "openbb": _layer_value(health, "layers", "L1_data_source", "openbb"),
                 "fred": _layer_value(health, "layers", "L1_data_source", "fred"),
                 "market_data": _layer_value(health, "layers", "L1_data_source", "market_data"),
+                "equity": _layer_value(health, "layers", "L1_data_source", "equity"),
             },
         },
         {
