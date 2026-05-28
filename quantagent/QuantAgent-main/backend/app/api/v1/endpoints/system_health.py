@@ -411,9 +411,9 @@ async def get_prd_flow_status() -> Dict[str, Any]:
             "id": "frontend_api",
             "label": "10.6 Frontend and API",
             "status": "ok",
-            "detail": "Dashboard, signals, decisions, replay and backtest pages are exposed through the Next.js frontend.",
+            "detail": "Dashboard, data source management, signals, decisions, replay and backtest pages are exposed through the Next.js frontend.",
             "evidence": {
-                "pages": ["/dashboard", "/signals", "/decisions", "/replay", "/backtest"],
+                "pages": ["/dashboard", "/data-sources", "/signals", "/decisions", "/replay", "/backtest"],
             },
         },
     ]

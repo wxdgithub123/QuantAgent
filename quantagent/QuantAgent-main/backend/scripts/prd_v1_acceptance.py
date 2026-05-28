@@ -323,7 +323,7 @@ def check_backtest_and_replay_write(client: AcceptanceClient, symbol: str, inter
 
 
 def check_frontend(client: AcceptanceClient) -> CheckResult:
-    pages = ["/dashboard", "/signals", "/decisions", "/replay", "/backtest"]
+    pages = ["/dashboard", "/data-sources", "/signals", "/decisions", "/replay", "/backtest"]
     loaded: list[str] = []
     for page in pages:
         html = client.get_frontend(page)

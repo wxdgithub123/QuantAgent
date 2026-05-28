@@ -96,7 +96,8 @@ export function PrdV1FlowPanel({ className }: { className?: string }) {
     void refresh();
   }, [refresh]);
 
-  const complete = state.overallStatus === "ok" && state.stages.length > 0;
+  const stagesComplete = state.stages.length > 0 && state.stages.every((stage) => stage.status === "ok");
+  const complete = !state.error && (state.overallStatus === "ok" || stagesComplete);
   const countItems = [
     ["Factors", state.counts.factor_snapshots],
     ["Signals", state.counts.signal_events],

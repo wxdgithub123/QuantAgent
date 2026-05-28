@@ -20,8 +20,8 @@ import {
   TrendingUp, TrendingDown, Activity, BarChart3, Settings,
   DollarSign, BarChart2, RefreshCw, WifiOff,
   ChevronDown, ChevronUp, Brain, Shield, Zap, X, Plus, Minus,
-  Wallet, History, BarChart, Server, CheckCircle, Layers,
-  Globe, Newspaper, ExternalLink, Sun, Moon
+  Wallet, History, BarChart, Server, CheckCircle, Layers, Database,
+  Globe, Newspaper, ExternalLink
 } from "lucide-react";
 
 // ─── TypeScript Interfaces ─────────────────────────────────────────────────
@@ -911,6 +911,9 @@ export default function DashboardPage() {
               </Link>
               <Link href="/terminal" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
                 终端
+              </Link>
+              <Link href="/data-sources" className="px-3 py-1.5 text-sm text-emerald-400 hover:text-emerald-100 hover:bg-emerald-500/10 rounded-lg transition-all flex items-center gap-1.5">
+                <Database className="w-4 h-4" /> 数据源
               </Link>
               <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
                 <Server className="w-4 h-4" /> Hummingbot
