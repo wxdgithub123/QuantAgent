@@ -16,6 +16,7 @@ from app.services.performance_service import performance_service
 from app.services.trade_pair_service import trade_pair_service
 from app.services.position_analysis_service import position_analysis_service
 from app.services.paper_trading_service import paper_trading_service
+from app.services.market_data_gateway import market_data_gateway
 from app.services.database import get_db, get_db_session, redis_get, redis_set
 from app.models.db_models import BacktestResult, EquitySnapshot, PaperTrade, ReplaySession
 
@@ -426,10 +427,8 @@ async def get_positions_analysis():
         for pos in positions_raw:
             symbol = pos["symbol"]
             try:
-                from app.services.binance_service import binance_service
-                symbol_ccxt = _normalize_symbol(symbol)
-                ticker = await binance_service.get_ticker(symbol_ccxt)
-                current_prices[symbol] = ticker.price
+                current_price = await market_data_gateway.get_price(symbol)
+                current_prices[symbol] = current_price or pos["avg_price"]
             except Exception:
                 current_prices[symbol] = pos["avg_price"]
 
@@ -449,11 +448,10 @@ async def get_position_analysis_detail(symbol: str):
     symbol = symbol.upper()
     try:
         # Get current price
-        from app.services.binance_service import binance_service
-        symbol_ccxt = _normalize_symbol(symbol)
         try:
-            ticker = await binance_service.get_ticker(symbol_ccxt)
-            current_price = ticker.price
+            current_price = await market_data_gateway.get_price(symbol)
+            if current_price is None:
+                raise RuntimeError("market data unavailable")
         except Exception:
             # Fallback: get from positions
             positions = await paper_trading_service.get_positions()
@@ -633,8 +631,6 @@ async def replay_quick_backtest(replay_session_id: str):
         raise HTTPException(status_code=400, detail=f"不支持的策略类型: {strategy_type}")
 
     # 4. 获取 Binance K 线数据（从 start_time 开始取 limit 根）
-    from app.services.binance_service import binance_service
-
     symbol_ccxt = symbol
     if "/" not in symbol_ccxt:
         for quote in ("USDT", "BTC", "ETH", "BNB", "BUSD"):
@@ -643,8 +639,8 @@ async def replay_quick_backtest(replay_session_id: str):
                 break
 
     # 使用 start_time 从 Binance 获取数据
-    df = await binance_service.get_klines_dataframe(
-        symbol_ccxt, interval, limit=limit, start=start_time, end=end_time
+    df = await market_data_gateway.get_dataframe(
+        symbol, interval, limit=limit, start=start_time, end=end_time
     )
 
     if df is None or len(df) < 300:
@@ -1885,4 +1881,3 @@ async def create_paper_bot_from_backtest(
     except Exception as e:
         logger.error(f"从回测 {backtest_id} 创建 Paper Bot 失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"创建 Paper Bot 失败: {str(e)}")
-

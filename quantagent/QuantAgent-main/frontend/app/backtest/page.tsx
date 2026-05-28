@@ -2914,7 +2914,7 @@ function DrawdownCurveChart({ data, height = 280 }: DrawdownCurveChartProps) {
     const points = data
       .map(d => ({ time: (new Date(d.t).getTime() / 1000) as Time, value: Math.abs(d.v) }))
       .filter((p, i, arr) => i === 0 || arr[i - 1].time !== p.time)
-      .sort((a, b) => a.time - b.time);
+      .sort((a, b) => Number(a.time) - Number(b.time));
     seriesRef.current.setData(points);
     chartRef.current?.timeScale().fitContent();
   }, [data]);

@@ -57,6 +57,15 @@ docker-compose up -d
 ```
 Once the containers are running, the trading terminal will be accessible at `http://localhost:3002`, and the backend API documentation will be available at `http://localhost:8002/docs`.
 
+### PRD 10.4 Smoke Check
+After the Docker stack is running, validate the OpenBB/FRED -> L5 factors/signals -> TradingAgents decision path:
+
+```bash
+python backend/scripts/prd10_4_smoke.py
+```
+
+Expected result: all five checks print `PASS`, covering system health, market backfill status, L5 signal generation, the default coordinator, and the isolated TradingAgents service.
+
 ---
 
 <a id="chinese"></a>
@@ -127,6 +136,16 @@ docker compose up -d
 | Redis | localhost:6382 | 缓存外部端口 |
 | ClickHouse HTTP | localhost:8124 | 时序数据库 |
 | NATS | localhost:4223 | 消息队列 |
+
+### PRD 10.4 验收检查
+
+Docker 服务启动后，可用下面命令一次性验证 OpenBB/FRED、行情回填、L5 因子信号、默认协调器和独立 TradingAgents 服务：
+
+```bash
+python backend/scripts/prd10_4_smoke.py
+```
+
+预期结果：5 项检查均输出 `PASS`。
 
 ### 🔧 环境变量配置说明
 

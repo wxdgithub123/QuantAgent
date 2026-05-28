@@ -11,8 +11,8 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 
 from app.services.strategy_templates import get_all_templates_meta, build_signal_func
-from app.services.binance_service import binance_service
 from app.services.clickhouse_service import clickhouse_service
+from app.services.market_data_gateway import market_data_gateway
 from app.services.backtester.event_driven import EventDrivenBacktester
 from app.strategies.composition.weighted import WeightedComposer
 from app.strategies.composition.voting import VotingComposer
@@ -136,9 +136,7 @@ class CompositionOptimizer:
             
             # 回退到Binance API
             logger.info(f"从Binance API获取数据: {symbol_ccxt}")
-            df = await binance_service.get_klines_dataframe(
-                symbol_ccxt, interval, limit=limit
-            )
+            df = await market_data_gateway.get_dataframe(symbol, interval, limit=limit)
             return df
             
         except Exception as e:

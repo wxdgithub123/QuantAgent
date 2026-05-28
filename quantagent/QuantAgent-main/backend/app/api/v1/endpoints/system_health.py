@@ -31,20 +31,20 @@ async def get_system_health() -> Dict[str, Any]:
     except Exception as e:
         l1_checks["openbb"] = {"status": "error", "detail": str(e)}
 
-    # Binance connectivity
+    # Market data connectivity (local storage/OpenBB first)
     try:
-        from app.services.binance_service import binance_service
+        from app.services.market_data_gateway import market_data_gateway
 
-        t_binance = time.time()
-        price = await binance_service.get_price("BTCUSDT")
-        latency = (time.time() - t_binance) * 1000
-        l1_checks["binance"] = {
-            "status": "ok",
+        t_market = time.time()
+        price = await market_data_gateway.get_price("BTCUSDT")
+        latency = (time.time() - t_market) * 1000
+        l1_checks["market_data"] = {
+            "status": "ok" if price is not None else "error",
             "detail": f"BTC/USDT = {price}",
             "latency_ms": round(latency, 1),
         }
     except Exception as e:
-        l1_checks["binance"] = {"status": "error", "detail": str(e)[:100]}
+        l1_checks["market_data"] = {"status": "error", "detail": str(e)[:100]}
 
     # FRED economic data
     try:
@@ -205,14 +205,17 @@ async def get_system_health() -> Dict[str, Any]:
     # ── L6: Decision ─────────────────────────────────────────────────
     l6_checks: Dict[str, Any] = {}
     try:
-        from app.agents.tradingagents_adapter import TradingAgentsAdapter
+        from app.agents.tradingagents_adapter import tradingagents_adapter
+        from app.core.config import settings
 
-        l6_checks["tradingagents"] = {
-            "status": "ok" if TradingAgentsAdapter.available else "unavailable",
-            "detail": "TradingAgents (13+ agents, 5 stages)" if TradingAgentsAdapter.available else "TradingAgents not installed — fallback active",
+        service_health = await tradingagents_adapter.health()
+        l6_checks["tradingagents_service"] = {
+            "status": service_health.get("status", "unavailable"),
+            "enabled": settings.USE_TRADINGAGENTS,
+            "detail": service_health,
         }
     except Exception as e:
-        l6_checks["tradingagents"] = {"status": "error", "detail": str(e)[:100]}
+        l6_checks["tradingagents_service"] = {"status": "error", "detail": str(e)[:100]}
 
     try:
         from app.agents.coordinator_agent import CoordinatorAgent

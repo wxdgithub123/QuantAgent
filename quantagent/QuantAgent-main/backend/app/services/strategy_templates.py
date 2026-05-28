@@ -324,8 +324,6 @@ async def _basis_trading_signal(
     """
     # 实际系统中应从 Binance 获取真实资金费率
     # 此处模拟获取当前资金费率
-    from app.services.binance_service import binance_service
-    
     try:
         # 模拟获取资金费率（实际可调用 API）
         # funding_info = await binance_service.get_funding_rate(symbol)

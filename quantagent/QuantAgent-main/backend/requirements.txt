@@ -1,6 +1,6 @@
 # FastAPI and Web Framework
 fastapi>=0.115.0
-uvicorn[standard]>=0.32.0
+uvicorn[standard]>=0.40.0,<0.41.0
 python-multipart>=0.0.17
 
 # Database
@@ -16,15 +16,15 @@ numba>=0.60.0
 optuna>=3.6.1
 
 # Data Processing
-pandas>=2.2.3
-numpy>=1.26.0
+pandas>=2.2.3,<3.0
+numpy>=1.26.0,<2.3
 
 # HTTP Client
 httpx>=0.27.2
 aiohttp>=3.11.7
 
 # WebSocket
-websockets==13.0
+websockets>=15.0,<17.0
 
 # Environment
 python-dotenv>=1.0.1
@@ -39,8 +39,16 @@ ccxt>=4.4.40
 pycoingecko>=3.2.0
 binance-connector>=3.9.0
 
-# Unified Data Platform (L1-L2, optional graceful fallback)
-openbb[crypto,economy]>=4.3.0
+# Unified Data Platform (L1-L2)
+# PRD requires OpenBB as the primary unified data entry. Install only the
+# providers this project uses to avoid pulling the full OpenBB universe.
+openbb-core==1.6.10
+openbb-crypto==1.6.2
+openbb-news==1.6.2
+openbb-economy==1.6.2
+openbb-fred==1.6.1
+openbb-oecd==1.6.1
+openbb-yfinance==1.6.3
 
 # Lightweight OLAP Storage (L4)
 duckdb>=1.1.0

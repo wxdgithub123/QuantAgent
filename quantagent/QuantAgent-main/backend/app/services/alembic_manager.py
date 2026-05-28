@@ -22,6 +22,7 @@ from typing import Optional
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -60,6 +61,11 @@ class AlembicManager:
             # the baseline migration on fresh databases (we only create tables once).
             # After this, normal upgrade applies new migrations only.
             current_rev = await self._get_current_revision(engine)
+            head_rev = ScriptDirectory.from_config(cfg).get_current_head()
+            if current_rev == head_rev:
+                logger.info(f"Current migration revision {current_rev} is already at head; skipping Alembic upgrade")
+                return
+
             if current_rev is None:
                 # No prior migrations applied — stamp baseline so it's not re-run,
                 # then upgrade (no-op since baseline is already stamped).

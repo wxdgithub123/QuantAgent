@@ -1,6 +1,6 @@
 """
 多周期历史数据补数脚本
-从 Binance 获取各周期历史数据并写入 ClickHouse
+通过 market_data_gateway / OpenBB 获取各周期历史数据并写入 ClickHouse
 
 支持的周期: 1m, 5m, 15m, 1h, 4h, 1d
 币种: BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, DOGEUSDT (来自 config.SYMBOLS)
@@ -20,11 +20,13 @@ import traceback
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'backend'))
+BACKEND_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, BACKEND_ROOT)
 
 from app.core.config import settings
-from app.services.binance_service import binance_service
 from app.services.clickhouse_service import clickhouse_service
+from app.services.market_data_gateway import market_data_gateway
 
 # ── Custom formatter with timestamp ──────────────────────────────────────────
 class TimestampedFormatter(logging.Formatter):
@@ -55,20 +57,28 @@ INTERVALS: Dict[str, Dict[str, Any]] = {
 
 # ── Connection health check ────────────────────────────────────────────────────
 
+INTERVALS["1m"].update({"batch_limit": 5000, "window_days": 3})
+INTERVALS["5m"].update({"window_days": 3})
+INTERVALS["15m"].update({"window_days": 10})
+INTERVALS["1h"].update({"days_back": 30, "window_days": 30})
+INTERVALS["4h"].update({"days_back": 30, "window_days": 30})
+INTERVALS["1d"].update({"window_days": 900})
+
+
 async def check_connections() -> bool:
-    """Check Binance and ClickHouse connectivity before starting."""
+    """Check OpenBB gateway and ClickHouse connectivity before starting."""
     ok = True
 
-    # Binance (with 15s timeout)
+    # Market gateway/OpenBB (with 20s timeout)
     try:
         price = await asyncio.wait_for(
-            binance_service.get_price("BTC/USDT"), timeout=15
+            market_data_gateway.get_price("BTCUSDT"), timeout=20
         )
-        logger.info(f"[OK] Binance: BTC/USDT = {price}")
+        logger.info(f"[OK] market gateway/OpenBB: BTCUSDT = {price}")
     except asyncio.TimeoutError:
-        logger.warning("[WARN] Binance: timeout after 15s, skipping connection check")
+        logger.warning("[WARN] market gateway/OpenBB: timeout after 20s, skipping connection check")
     except Exception as e:
-        logger.warning(f"[WARN] Binance: {e}, skipping connection check")
+        logger.warning(f"[WARN] market gateway/OpenBB: {e}, skipping connection check")
 
     # ClickHouse
     try:
@@ -87,28 +97,39 @@ async def check_connections() -> bool:
     return ok
 
 
-def symbol_to_binance(symbol: str) -> str:
-    if '/' in symbol:
-        return symbol
-    if symbol.endswith('USDT'):
-        return f"{symbol[:-4]}/USDT"
-    return symbol
+def _as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
-def _to_rows(klines: List[Any], interval: str) -> List[Dict[str, Any]]:
-    """Convert Binance Kline objects to dict rows for ClickHouse insert."""
+def _bar_datetime(bar: Any) -> datetime:
+    ts = getattr(bar, "datetime", None) or getattr(bar, "timestamp", None)
+    if ts is None:
+        raise ValueError("bar has no datetime/timestamp field")
+    return _as_utc(ts)
+
+
+def _to_rows(bars: List[Any], interval: str) -> List[Dict[str, Any]]:
+    """Convert OpenBB/market-gateway BarData objects to ClickHouse rows."""
     # Interval duration in milliseconds
     ms_delta = INTERVALS.get(interval, {}).get("ms_delta", 60_000)
     rows = []
-    for k in klines:
+    for bar in bars:
+        open_time = _bar_datetime(bar)
+        close_time = (
+            getattr(bar, "bar_end_time", None)
+            or getattr(bar, "event_time", None)
+            or (open_time + timedelta(milliseconds=ms_delta))
+        )
         rows.append({
-            "open_time":  k.timestamp,
-            "open":       k.open,
-            "high":       k.high,
-            "low":        k.low,
-            "close":      k.close,
-            "volume":     k.volume,
-            "close_time": k.timestamp + timedelta(milliseconds=ms_delta),
+            "open_time":  open_time,
+            "open":       bar.open,
+            "high":       bar.high,
+            "low":        bar.low,
+            "close":      bar.close,
+            "volume":     bar.volume,
+            "close_time": _as_utc(close_time),
         })
     return rows
 
@@ -167,7 +188,6 @@ async def backfill_interval(
 
     task_info: dict with 'idx', 'total', 'symbol', 'interval' for progress display
     """
-    symbol_binance = symbol_to_binance(symbol_clickhouse)
     config = INTERVALS.get(interval)
     if not config:
         logger.warning(f"  [!] Unknown interval: {interval}")
@@ -192,10 +212,11 @@ async def backfill_interval(
 
     batch_limit = config["batch_limit"]
     ms_delta = config["ms_delta"]
+    window_ms = int(config.get("window_days", 1) * 24 * 60 * 60 * 1000)
 
     # Estimate total batches
     total_range_ms = end_ms - start_ms
-    estimated_batches = max(1, total_range_ms // (batch_limit * ms_delta) + 1)
+    estimated_batches = max(1, total_range_ms // window_ms + 1)
 
     # Progress header
     idx = task_info["idx"]
@@ -212,28 +233,29 @@ async def backfill_interval(
     current_ms = start_ms
     last_log_time = 0
     consecutive_empty = 0
+    max_batches = max(3, estimated_batches * 3)
 
-    while True:
+    while current_ms <= end_ms and batch < max_batches:
         batch += 1
         elapsed = int(time.time() - heartbeat._start_time)
+        window_end_ms = min(current_ms + window_ms - 1, end_ms)
 
         try:
             klines = await asyncio.wait_for(
-                binance_service.get_klines(
-                    symbol=symbol_binance,
-                    timeframe=interval,
+                market_data_gateway.get_openbb_bars(
+                    symbol=symbol_clickhouse,
+                    interval=interval,
                     limit=batch_limit,
-                    since=current_ms,
+                    start_time=datetime.fromtimestamp(current_ms / 1000, tz=timezone.utc),
+                    end_time=datetime.fromtimestamp(window_end_ms / 1000, tz=timezone.utc),
+                    persist=False,
                 ),
-                timeout=30,
+                timeout=60,
             )
 
             if not klines:
-                consecutive_empty += 1
-                if consecutive_empty >= 2:
-                    logger.info(f"  [{interval}] no data for 2 consecutive batches, done")
-                    break
-                logger.info(f"  [{interval}] batch {batch}: no data, retrying...")
+                logger.info(f"  [{interval}] batch {batch}: no data, skipping window")
+                current_ms = window_end_ms + ms_delta
                 await asyncio.sleep(1)
                 continue
             consecutive_empty = 0
@@ -257,8 +279,8 @@ async def backfill_interval(
             total_fetched += len(klines)
 
             # Advance cursor
-            last_ts = klines[-1].timestamp.timestamp() * 1000
-            current_ms = int(last_ts + ms_delta)
+            last_ts = _bar_datetime(klines[-1]).timestamp() * 1000
+            current_ms = max(int(last_ts + ms_delta), window_end_ms + ms_delta)
 
             # Check if we've reached end
             last_dt = datetime.fromtimestamp(last_ts / 1000, tz=timezone.utc)
@@ -277,6 +299,9 @@ async def backfill_interval(
 
         # Brief pause between batches (rate limit)
         await asyncio.sleep(0.3)
+
+    if batch >= max_batches:
+        logger.warning(f"  [{interval}] reached max_batches={max_batches}, stopping to avoid endless loop")
 
     return total_fetched
 
@@ -382,7 +407,7 @@ async def main():
     # ── Connection health check ─────────────────────────────────────────────────
     logger.info("检测连接状态...")
     if not await check_connections():
-        logger.error("连接检查失败，请确认 Binance 和 ClickHouse 可用后重试")
+        logger.error("连接检查失败，请确认 market gateway / OpenBB 和 ClickHouse 可用后重试")
         return
     logger.info("连接状态正常，开始补数")
 

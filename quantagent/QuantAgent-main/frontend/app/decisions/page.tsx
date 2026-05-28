@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -11,8 +11,8 @@ import {
 import { cn } from "@/lib/utils";
 import {
   Activity, BarChart3, BarChart, History, Server, RefreshCw, Zap, Layers,
-  Brain, TrendingUp, Shield, AlertTriangle, CheckCircle2, XCircle,
-  ChevronDown, ChevronUp, PieChart, Target, ArrowUp, ArrowDown, Minus,
+  Brain, TrendingUp, Shield, CheckCircle2,
+  ChevronDown, ChevronUp, PieChart, ArrowUp, ArrowDown, Minus,
 } from "lucide-react";
 import {
   PieChart as RPieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend,
@@ -30,7 +30,20 @@ interface DecisionRow {
   vote_breakdown: Record<string, number>;
   risk_veto: boolean;
   summary: string;
-  agent_signals: Array<{ agent_type?: string; signal?: string; confidence?: number }>;
+  agent_signals: Array<{ agent_type?: string; role?: string; agent?: string; signal?: string; type?: string; confidence?: number; reasoning?: string }>;
+  bull_view?: string;
+  bear_view?: string;
+  input_snapshot_ids?: Record<string, unknown>;
+  role_opinions?: Array<{
+    role?: string;
+    opinion?: string;
+    confidence?: number;
+    risk_flag?: boolean;
+    reasoning?: string;
+    key_points?: string[];
+  }>;
+  position_advice?: Record<string, unknown>;
+  risk_notes?: string;
 }
 
 interface Stats {
@@ -57,8 +70,10 @@ export default function DecisionsPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [runFast, setRunFast] = useState(true);
   const [error, setError] = useState("");
-  const [filterSymbol, setFilterSymbol] = useState("");
+  const [filterSymbol, setFilterSymbol] = useState("BTCUSDT");
 
   const fetchDecisions = useCallback(async () => {
     try {
@@ -80,13 +95,33 @@ export default function DecisionsPage() {
     } catch { /* ignore */ }
   }, []);
 
-  useEffect(() => { fetchDecisions(); fetchStats(); setLoading(false); }, [fetchDecisions, fetchStats]);
+  const refreshAll = useCallback(async () => {
+    await Promise.all([fetchDecisions(), fetchStats()]);
+  }, [fetchDecisions, fetchStats]);
+
+  const runFullDecision = useCallback(async () => {
+    const symbol = (filterSymbol || "BTCUSDT").toUpperCase();
+    setRunning(true);
+    setError("");
+    try {
+      const params = new URLSearchParams({ interval: "1h", fast: String(runFast) });
+      const res = await fetch(`/api/v1/market/coordinate/${symbol}?${params.toString()}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.detail || data?.error || `协调分析失败: ${res.status}`);
+      }
+      await refreshAll();
+      setExpandedId(null);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunning(false);
+    }
+  }, [filterSymbol, refreshAll, runFast]);
+
+  useEffect(() => { refreshAll().finally(() => setLoading(false)); }, [refreshAll]);
 
   const signalPieData = stats?.by_signal ? Object.entries(stats.by_signal).map(([k, v]) => ({ name: k, value: v })) : [];
-  const votePieData = decisions.find(d => d.id === expandedId)?.vote_breakdown
-    ? Object.entries(decisions.find(d => d.id === expandedId)!.vote_breakdown).map(([k, v]) => ({ name: k, value: v }))
-    : [];
-
   const confidenceTrendData = [...decisions]
     .reverse()
     .slice(-30)
@@ -122,7 +157,7 @@ export default function DecisionsPage() {
               <Link href="/decisions" className="px-3 py-1.5 text-sm text-pink-400 bg-pink-500/10 rounded-lg border border-pink-500/20 font-medium flex items-center gap-1.5"><Brain className="w-4 h-4" /> 决策中心</Link>
             </nav>
             <div className="flex items-center gap-2">
-              <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-foreground" onClick={() => { fetchDecisions(); fetchStats(); }}>
+              <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-foreground" onClick={refreshAll}>
                 <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
               </Button>
             </div>
@@ -135,6 +170,47 @@ export default function DecisionsPage() {
         {error && (
           <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-xs">{error}</div>
         )}
+
+        <Card className="mb-6 overflow-hidden border-pink-500/20 bg-gradient-to-br from-pink-500/10 via-card to-cyan-500/10">
+          <CardContent className="p-4">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Zap className="h-4 w-4 text-pink-400" />
+                  <h2 className="text-sm font-semibold text-foreground">PRD 10.4 完整决策链路</h2>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  触发 AnalysisContext - 四角色分析 - 多空辩论 - coordination_history 写入。
+                </p>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <input
+                  placeholder="BTCUSDT"
+                  value={filterSymbol}
+                  onChange={(e) => setFilterSymbol(e.target.value.toUpperCase())}
+                  className="w-full rounded border border-border bg-background/80 px-3 py-2 font-mono text-xs text-foreground/90 sm:w-36"
+                />
+                <label className="flex items-center gap-2 rounded border border-border bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={runFast}
+                    onChange={(e) => setRunFast(e.target.checked)}
+                  />
+                  fast=true
+                </label>
+                <Button
+                  size="sm"
+                  className="bg-pink-500 text-white hover:bg-pink-400"
+                  disabled={running}
+                  onClick={runFullDecision}
+                >
+                  {running ? <RefreshCw className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Brain className="mr-1.5 h-3.5 w-3.5" />}
+                  {running ? "运行中..." : "运行完整决策"}
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Stats cards */}
         {stats && !stats.error && (
@@ -206,12 +282,12 @@ export default function DecisionsPage() {
                     {decisions.length === 0 ? (
                       <TableRow className="border-border">
                         <TableCell colSpan={6} className="text-center text-muted-foreground py-10 text-sm">
-                          暂无决策记录 — 在终端触发一次协调分析后这里会显示历史
+                          暂无决策记录 — 点击上方“运行完整决策”后这里会显示历史
                         </TableCell>
                       </TableRow>
                     ) : (
                       decisions.map(d => (
-                        <>
+                        <Fragment key={d.id}>
                           <TableRow key={d.id} className="border-border hover:bg-card/50 cursor-pointer" onClick={() => setExpandedId(expandedId === d.id ? null : d.id)}>
                             <TableCell className="text-foreground/90 text-xs font-mono">{d.symbol}</TableCell>
                             <TableCell>
@@ -261,7 +337,7 @@ export default function DecisionsPage() {
                                       <div className="space-y-1.5 max-h-[200px] overflow-y-auto custom-scrollbar">
                                         {d.agent_signals.map((sig: any, i: number) => (
                                           <div key={i} className="flex items-center justify-between p-2 bg-background/50 rounded border border-border">
-                                            <span className="text-xs text-foreground/80">{sig.agent_type || sig.agent || `Agent ${i + 1}`}</span>
+                                            <span className="text-xs text-foreground/80">{sig.role || sig.agent_type || sig.agent || `Agent ${i + 1}`}</span>
                                             <div className="flex items-center gap-2">
                                               <Badge className={cn("text-[10px]",
                                                 (sig.signal || sig.type) === "BUY" ? "bg-green-500/15 text-green-400" :
@@ -283,11 +359,56 @@ export default function DecisionsPage() {
                                       <p className="text-xs text-foreground/80 bg-background/50 rounded p-3 border border-border leading-relaxed">{d.summary}</p>
                                     </div>
                                   )}
+                                  <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <div className="rounded border border-green-500/20 bg-green-500/5 p-3">
+                                      <h4 className="text-xs font-semibold text-green-400 mb-1">多头观点</h4>
+                                      <p className="whitespace-pre-wrap text-xs leading-relaxed text-foreground/80">{d.bull_view || "暂无多头观点"}</p>
+                                    </div>
+                                    <div className="rounded border border-red-500/20 bg-red-500/5 p-3">
+                                      <h4 className="text-xs font-semibold text-red-400 mb-1">空头观点</h4>
+                                      <p className="whitespace-pre-wrap text-xs leading-relaxed text-foreground/80">{d.bear_view || "暂无空头观点"}</p>
+                                    </div>
+                                  </div>
+                                  <div className="md:col-span-2 rounded border border-border bg-background/50 p-3">
+                                    <h4 className="text-xs font-semibold text-muted-foreground mb-2">角色意见</h4>
+                                    {d.role_opinions && d.role_opinions.length > 0 ? (
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                        {d.role_opinions.map((role, i) => (
+                                          <div key={`${role.role || "role"}-${i}`} className="rounded border border-border bg-card/60 p-2">
+                                            <div className="mb-1 flex items-center justify-between gap-2">
+                                              <span className="text-xs font-semibold text-foreground/90">{role.role || `role-${i + 1}`}</span>
+                                              <Badge className="bg-slate-500/10 text-[10px] text-muted-foreground">
+                                                {role.opinion || "neutral"} · {role.confidence != null ? `${(role.confidence * 100).toFixed(0)}%` : "--"}
+                                              </Badge>
+                                            </div>
+                                            <p className="line-clamp-3 text-[11px] leading-relaxed text-muted-foreground">{role.reasoning || "暂无理由"}</p>
+                                            {role.risk_flag && <p className="mt-1 text-[11px] text-red-400">risk_flag=true</p>}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : <p className="text-xs text-muted-foreground">暂无角色结构化意见</p>}
+                                  </div>
+                                  <div className="rounded border border-cyan-500/20 bg-cyan-500/5 p-3">
+                                    <h4 className="text-xs font-semibold text-cyan-400 mb-1">仓位建议</h4>
+                                    <pre className="max-h-40 overflow-auto whitespace-pre-wrap text-[11px] leading-relaxed text-foreground/80">
+                                      {JSON.stringify(d.position_advice || {}, null, 2)}
+                                    </pre>
+                                  </div>
+                                  <div className="rounded border border-amber-500/20 bg-amber-500/5 p-3">
+                                    <h4 className="text-xs font-semibold text-amber-400 mb-1">风险备注</h4>
+                                    <p className="whitespace-pre-wrap text-xs leading-relaxed text-foreground/80">{d.risk_notes || "无明显风险"}</p>
+                                  </div>
+                                  <div className="md:col-span-2 rounded border border-border bg-background/50 p-3">
+                                    <h4 className="text-xs font-semibold text-muted-foreground mb-1">输入快照 ID</h4>
+                                    <pre className="max-h-48 overflow-auto whitespace-pre-wrap text-[11px] leading-relaxed text-muted-foreground">
+                                      {JSON.stringify(d.input_snapshot_ids || {}, null, 2)}
+                                    </pre>
+                                  </div>
                                 </div>
                               </TableCell>
                             </TableRow>
                           )}
-                        </>
+                        </Fragment>
                       ))
                     )}
                   </TableBody>

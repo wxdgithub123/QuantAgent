@@ -16,8 +16,8 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.services.strategy_templates import get_all_templates_meta, build_signal_func, get_template, update_template_default_params, get_template_default_params
-from app.services.binance_service import binance_service
 from app.services.clickhouse_service import clickhouse_service
+from app.services.market_data_gateway import market_data_gateway
 from app.services.database import get_db
 from app.models.db_models import BacktestResult, OptimizationResult
 from app.services.backtester import GridOptimizer, OptunaOptimizer
@@ -207,7 +207,7 @@ async def run_backtest(req: BacktestRequest):
         # 如果 ClickHouse 数据不足，回退到 Binance（支持时间范围查询）
         if df is None:
             try:
-                df = await binance_service.get_klines_dataframe(
+                df = await market_data_gateway.get_dataframe(
                     symbol_ccxt, 
                     req.interval, 
                     limit=effective_limit,
@@ -231,7 +231,7 @@ async def run_backtest(req: BacktestRequest):
     else:
         # 向后兼容：使用 limit 参数从 Binance 获取数据
         try:
-            df = await binance_service.get_klines_dataframe(symbol_ccxt, req.interval, limit=effective_limit)
+            df = await market_data_gateway.get_dataframe(symbol_ccxt, req.interval, limit=effective_limit)
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"Failed to fetch market data: {e}")
 
@@ -1012,7 +1012,7 @@ async def optimize_strategy(req: OptimizeRequest):
     effective_limit = min(req.limit, MAX_LIMITS.get(req.interval, 1000))
 
     try:
-        df = await binance_service.get_klines_dataframe(symbol_ccxt, req.interval, limit=effective_limit)
+        df = await market_data_gateway.get_dataframe(symbol_ccxt, req.interval, limit=effective_limit)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Failed to fetch market data: {e}")
 
@@ -1408,7 +1408,7 @@ async def batch_backtest(req: BatchBacktestRequest):
         try:
             symbol_ccxt  = _normalize_symbol(symbol)
             symbol_clean = symbol.upper()
-            df = await binance_service.get_klines_dataframe(
+            df = await market_data_gateway.get_dataframe(
                 symbol_ccxt, req.interval, limit=effective_limit
             )
             if df is None or len(df) < 300:

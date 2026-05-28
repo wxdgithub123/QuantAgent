@@ -12,7 +12,7 @@ async def short_squeeze_monitor_task():
     """
     try:
         from app.models.db_models import PaperPosition
-        from app.services.binance_service import binance_service
+        from app.services.market_data_gateway import market_data_gateway
         from app.services.risk_manager import risk_manager
 
         async with get_db() as session:
@@ -26,7 +26,7 @@ async def short_squeeze_monitor_task():
 
             for pos in shorts:
                 try:
-                    current_price = await binance_service.get_price(pos.symbol)
+                    current_price = await market_data_gateway.get_price(pos.symbol)
                     if current_price > 0:
                         squeeze = await risk_manager.check_short_squeeze(
                             pos.symbol, 

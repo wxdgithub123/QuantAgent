@@ -290,19 +290,26 @@ class IngestionService:
             await self._persist_kline(symbol, interval, kline_data)
 
     async def _recover_gap(self, symbol: str, start_ts: float, end_ts: float):
-        """Recover missing klines via REST API."""
+        """Recover missing klines through the PRD market data gateway."""
         try:
-            from app.services.binance_service import binance_service
+            from app.services.market_data_gateway import market_data_gateway
             # Convert to ms
-            since = int((start_ts + 60) * 1000)
+            start_time = datetime.fromtimestamp(start_ts + 60)
+            end_time = datetime.fromtimestamp(end_ts)
             # Calculate limit
             duration = end_ts - start_ts
             limit = int(duration / 60) - 1
             
             if limit > 0:
                 logger.info(f"Recovering {limit} missing klines for {symbol}...")
-                # This call will automatically persist to ClickHouse via binance_service
-                await binance_service.get_klines(symbol, "1m", limit=limit, since=since)
+                await market_data_gateway.get_openbb_bars(
+                    symbol,
+                    interval="1m",
+                    limit=limit,
+                    start_time=start_time,
+                    end_time=end_time,
+                    persist=True,
+                )
         except Exception as e:
             logger.error(f"Gap recovery failed for {symbol}: {e}")
 

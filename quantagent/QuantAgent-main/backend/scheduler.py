@@ -11,13 +11,20 @@ from apscheduler.jobstores.redis import RedisJobStore
 from apscheduler.executors.pool import ThreadPoolExecutor
 from app.core.config import settings
 from app.services.database import get_db
-from app.services.binance_service import binance_service
 from app.services.clickhouse_service import clickhouse_service
+from app.services.market_data_gateway import market_data_gateway
 from app.models.db_models import AgentMemory
 from sqlalchemy import select
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """Normalize DB timestamps before comparing with UTC-aware datetimes."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 # ── Standalone Task Functions (Picklable) ─────────────────────────────────────
 
@@ -104,18 +111,16 @@ async def calculate_agent_pnl_task():
                 # but strictly we should use the price at T+24h.
                 
                 # Let's try to get the close price of the kline at created_at + 24h
-                target_time = mem.created_at + timedelta(hours=HORIZON_HOURS)
-                # Convert to timestamp ms
-                ts = int(target_time.timestamp() * 1000)
+                target_time = _as_utc(mem.created_at) + timedelta(hours=HORIZON_HOURS)
                 
                 try:
                     # Fetch single kline at that time
-                    klines = await binance_service.get_klines(
+                    klines = await market_data_gateway.get_klines(
                         symbol=mem.symbol,
                         interval="1m",
                         limit=1,
-                        start_time=ts,
-                        end_time=ts + 60000
+                        start_time=target_time,
+                        end_time=target_time + timedelta(minutes=1),
                     )
                     
                     if klines:
@@ -169,33 +174,20 @@ async def _backfill_interval_batch(
     end_ms: int,
 ) -> int:
     """Fetch and write one batch of klines. Returns number fetched."""
-    symbol_binance = symbol_to_binance(symbol_clickhouse)
     config = INTERVALS_BACKFILL.get(interval, {})
     batch_limit = config.get("batch_limit", 1000)
 
-    klines = await binance_service.get_klines(
-        symbol=symbol_binance,
-        timeframe=interval,
+    bars = await market_data_gateway.get_openbb_bars(
+        symbol=symbol_clickhouse,
+        interval=interval,
         limit=batch_limit,
-        since=start_ms,
+        start_time=datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc),
+        end_time=datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc),
+        persist=True,
     )
-    if not klines:
+    if not bars:
         return 0
-
-    rows = [
-        {
-            "open_time":  k.timestamp,
-            "open":       k.open,
-            "high":       k.high,
-            "low":        k.low,
-            "close":      k.close,
-            "volume":     k.volume,
-            "close_time": k.close_time,
-        }
-        for k in klines
-    ]
-    await clickhouse_service.insert_klines(symbol_clickhouse, interval, rows)
-    return len(klines)
+    return len(bars)
 
 
 async def _sync_symbol_interval(symbol: str, interval: str) -> int:
@@ -214,6 +206,7 @@ async def _sync_symbol_interval(symbol: str, interval: str) -> int:
         start_ms = int(start_dt.timestamp() * 1000)
         end_ms = int(now.timestamp() * 1000)
     else:
+        max_ts = _as_utc(max_ts)
         # Start slightly before max to ensure continuity
         ms_delta = config["ms_delta"]
         start_ms = int(max_ts.timestamp() * 1000) - ms_delta

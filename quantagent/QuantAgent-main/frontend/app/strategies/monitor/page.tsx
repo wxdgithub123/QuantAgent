@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { Suspense, useEffect, useState, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -117,7 +117,7 @@ const getStatusBadge = (status: "running" | "warning" | "danger") => {
 };
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
-export default function StrategyMonitorPage() {
+function StrategyMonitorContent() {
   const [data, setData] = useState<MonitorData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -654,5 +654,13 @@ export default function StrategyMonitorPage() {
         onConfirmEliminate={handleConfirmEliminate}
       />
     </div>
+  );
+}
+
+export default function StrategyMonitorPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
+      <StrategyMonitorContent />
+    </Suspense>
   );
 }

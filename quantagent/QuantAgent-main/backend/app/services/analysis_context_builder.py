@@ -13,6 +13,7 @@ from sqlalchemy import text
 from app.models.analysis_context import AnalysisContext
 from app.models.instrument import Instrument
 from app.services.database import get_db
+from app.services.market_data_gateway import market_data_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -88,14 +89,16 @@ class AnalysisContextBuilder:
         limit: int,
     ) -> List[Dict[str, Any]]:
         try:
-            from app.services.storage_factory import get_storage_service
-
-            storage = get_storage_service()
-            rows = await storage.query_klines(symbol, interval, end=cutoff, limit=limit)
+            klines = await market_data_gateway.get_klines(
+                symbol,
+                interval=interval,
+                limit=limit,
+                end_time=cutoff,
+            )
             out: List[Dict[str, Any]] = []
-            for row in rows or []:
-                event_time = row.get("open_time") or row.get("timestamp")
-                available_time = row.get("available_time") or row.get("close_time") or event_time
+            for kline in klines or []:
+                event_time = kline.timestamp
+                available_time = kline.close_time or event_time
                 if not self._visible(available_time, cutoff):
                     continue
                 out.append({
@@ -104,13 +107,13 @@ class AnalysisContextBuilder:
                     "timeframe": interval,
                     "event_time": self._iso(event_time),
                     "available_time": self._iso(available_time),
-                    "open": float(row["open"]),
-                    "high": float(row["high"]),
-                    "low": float(row["low"]),
-                    "close": float(row["close"]),
-                    "volume": float(row["volume"]),
-                    "provider": row.get("provider") or "storage",
-                    "schema_version": row.get("schema_version") or "bar.v1",
+                    "open": float(kline.open),
+                    "high": float(kline.high),
+                    "low": float(kline.low),
+                    "close": float(kline.close),
+                    "volume": float(kline.volume),
+                    "provider": "market_data_gateway",
+                    "schema_version": "bar.v1",
                 })
             return out[-limit:]
         except Exception as e:
@@ -257,6 +260,12 @@ class AnalysisContextBuilder:
     def _normalize_payload_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
         out: Dict[str, Any] = {}
         for key, value in row.items():
+            try:
+                if pd.isna(value):
+                    out[key] = None
+                    continue
+            except Exception:
+                pass
             if isinstance(value, pd.Timestamp):
                 out[key] = value.isoformat()
             elif isinstance(value, datetime):

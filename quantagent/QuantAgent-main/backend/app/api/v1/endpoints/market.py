@@ -5,7 +5,7 @@ import asyncio
 from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from typing import List, Optional, AsyncGenerator, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 import json
 import re
@@ -13,6 +13,8 @@ import logging
 
 from app.services.binance_service import binance_service
 from app.services.coingecko_service import coingecko_service
+from app.services.market_data_gateway import market_data_gateway
+from app.models.instrument import Instrument
 from app.models.market_data import KlineResponse, TickerData, MarketOverview, PriceComparison
 
 router = APIRouter()
@@ -30,6 +32,30 @@ def _clean_think_tags(text: str) -> str:
     return cleaned.strip()
 
 
+def _first_symbol(value: Any, fallback: str) -> str:
+    """Normalize DB list/array/string values into one frontend-safe symbol."""
+    if value is None:
+        return fallback
+    if isinstance(value, str):
+        return value or fallback
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if isinstance(value, (list, tuple)):
+        return str(value[0]) if value else fallback
+    return str(value) or fallback
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """Normalize DB timestamps before comparing with UTC-aware datetimes."""
+    if dt.tzinfo is None:
+        from datetime import timezone
+
+        return dt.replace(tzinfo=timezone.utc)
+    from datetime import timezone
+
+    return dt.astimezone(timezone.utc)
+
+
 @router.get("/klines/{symbol}", response_model=KlineResponse)
 async def get_klines(
     symbol: str,
@@ -39,31 +65,24 @@ async def get_klines(
     end_time: Optional[datetime] = None
 ):
     """
-    从 Binance 获取 K 线/Candlestick 数据
+    从统一市场网关获取 K 线/Candlestick 数据
     
     支持的时间周期: 1m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d, 3d, 1w, 1M
     """
     try:
-        # 转换 symbol 格式 (BTCUSDT -> BTC/USDT)
-        formatted_symbol = f"{symbol[:-4]}/{symbol[-4:]}" if len(symbol) > 4 else symbol
-        
-        # 转换时间戳
-        since = None
-        if start_time:
-            since = int(start_time.timestamp() * 1000)
-        
-        klines = await binance_service.get_klines(
-            symbol=formatted_symbol,
-            timeframe=interval,
+        klines = await market_data_gateway.get_klines(
+            symbol=symbol,
+            interval=interval,
             limit=limit,
-            since=since
+            start_time=start_time,
+            end_time=end_time,
         )
         
         return KlineResponse(
             symbol=symbol,
             interval=interval,
             data=klines,
-            source="binance"
+            source="market_data_gateway"
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch klines: {str(e)}")
@@ -72,14 +91,15 @@ async def get_klines(
 @router.get("/ticker/{symbol}", response_model=TickerData)
 async def get_ticker(symbol: str):
     """
-    从 Binance 获取 24hr ticker 数据
+    从统一市场网关获取 24hr ticker 数据
     """
     try:
-        # 转换 symbol 格式
-        formatted_symbol = f"{symbol[:-4]}/{symbol[-4:]}" if len(symbol) > 4 else symbol
-        
-        ticker = await binance_service.get_ticker(formatted_symbol)
+        ticker = await market_data_gateway.get_ticker(symbol)
+        if ticker is None:
+            raise HTTPException(status_code=404, detail="Ticker unavailable from local storage/OpenBB")
         return ticker
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch ticker: {str(e)}")
 
@@ -90,7 +110,7 @@ async def get_symbols():
     获取所有可用的交易对
     """
     try:
-        symbols = await binance_service.get_symbols()
+        symbols = await market_data_gateway.get_symbols()
         return {
             "symbols": [
                 {"symbol": s.symbol, "base": s.base, "quote": s.quote}
@@ -104,12 +124,15 @@ async def get_symbols():
 @router.get("/price/{symbol}")
 async def get_price(symbol: str):
     """
-    获取指定交易对的当前价格（从 Binance）
+    获取指定交易对的当前价格（从统一市场网关）
     """
     try:
-        formatted_symbol = f"{symbol[:-4]}/{symbol[-4:]}" if len(symbol) > 4 else symbol
-        price = await binance_service.get_price(formatted_symbol)
-        return {"symbol": symbol, "price": price, "source": "binance"}
+        price = await market_data_gateway.get_price(symbol)
+        if price is None:
+            raise HTTPException(status_code=404, detail="Price unavailable from local storage/OpenBB")
+        return {"symbol": symbol, "price": price, "source": "market_data_gateway"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch price: {str(e)}")
 
@@ -117,7 +140,7 @@ async def get_price(symbol: str):
 @router.get("/orderbook/{symbol}")
 async def get_order_book(symbol: str, limit: int = Query(100, ge=1, le=500)):
     """
-    获取订单簿数据（从 Binance）
+    获取订单簿数据（交易所专用接口）
     """
     try:
         formatted_symbol = f"{symbol[:-4]}/{symbol[-4:]}" if len(symbol) > 4 else symbol
@@ -195,20 +218,20 @@ async def search_coins(query: str = Query(..., description="搜索关键词")):
 @router.get("/compare/{symbol}", response_model=PriceComparison)
 async def compare_prices(symbol: str):
     """
-    对比 Binance 和 CoinGecko 的价格
+    对比网关价格和 CoinGecko 的价格
     
     symbol: 如 BTC, ETH, SOL
     """
     try:
-        # 获取 Binance 价格
-        formatted_symbol = f"{symbol}/USDT"
+        # 获取网关价格
+        formatted_symbol = f"{symbol}USDT"
         try:
-            binance_price = await binance_service.get_price(formatted_symbol)
+            market_price = await market_data_gateway.get_price(formatted_symbol)
         except Exception:
-            binance_price = None
+            market_price = None
         
         # 使用 CoinGecko 服务对比价格
-        comparison = coingecko_service.compare_price(symbol, binance_price)
+        comparison = coingecko_service.compare_price(symbol, market_price)
         return comparison
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to compare prices: {str(e)}")
@@ -222,6 +245,10 @@ async def coordinate_agents(
     interval: str = "1h",
     provider: Optional[str] = Query(None, description="LLM Provider (ollama, openai, openrouter)"),
     fast: bool = Query(False, description="Fast mode: skip bull/bear debate to save time"),
+    use_tradingagents: Optional[bool] = Query(
+        None,
+        description="Override USE_TRADINGAGENTS for this request",
+    ),
 ):
     """
     协调者端点：聚合所有 Agent 信号并生成综合决策
@@ -231,9 +258,13 @@ async def coordinate_agents(
     from app.agents.coordinator_agent import CoordinatorAgent
 
     try:
-        coordinator = CoordinatorAgent(provider_name=provider, fast_mode=fast)
-        formatted_symbol = f"{symbol[:-4]}/{symbol[-4:]}" if len(symbol) > 4 else symbol
-        result = await coordinator.coordinate(formatted_symbol, interval)
+        coordinator = CoordinatorAgent(
+            provider_name=provider,
+            use_tradingagents=use_tradingagents,
+            fast_mode=fast,
+        )
+        canonical_symbol = Instrument.from_raw(symbol).symbol
+        result = await coordinator.coordinate(canonical_symbol, interval)
         return result.to_dict()
     except Exception as e:
         import traceback
@@ -584,16 +615,15 @@ async def _run_backfill(symbols: List[str], intervals: List[str], mode: str):
     """
     import asyncio
     from datetime import datetime, timezone, timedelta
-    from app.services.binance_service import binance_service
     from app.services.clickhouse_service import clickhouse_service
 
     INTERVALS_CFG = {
-        "1m":  {"days_back": 7,   "ms_delta": 60_000},
-        "5m":  {"days_back": 30,  "ms_delta": 300_000},
-        "15m": {"days_back": 60,  "ms_delta": 900_000},
-        "1h":  {"days_back": 365, "ms_delta": 3_600_000},
-        "4h":  {"days_back": 730, "ms_delta": 14_400_000},
-        "1d":  {"days_back": 1825, "ms_delta": 86_400_000},
+        "1m":  {"days_back": 7, "batch_limit": 5000, "window_days": 3, "ms_delta": 60_000},
+        "5m":  {"days_back": 30, "batch_limit": 1000, "window_days": 3, "ms_delta": 300_000},
+        "15m": {"days_back": 60, "batch_limit": 1000, "window_days": 10, "ms_delta": 900_000},
+        "1h":  {"days_back": 30, "batch_limit": 1000, "window_days": 30, "ms_delta": 3_600_000},
+        "4h":  {"days_back": 30, "batch_limit": 1000, "window_days": 30, "ms_delta": 14_400_000},
+        "1d":  {"days_back": 1825, "batch_limit": 1000, "window_days": 900, "ms_delta": 86_400_000},
     }
 
     def to_binance(sym: str) -> str:
@@ -618,38 +648,33 @@ async def _run_backfill(symbols: List[str], intervals: List[str], mode: str):
                     start_dt = now - timedelta(days=config.get("days_back", 7))
                     start_ms = int(start_dt.timestamp() * 1000)
                 else:
+                    max_ts = _as_utc(max_ts)
                     start_ms = int(max_ts.timestamp() * 1000) - config.get("ms_delta", 60000)
 
             end_ms = int(now.timestamp() * 1000)
             current_ms = start_ms
             count = 0
+            batch_limit = int(config.get("batch_limit", 1000))
+            window_ms = int(config.get("window_days", 1) * 24 * 60 * 60 * 1000)
 
             while current_ms < end_ms:
                 try:
-                    klines = await binance_service.get_klines(
-                        symbol=to_binance(symbol),
-                        timeframe=interval,
-                        limit=1000,
-                        since=current_ms,
+                    window_end_ms = min(current_ms + window_ms - 1, end_ms)
+                    bars = await market_data_gateway.get_openbb_bars(
+                        symbol=symbol,
+                        interval=interval,
+                        limit=batch_limit,
+                        start_time=datetime.fromtimestamp(current_ms / 1000, tz=timezone.utc),
+                        end_time=datetime.fromtimestamp(window_end_ms / 1000, tz=timezone.utc),
+                        persist=True,
                     )
-                    if not klines:
-                        break
-                    rows = [
-                        {
-                            "open_time":  k.timestamp,
-                            "open":       k.open,
-                            "high":       k.high,
-                            "low":        k.low,
-                            "close":      k.close,
-                            "volume":     k.volume,
-                            "close_time": k.close_time,
-                        }
-                        for k in klines
-                    ]
-                    await clickhouse_service.insert_klines(symbol, interval, rows)
-                    count += len(klines)
-                    last_ts = klines[-1].timestamp.timestamp() * 1000
-                    current_ms = int(last_ts + config.get("ms_delta", 60000))
+                    if not bars:
+                        current_ms = window_end_ms + config.get("ms_delta", 60000)
+                        await asyncio.sleep(0.3)
+                        continue
+                    count += len(bars)
+                    last_ts = bars[-1].datetime.timestamp() * 1000
+                    current_ms = max(int(last_ts + config.get("ms_delta", 60000)), window_end_ms + config.get("ms_delta", 60000))
                     await asyncio.sleep(0.3)
                 except Exception as e:
                     logger.warning(f"[backfill] {symbol}/{interval} batch failed: {e}")
@@ -693,22 +718,54 @@ async def backfill_status():
                     "row_count": 0,
                 }
 
-    # Check staleness
+    # Check staleness with interval-aware thresholds. A daily or 4h candle should
+    # not be marked stale just because it is older than one hour.
     now = datetime.now(timezone.utc)
-    stale_threshold = timedelta(hours=1)
+    interval_seconds = {
+        "1m": 60,
+        "5m": 300,
+        "15m": 900,
+        "1h": 3600,
+        "4h": 14400,
+        "1d": 86400,
+    }
+    min_expected_rows = {
+        "1m": 500,
+        "5m": 500,
+        "15m": 500,
+        "1h": 200,
+        "4h": 100,
+        "1d": 200,
+    }
 
     result = []
     for key, info in sorted(data_map.items()):
         max_t = info.get("max_time")
-        stale = False
+        row_count = int(info.get("row_count") or 0)
+        stale = row_count == 0
+        expected_rows = min_expected_rows.get(info.get("interval"), 1)
+        status = "missing" if row_count == 0 else "partial" if row_count < expected_rows else "ok"
+
         if max_t is not None:
+            if isinstance(max_t, str):
+                try:
+                    max_t = datetime.fromisoformat(max_t.replace("Z", "+00:00"))
+                except ValueError:
+                    max_t = None
             if isinstance(max_t, datetime):
-                stale = (now - max_t) > stale_threshold
-            else:
-                # ClickHouse may return naive datetime
-                import re
-                stale = False  # defer
-        result.append({**info, "stale": stale})
+                max_t = _as_utc(max_t)
+                seconds = interval_seconds.get(info.get("interval"), 3600)
+                threshold = timedelta(seconds=max(seconds * 2, 3600))
+                stale = (now - max_t) > threshold
+                if stale:
+                    status = "stale"
+
+        result.append({
+            **info,
+            "stale": stale,
+            "status": status,
+            "expected_min_rows": expected_rows,
+        })
 
     return {"intervals": result, "checked_at": now.isoformat()}
 
@@ -966,14 +1023,13 @@ async def get_market_news(
     # Remap DuckDB field names to match frontend expectations
     remapped = []
     for a in articles:
-        sym = (a.get("symbols") or [symbol.upper()])[0] if a.get("symbols") else symbol.upper()
         remapped.append({
             "title": a.get("title", ""),
             "source": a.get("source", ""),
             "url": a.get("url", ""),
             "summary": a.get("summary", ""),
             "date": str(a.get("published_at", "")),
-            "symbol": sym,
+            "symbol": symbol.upper(),
         })
 
     return {"symbol": symbol.upper(), "articles": remapped, "total": len(remapped), "source": "duckdb"}
@@ -985,7 +1041,9 @@ async def get_l1_overview() -> Dict[str, Any]:
     tickers = []
     for sym in ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"]:
         try:
-            tk = await binance_service.get_ticker(sym)
+            tk = await market_data_gateway.get_ticker(sym)
+            if tk is None:
+                continue
             tickers.append({
                 "symbol": sym,
                 "price": tk.price,
@@ -1006,7 +1064,7 @@ async def get_l1_overview() -> Dict[str, Any]:
             "source": a.get("source", ""),
             "url": a.get("url", ""),
             "date": str(a.get("published_at", "")),
-            "symbol": (a.get("symbols") or ["BTC"])[0],
+            "symbol": _first_symbol(a.get("symbols"), "BTC"),
         })
 
     return {

@@ -41,6 +41,13 @@ BACKFILL_LOCK_KEY = "quantagent:startup_backfill:lock"
 BACKFILL_LOCK_TTL = 3600  # 1 hour
 
 
+def _as_utc(dt: datetime) -> datetime:
+    """Normalize DB timestamps before comparing with UTC-aware datetimes."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 async def _acquire_backfill_lock() -> bool:
     """Try to acquire Redis lock. Returns True if we got the lock."""
     try:
@@ -60,7 +67,7 @@ async def _startup_backfill():
     Uses Redis lock to ensure only one instance runs this at a time.
     """
     from app.services.storage_factory import get_storage_service
-    from app.services.binance_service import binance_service
+    from app.services.market_data_gateway import market_data_gateway
 
     storage = get_storage_service()
 
@@ -83,7 +90,7 @@ async def _startup_backfill():
                 needs_sync.append((symbol, interval, "full", config["days_back"]))
                 logger.info(f"  [{symbol}/{interval}] 无数据，需要全量回填")
             else:
-                diff = now - max_ts
+                diff = now - _as_utc(max_ts)
                 if diff > stale_threshold:
                     needs_sync.append((symbol, interval, "sync", None))
                     logger.info(f"  [{symbol}/{interval}] 数据过期 (max={max_ts}), 需要增量同步")
@@ -96,13 +103,6 @@ async def _startup_backfill():
 
     logger.info(f"Startup backfill: syncing {len(needs_sync)} symbol/interval pairs...")
 
-    def symbol_to_binance(sym: str) -> str:
-        if '/' in sym:
-            return sym
-        if sym.endswith('USDT'):
-            return f"{sym[:-4]}/USDT"
-        return sym
-
     total_synced = 0
     for symbol, interval, mode, days_back in needs_sync:
         try:
@@ -112,36 +112,27 @@ async def _startup_backfill():
                 start_ms = int(start_dt.timestamp() * 1000)
             else:
                 max_ts = await storage.get_max_timestamp(symbol, interval)
-                start_ms = int(max_ts.timestamp() * 1000) - config["ms_delta"]
+                start_ms = int(_as_utc(max_ts).timestamp() * 1000) - config["ms_delta"]
 
             end_ms = int(now.timestamp() * 1000)
             current_ms = start_ms
             count = 0
 
             while current_ms < end_ms:
-                klines = await binance_service.get_klines(
-                    symbol=symbol_to_binance(symbol),
-                    timeframe=interval,
+                start_batch = datetime.fromtimestamp(current_ms / 1000, tz=timezone.utc)
+                end_batch = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc)
+                bars = await market_data_gateway.get_openbb_bars(
+                    symbol=symbol,
+                    interval=interval,
                     limit=1000,
-                    since=current_ms,
+                    start_time=start_batch,
+                    end_time=end_batch,
+                    persist=True,
                 )
-                if not klines:
+                if not bars:
                     break
-                rows = [
-                    {
-                        "open_time":  k.timestamp,
-                        "open":       k.open,
-                        "high":       k.high,
-                        "low":        k.low,
-                        "close":      k.close,
-                        "volume":     k.volume,
-                        "close_time": k.close_time,
-                    }
-                    for k in klines
-                ]
-                await storage.insert_klines(symbol, interval, rows)
-                count += len(klines)
-                last_ts = klines[-1].timestamp.timestamp() * 1000
+                count += len(bars)
+                last_ts = bars[-1].datetime.timestamp() * 1000
                 current_ms = int(last_ts + config["ms_delta"])
                 await asyncio.sleep(0.3)
 
@@ -254,13 +245,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Storage init failed: {e}")
 
-    # Test Binance connectivity
+    # Test market data connectivity (local storage/OpenBB first)
     try:
-        from app.services.binance_service import binance_service
-        price = await binance_service.get_price("BTC/USDT")
-        logger.info(f"Binance OK: BTC/USDT = {price}")
+        from app.services.market_data_gateway import market_data_gateway
+        price = await market_data_gateway.get_price("BTCUSDT")
+        logger.info(f"Market data OK: BTCUSDT = {price}")
     except Exception as e:
-        logger.error(f"Binance connection test failed: {e}")
+        logger.warning(f"Market data connection test failed: {e}")
 
     # Test LLM
     try:
@@ -370,6 +361,13 @@ async def lifespan(app: FastAPI):
         logger.info("Binance service connections closed.")
     except Exception as e:
         logger.error(f"Error closing Binance service: {e}")
+
+    try:
+        from app.services.database import close_db_connections
+        await close_db_connections()
+        logger.info("Database connections closed.")
+    except Exception as e:
+        logger.error(f"Error closing database connections: {e}")
         
     logger.info("QuantAgent API Server shutting down...")
 

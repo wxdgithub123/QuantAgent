@@ -11,7 +11,8 @@ The OpenBB SDK is lazily loaded. If it's not installed, the service reports
 `available = False` and callers should fall back to the existing services.
 
 CoinGeckoService is fully superseded by this module and can be deprecated.
-BinanceService is retained for WebSocket streaming only.
+BinanceService remains only for exchange-specific surfaces such as websocket
+streaming and order book access.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import asyncio
 import hashlib
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -54,7 +55,7 @@ def _try_import_openbb() -> bool:
         _OPENBB_AVAILABLE = False
         logger.warning(
             "OpenBB SDK not installed. Install with: pip install openbb[crypto,economy]\n"
-            "Falling back to BinanceService + CoinGeckoService for data access."
+            "Falling back to existing market data services."
         )
         return False
 
@@ -94,6 +95,69 @@ def _from_openbb_symbol(obb_symbol: str) -> str:
             quote = "USDT"
         return f"{base.upper()}{quote.upper()}"
     return obb_symbol
+
+
+def _as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _aggregate_hourly_bars(
+    bars: List[BarData],
+    target_interval: str,
+    hours: int,
+    limit: int,
+) -> List[BarData]:
+    """Aggregate provider-supported 1h bars into larger fixed-hour bars."""
+    if not bars:
+        return []
+
+    buckets: Dict[datetime, List[BarData]] = {}
+    for bar in sorted(bars, key=lambda b: _as_utc(b.datetime)):
+        ts = _as_utc(bar.datetime)
+        bucket_start = ts.replace(hour=(ts.hour // hours) * hours, minute=0, second=0, microsecond=0)
+        buckets.setdefault(bucket_start, []).append(bar)
+
+    aggregated: List[BarData] = []
+    for bucket_start, group in sorted(buckets.items()):
+        if not group:
+            continue
+        open_bar = group[0]
+        close_bar = group[-1]
+        volume = sum(float(b.volume or 0.0) for b in group)
+        volume_notional = None
+        if any(b.volume_notional is not None for b in group):
+            volume_notional = sum(float(b.volume_notional or 0.0) for b in group)
+        transactions = None
+        if any(b.transactions is not None for b in group):
+            transactions = sum(int(b.transactions or 0) for b in group)
+        aggregated.append(
+            BarData(
+                symbol=open_bar.symbol,
+                instrument_id=open_bar.instrument_id,
+                exchange=open_bar.exchange,
+                provider=f"{open_bar.provider}:aggregated-{target_interval}",
+                source_version=open_bar.source_version,
+                schema_version=open_bar.schema_version,
+                datetime=bucket_start,
+                bar_start_time=bucket_start,
+                bar_end_time=bucket_start + timedelta(hours=hours),
+                event_time=bucket_start,
+                available_time=datetime.now(timezone.utc),
+                open=float(open_bar.open),
+                high=max(float(b.high) for b in group),
+                low=min(float(b.low) for b in group),
+                close=float(close_bar.close),
+                volume=volume,
+                volume_notional=volume_notional,
+                transactions=transactions,
+                interval=target_interval,
+                timeframe=target_interval,
+            )
+        )
+
+    return aggregated[-limit:] if len(aggregated) > limit else aggregated
 
 
 # ── Service class ──────────────────────────────────────────────────────────────
@@ -154,7 +218,7 @@ class OpenBBDataService:
                 deduped.append(p)
         return deduped or ["yfinance"]
 
-    # ── Crypto historical (replaces binance_service.get_klines) ─────────────
+    # ── Crypto historical (replaces direct exchange REST kline queries) ───────
 
     async def get_crypto_historical(
         self,
@@ -196,10 +260,22 @@ class OpenBBDataService:
         limit: int,
         provider: str,
     ) -> List[BarData]:
+        if interval == "4h":
+            hourly_limit = max(limit * 4 + 8, limit)
+            hourly_bars = await self._get_crypto_historical_once(
+                symbol=symbol,
+                interval="1h",
+                start=start,
+                end=end,
+                limit=hourly_limit,
+                provider=provider,
+            )
+            return _aggregate_hourly_bars(hourly_bars, target_interval="4h", hours=4, limit=limit)
+
         obb_symbol = _to_openbb_symbol(symbol)
         interval_map = {
             "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
-            "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1w",
+            "1h": "1h", "1d": "1d", "1w": "1w",
         }
         obb_interval = interval_map.get(interval, "1h")
 
@@ -357,7 +433,7 @@ class OpenBBDataService:
             timestamp=latest.available_time or datetime.utcnow(),
         )
 
-    # ── Crypto ticker / price (replaces binance_service.get_ticker/get_price) ──
+    # ── Crypto ticker / price (replaces direct exchange REST ticker queries) ──
 
     async def get_crypto_ticker(
         self, symbol: str, provider: str = "yfinance", fallback_providers: Optional[List[str]] = None

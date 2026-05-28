@@ -64,18 +64,17 @@ class MarketWebSocketManager:
 
     async def _price_push_loop(self):
         """Background task: fetch prices and push every 1 second (Legacy Polling)."""
-        # This imports binance_service inside to avoid circular dependency
-        from app.services.binance_service import binance_service
+        from app.services.market_data_gateway import market_data_gateway
 
         logger.info("WebSocket price push loop started.")
         while True:
             try:
                 symbols = self.get_all_symbols()
                 for symbol in symbols:
-                    # Convert BTCUSDT -> BTC/USDT for ccxt
-                    ccxt_sym = _ccxt_symbol(symbol)
                     try:
-                        ticker = await binance_service.get_ticker(ccxt_sym)
+                        ticker = await market_data_gateway.get_ticker(symbol)
+                        if ticker is None:
+                            continue
                         await self.broadcast_ticker(symbol, {
                             "type":           "ticker",
                             "symbol":         symbol,
@@ -91,15 +90,5 @@ class MarketWebSocketManager:
             except Exception as e:
                 logger.error(f"Price push loop error: {e}")
             await asyncio.sleep(1)
-
-def _ccxt_symbol(symbol: str) -> str:
-    """Convert 'BTCUSDT' to 'BTC/USDT'."""
-    symbol = symbol.upper()
-    if "/" not in symbol:
-        for quote in ("USDT", "BTC", "ETH", "BNB", "BUSD"):
-            if symbol.endswith(quote):
-                base = symbol[: -len(quote)]
-                return f"{base}/{quote}"
-    return symbol
 
 ws_manager = MarketWebSocketManager()

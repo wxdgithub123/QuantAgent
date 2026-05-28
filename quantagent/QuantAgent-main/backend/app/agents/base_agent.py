@@ -101,7 +101,14 @@ class BaseAgent:
     """
 
     def __init__(self, provider_name: Optional[str] = None):
-        self.llm   = LLMFactory.create_provider(provider_name)
+        try:
+            self.llm = LLMFactory.create_provider(provider_name)
+        except Exception as e:
+            self.llm = None
+            logger.warning(
+                f"[{self.agent_id}] LLM provider unavailable; "
+                f"agent will return fallback signals until configured: {e}"
+            )
         self.state = AgentState.IDLE
         logger.info(f"[{self.agent_id}] Initialized with provider: {provider_name}")
 
@@ -126,6 +133,8 @@ class BaseAgent:
         try:
             memory_ctx = await self._load_memory(symbol, context_embedding)
             prompt     = self.build_prompt(context, memory_ctx)
+            if self.llm is None:
+                raise RuntimeError("LLM provider unavailable")
             analysis   = await self.llm.generate(
                 prompt, system_prompt=self.system_prompt, temperature=0.7
             )
@@ -174,6 +183,11 @@ class BaseAgent:
             return
 
         self.state = AgentState.THINKING
+        if self.llm is None:
+            self.state = AgentState.ERROR
+            yield "Error: LLM provider unavailable"
+            return
+
         accumulated = ""
         try:
             async for chunk in self.llm.stream(

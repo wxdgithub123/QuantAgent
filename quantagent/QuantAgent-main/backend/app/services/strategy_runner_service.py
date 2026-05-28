@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional
 
 from app.core.config import settings
-from app.services.binance_service import binance_service
+from app.services.market_data_gateway import market_data_gateway
 from app.services.paper_trading_service import paper_trading_service
 from app.models.trading import OrderRequest, OrderResult, TradeSide, BarData
 from app.core.bus import TradingBus
@@ -174,7 +174,7 @@ class StrategyRunnerService:
         
         # Need enough data for at least one evaluation cycle + indicators buffer
         # e.g., evaluation_period=1440. Let's fetch 1500 bars
-        df = await binance_service.get_klines_dataframe(symbol, interval, limit=1500)
+        df = await market_data_gateway.get_dataframe(symbol, interval, limit=1500)
         
         if df is None or df.empty:
             logger.error("Failed to fetch historical data for warmup.")
@@ -260,7 +260,7 @@ class StrategyRunnerService:
         interval = DYNAMIC_SELECTION_CONFIG["interval"]
         
         # Fetch the latest bars (limit=2 is usually enough to get the newest complete/partial bar)
-        df = await binance_service.get_klines_dataframe(symbol, interval, limit=2)
+        df = await market_data_gateway.get_dataframe(symbol, interval, limit=2)
         if df is None or df.empty:
             logger.warning(f"Failed to fetch latest data for {symbol}.")
             return

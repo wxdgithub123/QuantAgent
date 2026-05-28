@@ -639,7 +639,7 @@ class RiskManager:
         # 这里演示逻辑：
         try:
             from app.services.paper_trading_service import paper_trading_service
-            from app.services.binance_service import binance_service
+            from app.services.market_data_gateway import market_data_gateway
             
             positions = await paper_trading_service.get_positions()
             if not positions:
@@ -648,7 +648,9 @@ class RiskManager:
             symbols = [p["symbol"] for p in positions]
             current_prices = {}
             for s in symbols:
-                current_prices[s] = await binance_service.get_price(s)
+                price = await market_data_gateway.get_price(s)
+                if price is not None:
+                    current_prices[s] = price
             
             await paper_trading_service.close_all_positions(current_prices)
             await self._log_risk_event("ALL", "TAIL_RISK_HEDGE", True, {"action": "CLOSE_ALL_POSITIONS"})
@@ -661,7 +663,7 @@ class RiskManager:
         当保证金使用率过高时，自动平掉部分头寸。
         """
         from app.services.paper_trading_service import paper_trading_service
-        from app.services.binance_service import binance_service
+        from app.services.market_data_gateway import market_data_gateway
         
         config = await self.get_config()
         pre_liq_level = config.get("PRE_LIQUIDATION_LEVEL", 0.90)
@@ -680,7 +682,9 @@ class RiskManager:
             symbols = [p["symbol"] for p in positions]
             current_prices = {}
             for s in symbols:
-                current_prices[s] = await binance_service.get_price(s)
+                price = await market_data_gateway.get_price(s)
+                if price is not None:
+                    current_prices[s] = price
                 
             await paper_trading_service.close_all_positions(current_prices)
             await self._log_risk_event("ALL", "PRE_LIQUIDATION_HALT", True, {

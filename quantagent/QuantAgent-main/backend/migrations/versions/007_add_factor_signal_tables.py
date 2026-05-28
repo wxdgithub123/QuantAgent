@@ -18,8 +18,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision: str = "007_add_factor_signal_tables"
-down_revision: Union[str, None] = "006_add_exchange_id_to_paper_trades"
+revision: str = "007"
+down_revision: Union[str, None] = "006"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

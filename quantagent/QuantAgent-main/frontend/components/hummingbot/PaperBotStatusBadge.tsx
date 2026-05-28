@@ -1,7 +1,6 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
-import { PaperBot } from "./PaperBotList";
 
 interface PaperBotStatusBadgeProps {
   localStatus: string;

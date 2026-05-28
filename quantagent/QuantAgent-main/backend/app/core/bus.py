@@ -15,10 +15,10 @@ from app.models.trading import (
     OrderType,
     OrderStatus,
 )
-from app.services.binance_service import binance_service
 from app.services.paper_trading_service import paper_trading_service
 from app.services.risk_manager import risk_manager
 from app.services.clickhouse_service import clickhouse_service
+from app.services.market_data_gateway import market_data_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -186,49 +186,19 @@ class LiveDataAdapter(DataAdapter):
         self.running = False
 
     async def _fetch_latest_bars(self, symbol: str, interval: str) -> List[BarData]:
-        """Try OpenBB first, then fall back to BinanceService."""
-        try:
-            from app.services.openbb_data_service import openbb_data_service
-
-            if openbb_data_service.available:
-                bars = await openbb_data_service.get_crypto_historical(
-                    symbol, interval, limit=2
-                )
-                if bars:
-                    return bars
-        except Exception:
-            logger.debug(f"OpenBB unavailable for {symbol}, falling back to Binance")
-
-        # Fallback to binance_service
-        klines = await binance_service.get_klines(
-            symbol, timeframe=interval, limit=2
-        )
-        if not klines:
-            return []
-
-        bars = []
-        for k in klines:
-            bars.append(
-                BarData(
-                    symbol=symbol,
-                    instrument_id=symbol,
-                    exchange="binance",
-                    provider="binance",
-                    source_version="ccxt",
-                    schema_version="bar.v1",
-                    datetime=k.timestamp,
-                    event_time=k.timestamp,
-                    available_time=datetime.utcnow(),
-                    open=k.open,
-                    high=k.high,
-                    low=k.low,
-                    close=k.close,
-                    volume=k.volume,
-                    interval=interval,
-                    timeframe=interval,
-                )
+        """Fetch latest bars through the PRD market data gateway."""
+        klines = await market_data_gateway.get_klines(symbol, interval=interval, limit=2)
+        return [
+            k.to_bar_data(
+                symbol=symbol,
+                interval=interval,
+                provider="market_data_gateway",
+                exchange="openbb_or_local",
+                source_version="gateway",
+                available_time=datetime.utcnow(),
             )
-        return bars
+            for k in klines
+        ]
 
     async def subscribe(self, symbols: List[str], interval: str, callback: Callable):
         self.running = True

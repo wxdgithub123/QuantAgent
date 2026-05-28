@@ -2,10 +2,49 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import math
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursively convert numpy/pandas/DB values into JSON-safe primitives."""
+    if value is None:
+        return None
+    try:
+        if value != value:
+            return None
+    except Exception:
+        pass
+    try:
+        import pandas as pd
+
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    if hasattr(value, "tolist"):
+        return _json_safe(value.tolist())
+    if hasattr(value, "item"):
+        try:
+            return _json_safe(value.item())
+        except Exception:
+            pass
+    return str(value)
 
 
 class AnalysisContext(BaseModel):
@@ -27,4 +66,4 @@ class AnalysisContext(BaseModel):
 
     def to_agent_payload(self) -> Dict[str, Any]:
         """Return a plain dict suitable for TradingAgents/CoordinatorAgent."""
-        return self.model_dump(mode="json")
+        return _json_safe(self.model_dump(mode="python"))
