@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import dynamic from "next/dynamic";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Prd104StatusPanel } from "@/components/prd/Prd104StatusPanel";
 
 const TradingViewChart = dynamic(
   () => import("@/components/charts/TradingViewChart").then((mod) => mod.TradingViewChart),
@@ -982,6 +983,8 @@ export default function DashboardPage() {
 
       {/* ── Main ── */}
       <main className="container mx-auto px-4 py-6">
+        <Prd104StatusPanel className="mb-6" />
+
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <Card className="bg-card border-border hover:border-blue-500/30 transition-all">

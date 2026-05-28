@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Prd104StatusPanel } from "@/components/prd/Prd104StatusPanel";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -170,6 +171,8 @@ export default function DecisionsPage() {
         {error && (
           <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-xs">{error}</div>
         )}
+
+        <Prd104StatusPanel className="mb-6" />
 
         <Card className="mb-6 overflow-hidden border-pink-500/20 bg-gradient-to-br from-pink-500/10 via-card to-cyan-500/10">
           <CardContent className="p-4">
