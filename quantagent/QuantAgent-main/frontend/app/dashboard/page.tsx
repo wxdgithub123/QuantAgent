@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import dynamic from "next/dynamic";
@@ -16,6 +17,8 @@ const TradingViewChart = dynamic(
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   TrendingUp, TrendingDown, Activity, BarChart3, Settings,
   DollarSign, BarChart2, RefreshCw, WifiOff,
@@ -56,10 +59,14 @@ interface RiskStatus {
 }
 
 interface ComparisonData {
-  binance_price: number | null;
-  coingecko_price: number | null;
+  gateway_price: number | null;
+  exchange_price: number | null;
+  exchange_label: string;
+  exchange_source: string;
   price_diff: number | null;
   price_diff_percent: number | null;
+  status: "ok" | "unavailable";
+  error?: string;
 }
 
 interface TrendingCoinItem {
@@ -86,6 +93,14 @@ const getWsUrl = () => {
   return `${protocol}//${window.location.host}/ws/market`;
 };
 
+const toFiniteNumber = (value: unknown, fallback = 0) => {
+  const numberValue = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numberValue) ? numberValue : fallback;
+};
+
+const hasFiniteNumber = (value: unknown): value is number =>
+  value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+
 type AnalysisCache = Record<string, { result: string; timestamp: number; outputContent?: string; thinkingContent?: string }>;
 type CooldownTracker = Record<string, number>;
 
@@ -95,6 +110,31 @@ const AGENT_STRATEGY_MAP: Record<string, { strategy_type: string; params: Record
   mean_reversion: { strategy_type: "boll", params: { period: 20, std_dev: 2.0 },          interval: "1d", limit: 200 },
   risk:           { strategy_type: "rsi",  params: { period: 14, oversold: 30, overbought: 70 }, interval: "1d", limit: 200 },
 };
+
+const PRIMARY_NAV_LINKS = [
+  { href: "/dashboard", label: "仪表盘", icon: BarChart3, active: true },
+  { href: "/data-sources", label: "数据源", icon: Database },
+  { href: "/trades", label: "交易流水", icon: Activity },
+  { href: "/analytics", label: "性能分析", icon: BarChart },
+  { href: "/backtest", label: "回测", icon: History },
+];
+
+const MORE_NAV_LINKS = [
+  { href: "/replay", label: "历史回放", icon: History },
+  { href: "/terminal", label: "终端", icon: Server },
+  { href: "/hummingbot", label: "Hummingbot", icon: Server },
+  { href: "/hummingbot-testnet", label: "Testnet", icon: Server },
+  { href: "/signals", label: "因子/信号", icon: Layers },
+  { href: "/decisions", label: "决策中心", icon: Brain },
+  { href: "/audit", label: "回测与审计", icon: Shield },
+];
+
+const DASHBOARD_TABS = [
+  { value: "overview", label: "总览", icon: BarChart3 },
+  { value: "diagnostics", label: "诊断", icon: Database },
+  { value: "positions", label: "持仓", icon: Activity },
+  { value: "agents", label: "智能体", icon: Brain },
+];
 
 // ─── Order Panel ───────────────────────────────────────────────────────────
 interface OrderPanelProps {
@@ -127,7 +167,7 @@ function OrderPanel({ symbol, exchangeId, currentPrice, onClose, onOrderPlaced }
       });
       const data = await res.json();
       if (!res.ok) { setError(data.detail || "下单失败"); return; }
-      setSuccess(`${side} ${qty} ${symbol} @ $${data.price?.toFixed(2)} ✓`);
+      setSuccess(`${side} ${qty} ${symbol} @ $${toFiniteNumber(data.price, currentPrice ?? 0).toFixed(2)} ✓`);
       onOrderPlaced();
     } catch {
       setError("网络错误，请检查后端连接");
@@ -251,10 +291,13 @@ function OrderPanel({ symbol, exchangeId, currentPrice, onClose, onOrderPlaced }
 
 // ─── Main Dashboard ─────────────────────────────────────────────────────────
 export default function DashboardPage() {
+  const searchParams = useSearchParams();
+  const requestedTab = searchParams.get("tab") || "overview";
+  const initialDashboardTab = DASHBOARD_TABS.some((tab) => tab.value === requestedTab) ? requestedTab : "overview";
   const [ticker, setTicker] = useState<Ticker | null>(null);
   const [currentSymbol, setCurrentSymbol] = useState("BTCUSDT");
   const [currentInterval, setCurrentInterval] = useState("1h");
-  const [currentExchange, setCurrentExchange] = useState("binance");
+  const [currentExchange, setCurrentExchange] = useState("okx");
   const [wsStatus, setWsStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
 
   // Paper trading state
@@ -269,6 +312,7 @@ export default function DashboardPage() {
   const [comparisonData, setComparisonData] = useState<ComparisonData | null>(null);
   const [loadingComparison, setLoadingComparison] = useState(false);
   const [trendingCoins, setTrendingCoins] = useState<TrendingCoin[]>([]);
+  const [trendingStatus, setTrendingStatus] = useState<"loading" | "ok" | "unavailable">("loading");
 
   // Hummingbot status
   const [hummingbotStatus, setHummingbotStatus] = useState<{ connected: boolean; apiUrl: string; version: string; timestamp: string } | null>(null);
@@ -301,53 +345,83 @@ export default function DashboardPage() {
   useEffect(() => { fetchMacroNews(); }, [fetchMacroNews]);
 
   useEffect(() => {
-    // Fetch trending coins
+    let cancelled = false;
+    setTrendingStatus("loading");
+
     fetch("/api/v1/market/coingecko/trending")
-      .then(r => r.json())
-      .then(d => setTrendingCoins(d.trending || []))
+      .then(r => {
+        if (!r.ok) throw new Error(`CoinGecko trending failed: ${r.status}`);
+        return r.json();
+      })
+      .then(d => {
+        if (cancelled) return;
+        const trending = Array.isArray(d.trending) ? d.trending : [];
+        setTrendingCoins(trending);
+        setTrendingStatus(trending.length > 0 ? "ok" : "unavailable");
+      })
       .catch(() => {
-        // Mock if failed
-        setTrendingCoins([
-          { item: { id: "bitcoin", symbol: "BTC", name: "Bitcoin", thumb: "https://coin-images.coingecko.com/coins/images/1/thumb/bitcoin.png", market_cap_rank: 1, price_btc: 1.0 } },
-          { item: { id: "ethereum", symbol: "ETH", name: "Ethereum", thumb: "https://coin-images.coingecko.com/coins/images/279/thumb/ethereum.png", market_cap_rank: 2, price_btc: 0.05 } },
-          { item: { id: "solana", symbol: "SOL", name: "Solana", thumb: "https://coin-images.coingecko.com/coins/images/4128/thumb/solana.png", market_cap_rank: 5, price_btc: 0.002 } },
-        ]);
+        if (cancelled) return;
+        setTrendingCoins([]);
+        setTrendingStatus("unavailable");
       });
+
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
     if (!currentSymbol) return;
     setLoadingComparison(true);
 
-    // 从选择的交易所获取价格对比
+    const selectedExchange = currentExchange;
+    const selectedExchangeLabel = selectedExchange.toUpperCase();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
+    // 交易所报价只显示真实请求结果，不做模拟 fallback，避免误导。
     const fetchPriceFromExchange = async (exchangeId: string) => {
       try {
-        const res = await fetch(`/api/v1/market/${exchangeId}/price/${currentSymbol}`);
+        const res = await fetch(`/api/v1/market/${exchangeId}/price/${currentSymbol}`, { signal: controller.signal });
         if (res.ok) {
           const data = await res.json();
-          return data.price;
+          return { price: hasFiniteNumber(data.price) ? toFiniteNumber(data.price) : null, error: undefined };
         }
-      } catch { /* ignore */ }
-      return null;
+        const data = await res.json().catch(() => null);
+        const detail = typeof data?.detail === "string" ? data.detail : `${selectedExchangeLabel} 实时报价暂不可用`;
+        return { price: null, error: detail };
+      } catch (error) {
+        const message = error instanceof DOMException && error.name === "AbortError"
+          ? `${selectedExchangeLabel} 实时报价请求超时`
+          : `${selectedExchangeLabel} 实时报价暂不可用`;
+        return { price: null, error: message };
+      }
     };
 
-    // 获取多个交易所的价格
-    Promise.all([
-      fetchPriceFromExchange("binance"),
-      fetchPriceFromExchange("okx"),
-    ]).then(([binancePrice, okxPrice]) => {
-      const bPrice = binancePrice || (ticker ? ticker.price : 67154.98);
-      const oPrice = okxPrice || (bPrice * 0.9999);
-      const diff = Math.abs(bPrice - oPrice);
-      const diffPct = (diff / ((bPrice + oPrice) / 2)) * 100;
+    fetchPriceFromExchange(selectedExchange).then(({ price: exchangePrice, error: exchangeError }) => {
+      const gatewayPrice = hasFiniteNumber(ticker?.price) ? toFiniteNumber(ticker?.price) : null;
+      const hasBothPrices = hasFiniteNumber(gatewayPrice) && hasFiniteNumber(exchangePrice);
+      const diff = hasBothPrices ? Math.abs(toFiniteNumber(gatewayPrice) - toFiniteNumber(exchangePrice)) : null;
+      const avg = hasBothPrices ? (toFiniteNumber(gatewayPrice) + toFiniteNumber(exchangePrice)) / 2 : 0;
+      const diffPct = diff !== null && avg > 0 ? (diff / avg) * 100 : null;
 
       setComparisonData({
-        binance_price: bPrice,
-        coingecko_price: oPrice,
+        gateway_price: gatewayPrice,
+        exchange_price: exchangePrice,
+        exchange_label: selectedExchangeLabel,
+        exchange_source: `CCXT/${selectedExchangeLabel}`,
         price_diff: diff,
-        price_diff_percent: diffPct
+        price_diff_percent: diffPct,
+        status: exchangePrice !== null ? "ok" : "unavailable",
+        error: exchangePrice === null ? exchangeError : undefined,
       });
-    }).finally(() => setLoadingComparison(false));
+    }).finally(() => {
+      clearTimeout(timeout);
+      setLoadingComparison(false);
+    });
+
+    return () => {
+      clearTimeout(timeout);
+      controller.abort();
+    };
   }, [currentSymbol, currentExchange, ticker]);
 
   // Cooldown & Cache refs
@@ -373,19 +447,14 @@ export default function DashboardPage() {
   const symbols = [
     { value: "BTCUSDT", label: "BTC/USDT" }, { value: "ETHUSDT", label: "ETH/USDT" },
     { value: "SOLUSDT", label: "SOL/USDT" }, { value: "BNBUSDT", label: "BNB/USDT" },
-    { value: "DOGEUSDT", label: "DOGE/USDT" }, { value: "XRPUSDT", label: "XRP/USDT" },
+    { value: "DOGEUSDT", label: "DOGE/USDT" },
   ];
 
-  // 支持的交易所列表
+  // 只展示当前项目已经实际出现/验收过的数据执行场所，避免把“库支持”误认为“已接入”。
   const exchanges = [
-    { value: "binance", label: "币安" },
-    { value: "okx", label: "OKX" },
-    { value: "bybit", label: "Bybit" },
-    { value: "gateio", label: "Gate.io" },
-    { value: "bitget", label: "Bitget" },
-    { value: "coinbase", label: "Coinbase" },
-    { value: "kraken", label: "Kraken" },
+    { value: "okx", label: "OKX", detail: "CCXT/OKX 实时报价 + 模拟交易执行场所" },
   ];
+  const currentExchangeInfo = exchanges.find(ex => ex.value === currentExchange) ?? exchanges[0];
 
   const intervals = [
     { value: "1m", label: "1分钟" }, { value: "5m", label: "5分钟" },
@@ -397,11 +466,24 @@ export default function DashboardPage() {
     { value: "ollama", label: "Ollama (Local)" },
   ];
 
+  const handleSymbolChange = useCallback((symbol: string) => {
+    setCurrentSymbol(symbol);
+    setTicker(null);
+    setComparisonData(null);
+    lastTickerRef.current = null;
+  }, []);
+
   // ── Fetch balance & positions ──────────────────────────────────────────────
   const fetchBalance = useCallback(async () => {
     try {
       const res = await fetch("/api/v1/trading/balance");
-      if (res.ok) setBalance(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        setBalance({
+          total_balance: toFiniteNumber(data.total_balance),
+          available_balance: toFiniteNumber(data.available_balance),
+        });
+      }
     } catch { /* ignore */ }
   }, []);
 
@@ -589,14 +671,15 @@ export default function DashboardPage() {
         try {
           const msg = JSON.parse(ev.data);
           if (msg.type === "ticker") {
+            const previousTicker = lastTickerRef.current;
             const tickerData = {
-              symbol:         msg.symbol,
-              price:          msg.price,
-              change_24h:     msg.change_24h,
-              change_percent: msg.change_percent || msg.change_pct,
-              volume:         msg.volume,
-              high_24h:       msg.high_24h,
-              low_24h:        msg.low_24h,
+              symbol:         typeof msg.symbol === "string" ? msg.symbol : currentSymbol,
+              price:          toFiniteNumber(msg.price, previousTicker?.price ?? 0),
+              change_24h:     toFiniteNumber(msg.change_24h, previousTicker?.change_24h ?? 0),
+              change_percent: toFiniteNumber(msg.change_percent ?? msg.change_pct, previousTicker?.change_percent ?? 0),
+              volume:         toFiniteNumber(msg.volume, previousTicker?.volume ?? 0),
+              high_24h:       hasFiniteNumber(msg.high_24h) ? toFiniteNumber(msg.high_24h) : previousTicker?.high_24h,
+              low_24h:        hasFiniteNumber(msg.low_24h) ? toFiniteNumber(msg.low_24h) : previousTicker?.low_24h,
             };
             lastTickerRef.current = tickerData;
             setTicker(tickerData);
@@ -685,10 +768,10 @@ export default function DashboardPage() {
           if (res.ok) {
             const data = await res.json();
             const winRate = data.metrics?.win_rate;
-            if (winRate !== undefined) {
+            if (hasFiniteNumber(winRate)) {
               setAgents(p => p.map(a =>
                 a.id === agentId
-                  ? { ...a, winRate: `${winRate.toFixed(1)}%`, winRateLoading: false }
+                  ? { ...a, winRate: `${toFiniteNumber(winRate).toFixed(1)}%`, winRateLoading: false }
                   : a
               ));
             } else {
@@ -874,8 +957,8 @@ export default function DashboardPage() {
     fetchBalance();
   };
 
-  const formatCurrency = (v: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(v);
-  const formatNumber   = (v: number) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(v);
+  const formatCurrency = (v: unknown) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(toFiniteNumber(v));
+  const formatNumber   = (v: unknown) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(toFiniteNumber(v));
 
   return (
     <div className="min-h-screen bg-background">
@@ -893,36 +976,53 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <nav className="hidden md:flex items-center gap-1">
-              <Link href="/dashboard" className="px-3 py-1.5 text-sm text-blue-400 bg-blue-500/10 rounded-lg border border-blue-500/20 font-medium">
-                仪表盘
-              </Link>
-              <Link href="/trades" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-                <Activity className="w-4 h-4" /> 交易流水
-              </Link>
-              <Link href="/analytics" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-                <BarChart className="w-4 h-4" /> 性能分析
-              </Link>
-              <Link href="/backtest" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-                回测
-              </Link>
-              <Link href="/replay" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-                <History className="w-4 h-4" /> 历史回放
-              </Link>
-              <Link href="/terminal" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-                终端
-              </Link>
-              <Link href="/data-sources" className="px-3 py-1.5 text-sm text-emerald-400 hover:text-emerald-100 hover:bg-emerald-500/10 rounded-lg transition-all flex items-center gap-1.5">
-                <Database className="w-4 h-4" /> 数据源
-              </Link>
-              <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
-                <Server className="w-4 h-4" /> Hummingbot
-              </Link>
-              <Link href="/hummingbot-testnet" className="px-3 py-1.5 text-sm text-orange-400 hover:text-orange-100 hover:bg-orange-500/10 rounded-lg transition-all flex items-center gap-1.5">
-                <Server className="w-4 h-4" /> Testnet
-              </Link>
-              <Link href="/signals" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Layers className="w-4 h-4" /> 因子/信号</Link>
-              <Link href="/decisions" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Brain className="w-4 h-4" /> 决策中心</Link>
+            <nav className="hidden md:flex min-w-0 flex-1 items-center justify-center gap-1 overflow-hidden">
+              {PRIMARY_NAV_LINKS.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm whitespace-nowrap transition-all ${
+                      item.active
+                        ? "border border-blue-500/20 bg-blue-500/10 text-blue-400 font-medium"
+                        : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                    }`}
+                  >
+                    <Icon className="w-4 h-4" />
+                    {item.label}
+                  </Link>
+                );
+              })}
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 shrink-0 gap-1.5 border-border bg-secondary/40 px-3 text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    <ChevronDown className="w-3.5 h-3.5" />
+                    更多
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" sideOffset={8} className="w-64 border-border bg-card p-2">
+                  <div className="grid gap-1">
+                    {MORE_NAV_LINKS.map((item) => {
+                      const Icon = item.icon;
+                      return (
+                        <Link
+                          key={item.href}
+                          href={item.href}
+                          className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                        >
+                          <Icon className="h-4 w-4" />
+                          {item.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </PopoverContent>
+              </Popover>
             </nav>
 
             <div className="flex items-center gap-3">
@@ -931,27 +1031,34 @@ export default function DashboardPage() {
                 <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-secondary rounded-lg border border-border">
                   <Wallet className="w-3.5 h-3.5 text-green-400" />
                   <span className="text-green-400 text-xs font-mono font-bold">
-                    ${balance.total_balance.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    ${toFiniteNumber(balance.total_balance).toLocaleString(undefined, { maximumFractionDigits: 2 })}
                   </span>
                 </div>
               )}
 
-              {/* Exchange Selector */}
-              <Select value={currentExchange} onValueChange={setCurrentExchange}>
-                <SelectTrigger className="w-[110px] bg-secondary border-border text-foreground h-8 text-sm">
-                  <SelectValue placeholder="交易所" />
-                </SelectTrigger>
-                <SelectContent className="bg-secondary border-border">
-                  {exchanges.map(ex => (
-                    <SelectItem key={ex.value} value={ex.value} className="text-foreground focus:bg-secondary focus:text-foreground cursor-pointer">
-                      {ex.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* Execution venue. This is not the K-line source selector. */}
+              {exchanges.length > 1 ? (
+                <Select value={currentExchange} onValueChange={setCurrentExchange}>
+                  <SelectTrigger className="w-[150px] bg-secondary border-border text-foreground h-8 text-sm">
+                    <SelectValue placeholder="执行场所" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-secondary border-border">
+                    {exchanges.map(ex => (
+                      <SelectItem key={ex.value} value={ex.value} className="text-foreground focus:bg-secondary focus:text-foreground cursor-pointer">
+                        {ex.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <div className="hidden sm:flex h-8 items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 text-xs text-emerald-200" title={currentExchangeInfo.detail}>
+                  <Server className="h-3.5 w-3.5" />
+                  执行场所: {currentExchangeInfo.label}
+                </div>
+              )}
 
               {/* Symbol Selector */}
-              <Select key="symbol-select" value={currentSymbol} onValueChange={setCurrentSymbol}>
+              <Select key="symbol-select" value={currentSymbol} onValueChange={handleSymbolChange}>
                 <SelectTrigger className="w-[140px] bg-secondary border-border text-foreground h-8 text-sm">
                   <SelectValue placeholder="选择币种" />
                 </SelectTrigger>
@@ -987,8 +1094,55 @@ export default function DashboardPage() {
 
       {/* ── Main ── */}
       <main className="container mx-auto px-4 py-6">
-        <Prd104StatusPanel className="mb-6" />
-        <PrdV1FlowPanel className="mb-6" />
+        <section className="mb-6 overflow-hidden rounded-3xl border border-border/70 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-5 shadow-2xl shadow-black/20">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+            <div className="max-w-3xl">
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <Badge className="bg-cyan-500/15 text-cyan-200 border border-cyan-500/20">加密优先</Badge>
+                <Badge variant="outline" className="border-emerald-500/25 bg-emerald-500/10 text-emerald-300">OpenBB + CCXT</Badge>
+                <Badge variant="outline" className="border-border bg-background/40 text-muted-foreground">Ollama 本地智能体</Badge>
+              </div>
+              <h2 className="text-2xl font-bold tracking-tight text-foreground md:text-3xl">
+                交易总览
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                首页优先展示行情、K 线、风控和下单动作；数据源、PRD 检查、Hummingbot 与 Agent 细节放到下方分区里看。
+              </p>
+            </div>
+            <div className="grid min-w-[280px] grid-cols-2 gap-3 text-sm">
+              <div className="rounded-2xl border border-border/70 bg-background/35 p-3">
+                <p className="text-[11px] uppercase tracking-wider text-muted-foreground">模拟执行场所</p>
+                <p className="mt-1 font-semibold text-foreground">{currentExchangeInfo.label}</p>
+                <p className="mt-1 text-[10px] text-muted-foreground">{currentExchangeInfo.detail}</p>
+              </div>
+              <div className="rounded-2xl border border-border/70 bg-background/35 p-3">
+                <p className="text-[11px] uppercase tracking-wider text-muted-foreground">交易对</p>
+                <p className="mt-1 font-semibold text-foreground">{symbols.find(s => s.value === currentSymbol)?.label || currentSymbol}</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <Tabs defaultValue={initialDashboardTab} className="space-y-6">
+          <div className="sticky top-[65px] z-30 -mx-4 border-y border-border/60 bg-background/85 px-4 py-3 backdrop-blur md:static md:mx-0 md:rounded-2xl md:border md:bg-card/55">
+            <TabsList className="flex h-auto w-full flex-wrap justify-start gap-2 rounded-xl border border-border/60 bg-background/40 p-1">
+              {DASHBOARD_TABS.map((tab) => {
+                const Icon = tab.icon;
+                return (
+                  <TabsTrigger
+                    key={tab.value}
+                    value={tab.value}
+                    className="h-9 flex-1 gap-2 rounded-lg text-xs text-muted-foreground data-[state=active]:bg-blue-500/15 data-[state=active]:text-blue-300 sm:flex-none"
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    {tab.label}
+                  </TabsTrigger>
+                );
+              })}
+            </TabsList>
+          </div>
+
+          <TabsContent value="overview" className="mt-0 space-y-6">
 
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
@@ -1014,7 +1168,7 @@ export default function DashboardPage() {
                 <div>
                   <p className="text-xs text-muted-foreground uppercase tracking-wider">24h 涨跌幅</p>
                   <p className={`text-2xl font-bold mt-1 ${(ticker?.change_percent ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
-                    {ticker ? `${ticker.change_percent >= 0 ? "+" : ""}${ticker.change_percent.toFixed(2)}%` : "—"}
+                    {ticker ? `${toFiniteNumber(ticker.change_percent) >= 0 ? "+" : ""}${toFiniteNumber(ticker.change_percent).toFixed(2)}%` : "—"}
                   </p>
                 </div>
                 <div className={`w-12 h-12 rounded-xl flex items-center justify-center border ${(ticker?.change_percent ?? 0) >= 0 ? "bg-green-500/10 border-green-500/20" : "bg-red-500/10 border-red-500/20"}`}>
@@ -1024,7 +1178,7 @@ export default function DashboardPage() {
                 </div>
               </div>
               <p className={`text-xs mt-2 ${(ticker?.change_24h ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
-                {ticker ? `${ticker.change_24h >= 0 ? "+" : ""}${formatNumber(ticker.change_24h)}` : ""}
+                {ticker ? `${toFiniteNumber(ticker.change_24h) >= 0 ? "+" : ""}${formatNumber(ticker.change_24h)}` : ""}
               </p>
             </CardContent>
           </Card>
@@ -1052,7 +1206,7 @@ export default function DashboardPage() {
                 <div>
                   <p className="text-xs text-muted-foreground uppercase tracking-wider">模拟账户</p>
                   <p className="text-2xl font-bold text-foreground mt-1">
-                    {balance ? `$${(balance.total_balance / 1000).toFixed(1)}K` : "—"}
+                    {balance ? `$${(toFiniteNumber(balance.total_balance) / 1000).toFixed(1)}K` : "—"}
                   </p>
                 </div>
                 <div className="w-12 h-12 bg-orange-500/10 rounded-xl flex items-center justify-center border border-orange-500/20">
@@ -1070,14 +1224,14 @@ export default function DashboardPage() {
              <div className={`p-3 rounded-xl border ${riskStatus.kill_switch_active ? 'bg-red-500/20 border-red-500 text-red-400' : 'bg-green-500/10 border-green-500/20 text-green-400'} flex items-center gap-3`}>
                 <Shield className="w-5 h-5" />
                 <div>
-                   <p className="text-[10px] uppercase font-bold">Kill Switch</p>
-                   <p className="text-sm font-bold">{riskStatus.kill_switch_active ? "ACTIVATED" : "SAFE"}</p>
+                   <p className="text-[10px] uppercase font-bold">紧急开关</p>
+                   <p className="text-sm font-bold">{riskStatus.kill_switch_active ? "已触发" : "安全"}</p>
                 </div>
              </div>
              <div className="p-3 bg-card/50 rounded-xl border border-border/50 flex items-center gap-3">
                 <Activity className="w-5 h-5 text-blue-400" />
                 <div>
-                   <p className="text-[10px] text-muted-foreground uppercase">Drawdown</p>
+                   <p className="text-[10px] text-muted-foreground uppercase">回撤</p>
                    <p className={`text-sm font-bold ${riskStatus.drawdown_breached ? 'text-red-400' : 'text-foreground/90'}`}>
                       {riskStatus.total_drawdown_pct}% <span className="text-[9px] text-muted-foreground">/ {riskStatus.drawdown_limit_pct}%</span>
                    </p>
@@ -1086,21 +1240,26 @@ export default function DashboardPage() {
              <div className="p-3 bg-card/50 rounded-xl border border-border/50 flex items-center gap-3">
                 <BarChart2 className="w-5 h-5 text-purple-400" />
                 <div>
-                   <p className="text-[10px] text-muted-foreground uppercase">Daily Loss</p>
+                   <p className="text-[10px] text-muted-foreground uppercase">日内亏损</p>
                    <p className={`text-sm font-bold ${riskStatus.daily_loss_breached ? 'text-red-400' : 'text-foreground/90'}`}>
-                      ${riskStatus.daily_pnl} <span className="text-[9px] text-muted-foreground">Limit: {riskStatus.daily_loss_limit_pct}%</span>
+                      ${riskStatus.daily_pnl} <span className="text-[9px] text-muted-foreground">上限: {riskStatus.daily_loss_limit_pct}%</span>
                    </p>
                 </div>
              </div>
              <div className="p-3 bg-card/50 rounded-xl border border-border/50 flex items-center gap-3">
                 <Zap className="w-5 h-5 text-yellow-400" />
                 <div>
-                   <p className="text-[10px] text-muted-foreground uppercase">Leverage Limit</p>
+                   <p className="text-[10px] text-muted-foreground uppercase">杠杆上限</p>
                    <p className="text-sm font-bold text-foreground/90">{riskStatus.max_leverage}x</p>
                 </div>
              </div>
           </div>
         )}
+          </TabsContent>
+
+          <TabsContent value="diagnostics" className="mt-0 space-y-6">
+            <Prd104StatusPanel />
+            <PrdV1FlowPanel />
 
         {/* Hummingbot Status Card */}
         <Card className="bg-gradient-to-br bg-card border-cyan-700/30 mb-6">
@@ -1153,7 +1312,7 @@ export default function DashboardPage() {
 
               {/* Connectors */}
               <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
-                <p className="text-[10px] text-muted-foreground uppercase mb-1">Connectors</p>
+                <p className="text-[10px] text-muted-foreground uppercase mb-1">连接器</p>
                 <p className={`text-sm font-semibold ${hummingbotConnectors?.connected ? "text-cyan-400" : "text-muted-foreground"}`}>
                   {hummingbotConnectors?.connected ? hummingbotConnectors.count : "—"}
                 </p>
@@ -1162,7 +1321,7 @@ export default function DashboardPage() {
 
               {/* Bots */}
               <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
-                <p className="text-[10px] text-muted-foreground uppercase mb-1">Bots</p>
+                <p className="text-[10px] text-muted-foreground uppercase mb-1">机器人</p>
                 <p className={`text-sm font-semibold ${hummingbotBots?.count && hummingbotBots.count > 0 ? "text-green-400" : "text-muted-foreground"}`}>
                   {hummingbotBots?.count ?? "—"}
                 </p>
@@ -1223,36 +1382,44 @@ export default function DashboardPage() {
             </div>
           </CardContent>
         </Card>
+          </TabsContent>
 
-        {/* Price Comparison */}
+          <TabsContent value="overview" className="mt-0 space-y-6">
+
+        {/* Real source comparison */}
         <Card className="bg-card border-border mb-6">
             <CardContent className="p-4 flex flex-wrap items-center justify-between gap-4 text-sm">
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-bold uppercase">Price Comparison ({currentSymbol})</span>
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground font-bold uppercase">真实来源对照 ({currentSymbol})</span>
                 {loadingComparison && <RefreshCw className="w-3 h-3 animate-spin text-muted-foreground" />}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  K 线来源看图表右上角标签；执行场所只影响下单、持仓、风控和交易所实时报价。
+                </p>
               </div>
               
               {comparisonData ? (
                 <div className="flex items-center gap-6">
                   <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
-                    <span className="text-muted-foreground text-xs uppercase">Binance</span>
+                    <span className="text-muted-foreground text-xs uppercase">行情网关</span>
                     <span className="font-mono text-foreground/90 font-bold">
-                      ${comparisonData.binance_price ? formatNumber(comparisonData.binance_price) : "—"}
+                      {hasFiniteNumber(comparisonData.gateway_price) ? `$${formatNumber(comparisonData.gateway_price)}` : "—"}
                     </span>
                   </div>
                   <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
-                    <span className="text-muted-foreground text-xs uppercase">CoinGecko</span>
-                    <span className="font-mono text-foreground/90 font-bold">
-                      ${comparisonData.coingecko_price ? formatNumber(comparisonData.coingecko_price) : "—"}
+                    <span className="text-muted-foreground text-xs uppercase">{comparisonData.exchange_source}</span>
+                    <span className={`font-mono font-bold ${comparisonData.status === "ok" ? "text-foreground/90" : "text-amber-300"}`}>
+                      {hasFiniteNumber(comparisonData.exchange_price) ? `$${formatNumber(comparisonData.exchange_price)}` : "暂不可用"}
                     </span>
                   </div>
                   <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 pl-4 border-l border-border">
-                    <span className="text-muted-foreground text-xs uppercase">Spread</span>
-                    <span className={`font-mono font-bold ${(comparisonData.price_diff ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
-                      {(comparisonData.price_diff ?? 0) >= 0 ? "+" : ""}{comparisonData.price_diff ? formatNumber(comparisonData.price_diff) : "0.00"}
+                    <span className="text-muted-foreground text-xs uppercase">价差</span>
+                    <span className="font-mono font-bold text-foreground/90">
+                      {hasFiniteNumber(comparisonData.price_diff) ? formatNumber(comparisonData.price_diff) : "—"}
                     </span>
-                    <span className={`text-xs ${(comparisonData.price_diff_percent ?? 0) >= 0 ? "text-green-400/70" : "text-red-400/70"}`}>
-                      ({(comparisonData.price_diff_percent ?? 0).toFixed(4)}%)
+                    <span className="text-xs text-muted-foreground">
+                      {hasFiniteNumber(comparisonData.price_diff_percent) ? `(${toFiniteNumber(comparisonData.price_diff_percent).toFixed(4)}%)` : comparisonData.error || "等待真实报价"}
                     </span>
                   </div>
                 </div>
@@ -1280,14 +1447,28 @@ export default function DashboardPage() {
         </div>
 
         {/* Trending Coins */}
-        {trendingCoins.length > 0 && (
-          <div className="mb-6">
-            <h3 className="text-sm font-bold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
-              <TrendingUp className="w-4 h-4" /> Trending Coins (CoinGecko)
-            </h3>
+        <div className="mb-6 rounded-2xl border border-border/70 bg-card/70 p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="flex items-center gap-2 text-sm font-bold text-foreground">
+                <TrendingUp className="w-4 h-4 text-cyan-400" /> 热门币种（CoinGecko）
+              </h3>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                来源：CoinGecko Trending API；这是热门搜索/趋势列表，不是 OpenBB、CCXT 或 K 线来源，也不代表交易建议。
+              </p>
+            </div>
+            <Badge variant="outline" className="border-cyan-500/20 bg-cyan-500/10 text-cyan-300">
+              coingecko:trending
+            </Badge>
+          </div>
+          {trendingStatus === "loading" ? (
+            <div className="flex items-center gap-2 rounded-xl border border-border/50 bg-secondary/30 p-3 text-xs text-muted-foreground">
+              <RefreshCw className="h-3.5 w-3.5 animate-spin" /> 正在获取 CoinGecko 热门币种...
+            </div>
+          ) : trendingCoins.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
               {trendingCoins.slice(0, 4).map((coin, idx) => (
-                <div key={idx} className="flex items-center gap-3 p-3 bg-card/50 rounded-xl border border-border/50 hover:border-border transition-all">
+                <div key={coin.item.id || idx} className="flex items-center gap-3 p-3 bg-card/50 rounded-xl border border-border/50 hover:border-border transition-all">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={coin.item.thumb} alt={coin.item.name} width={32} height={32} className="rounded-full" loading="lazy" />
                   <div>
@@ -1297,9 +1478,15 @@ export default function DashboardPage() {
                 </div>
               ))}
             </div>
-          </div>
-        )}
+          ) : (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-200">
+              CoinGecko Trending 暂不可用，页面不会用 BTC/ETH/SOL 这类假数据补位。
+            </div>
+          )}
+        </div>
+          </TabsContent>
 
+          <TabsContent value="positions" className="mt-0 space-y-6">
         <div className="space-y-6">
           {/* ── Positions ── */}
           <Card className="bg-card border-border/50">
@@ -1396,7 +1583,11 @@ export default function DashboardPage() {
               )}
             </CardContent>
           </Card>
+        </div>
+          </TabsContent>
 
+          <TabsContent value="agents" className="mt-0 space-y-6">
+        <div className="space-y-6">
           {/* ── AI Agents ── */}
           <Card className="bg-card border-border/50">
             <CardHeader className="pb-4">
@@ -1404,9 +1595,12 @@ export default function DashboardPage() {
                 <div className="w-8 h-8 bg-purple-500/10 rounded-lg flex items-center justify-center border border-purple-500/20">
                   <Brain className="w-4 h-4 text-purple-400" />
                 </div>
-                AI Agent 状态
+                子分析 Agent 状态
                 <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse ml-1" />
               </CardTitle>
+              <p className="mt-2 text-xs text-muted-foreground">
+                默认最终决策由 TradingAgents 生成；这里的趋势、均值回归和风险 Agent 主要用于生成子观点、信号和人工排查，不再作为最终拍板引擎。
+              </p>
             </CardHeader>
             <CardContent className="pt-0">
               {ollamaStatus.checked && !ollamaStatus.online && agents.some(a => a.provider === "ollama") && (
@@ -1551,7 +1745,9 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
         </div>
+          </TabsContent>
 
+          <TabsContent value="overview" className="mt-0 space-y-6">
         {/* ── Macro & News ── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-4">
           <Card className="lg:col-span-1 bg-card border-border">
@@ -1580,7 +1776,7 @@ export default function DashboardPage() {
                   <div key={k} className="flex justify-between py-1.5 border-b border-border/50 last:border-0">
                     <span className="text-xs text-muted-foreground">{i} {l}</span>
                     <span className="text-xs font-mono font-bold">
-                      {v != null ? `${v.toFixed(2)}${u}` : <span className="text-muted-foreground/50">—</span>}
+                      {hasFiniteNumber(v) ? `${toFiniteNumber(v).toFixed(2)}${u}` : <span className="text-muted-foreground/50">—</span>}
                     </span>
                   </div>
                 );
@@ -1619,6 +1815,8 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
         </div>
+          </TabsContent>
+        </Tabs>
       </main>
 
       {/* ── Order Panel Modal ── */}

@@ -3,7 +3,7 @@ Market Data Models
 """
 
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 
@@ -82,6 +82,7 @@ class KlineResponse(BaseModel):
     interval: str
     data: List[KlineData]
     source: str
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class SymbolInfo(BaseModel):

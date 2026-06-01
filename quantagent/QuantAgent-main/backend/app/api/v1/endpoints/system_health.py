@@ -46,6 +46,21 @@ async def get_system_health() -> Dict[str, Any]:
     except Exception as e:
         l1_checks["market_data"] = {"status": "error", "detail": str(e)[:100]}
 
+    # CCXT exchange connector registry. This is a lightweight capability check;
+    # live exchange pings remain explicit because they can be slow or region-limited.
+    try:
+        from app.services.exchange_service import exchange_service
+
+        exchanges = exchange_service.get_supported_exchanges()
+        l1_checks["ccxt"] = {
+            "status": "ok" if exchanges else "unavailable",
+            "provider": "ccxt",
+            "exchanges": [item["id"] for item in exchanges],
+            "detail": f"CCXT connector ready for {len(exchanges)} exchanges",
+        }
+    except Exception as e:
+        l1_checks["ccxt"] = {"status": "error", "detail": str(e)[:100]}
+
     # FRED economic data
     try:
         from app.services.macro_analysis_service import MacroAnalysisService
@@ -153,6 +168,13 @@ async def get_system_health() -> Dict[str, Any]:
             l4_checks["clickhouse"] = {
                 "status": "ok" if ch_ok else "unavailable",
                 "detail": "ClickHouse connected" if ch_ok else "ClickHouse unavailable",
+            }
+            source_ranges = await clickhouse_service.get_market_bar_source_ranges()
+            l4_checks["market_bars"] = {
+                "status": "ok" if ch_ok else "unavailable",
+                "source_groups": len(source_ranges),
+                "sample": source_ranges[:5],
+                "detail": "Source-aware market_bars table ready",
             }
         except Exception:
             l4_checks["clickhouse"] = {"status": "unavailable"}
@@ -323,6 +345,77 @@ async def _prd_counts() -> Dict[str, int]:
     return counts
 
 
+async def _prd106_extra_counts() -> Dict[str, int]:
+    """Collect fixed-table counts used by the frontend/API monitor."""
+    queries = {
+        "factor_definitions": "SELECT COUNT(*) FROM factor_definitions",
+        "audit_logs": "SELECT COUNT(*) FROM audit_logs",
+        "completed_replays": "SELECT COUNT(*) FROM replay_sessions WHERE status = 'completed'",
+        "pit_backtests": "SELECT COUNT(*) FROM backtest_results WHERE metrics ? 'pit'",
+        "pit_repro_backtests": (
+            "SELECT COUNT(*) FROM backtest_results "
+            "WHERE metrics->'pit'->>'schema_version' = 'pit-repro-v1'"
+        ),
+        "strict_comparison_ready": """
+            SELECT COUNT(DISTINCT rs.id)
+            FROM replay_sessions rs
+            JOIN backtest_results bt ON bt.id = rs.backtest_id
+            WHERE rs.status = 'completed'
+        """,
+    }
+    counts = {key: 0 for key in queries}
+    try:
+        from sqlalchemy import text
+        from app.services.database import get_db
+
+        async with get_db() as session:
+            for key, sql in queries.items():
+                result = await session.execute(text(sql))
+                counts[key] = int(result.scalar() or 0)
+    except Exception as exc:
+        logger.debug(f"PRD 10.6 extra count collection failed: {exc}")
+    return counts
+
+
+async def _market_coverage_summary() -> Dict[str, Any]:
+    """Return compact ClickHouse market-bar coverage without exposing rows."""
+    summary: Dict[str, Any] = {
+        "source_groups": 0,
+        "total_rows": 0,
+        "providers": [],
+        "exchanges": [],
+    }
+    try:
+        from app.services.clickhouse_service import clickhouse_service
+
+        ranges = await clickhouse_service.get_market_bar_source_ranges()
+        providers = sorted({str(row.get("provider") or "unknown") for row in ranges})
+        exchanges = sorted({str(row.get("exchange") or "unknown") for row in ranges})
+        summary.update(
+            {
+                "source_groups": len(ranges),
+                "total_rows": sum(int(row.get("row_count") or 0) for row in ranges),
+                "providers": providers,
+                "exchanges": exchanges,
+            }
+        )
+    except Exception as exc:
+        summary["error"] = str(exc)[:160]
+    return summary
+
+
+def _status_label(value: Any) -> str:
+    if _ok(value):
+        return "ready"
+    if value in {"degraded", "partial"}:
+        return "partial"
+    return "check"
+
+
+def _feature_status(*conditions: bool) -> str:
+    return "ready" if all(conditions) else "check"
+
+
 @router.get("/prd-flow")
 async def get_prd_flow_status() -> Dict[str, Any]:
     """Return PRD v1 flow readiness for frontend and release checks."""
@@ -331,7 +424,7 @@ async def get_prd_flow_status() -> Dict[str, Any]:
 
     l1_ok = all(
         _ok(_layer_value(health, "layers", "L1_data_source", key, "status"))
-        for key in ["openbb", "fred", "market_data", "equity"]
+        for key in ["openbb", "ccxt", "fred", "market_data", "equity"]
     )
     l4_ok = (
         _ok(_layer_value(health, "layers", "L4_storage", "clickhouse", "status"))
@@ -356,9 +449,10 @@ async def get_prd_flow_status() -> Dict[str, Any]:
             "id": "data_ingestion",
             "label": "10.1 Data ingestion",
             "status": "ok" if l1_ok else "check",
-            "detail": "OpenBB, FRED, news/macro and market data are reachable.",
+            "detail": "OpenBB, CCXT, FRED, news/macro and market data are reachable.",
             "evidence": {
                 "openbb": _layer_value(health, "layers", "L1_data_source", "openbb"),
+                "ccxt": _layer_value(health, "layers", "L1_data_source", "ccxt"),
                 "fred": _layer_value(health, "layers", "L1_data_source", "fred"),
                 "market_data": _layer_value(health, "layers", "L1_data_source", "market_data"),
                 "equity": _layer_value(health, "layers", "L1_data_source", "equity"),
@@ -424,6 +518,190 @@ async def get_prd_flow_status() -> Dict[str, Any]:
         "overall_status": overall_status,
         "counts": counts,
         "stages": stages,
+    }
+
+
+@router.get("/frontend-api-overview")
+async def get_frontend_api_overview() -> Dict[str, Any]:
+    """Return the PRD 10.6 frontend/API visibility map for the monitor page."""
+    health = await get_system_health()
+    counts = await _prd_counts()
+    counts.update(await _prd106_extra_counts())
+    coverage = await _market_coverage_summary()
+
+    pipeline_stats: Dict[str, Any] = {}
+    try:
+        from app.pipeline.orchestrator import pipeline_orchestrator
+        from app.pipeline.storage.duckdb_store import pipeline_store
+
+        pipeline_stats = pipeline_orchestrator.stats()
+        pipeline_stats["store_available"] = pipeline_store.available
+    except Exception as exc:
+        pipeline_stats = {"error": str(exc)[:160]}
+
+    openbb_status = _layer_value(health, "layers", "L1_data_source", "openbb", "status")
+    ccxt_status = _layer_value(health, "layers", "L1_data_source", "ccxt", "status")
+    fred_status = _layer_value(health, "layers", "L1_data_source", "fred", "status")
+    equity_status = _layer_value(health, "layers", "L1_data_source", "equity", "status")
+    clickhouse_status = _layer_value(health, "layers", "L4_storage", "clickhouse", "status")
+    factor_status = _layer_value(health, "layers", "L5_factors_signals", "counts", "status")
+    tradingagents_status = _layer_value(health, "layers", "L6_decision", "tradingagents_service", "status")
+
+    infrastructure = health.get("infrastructure", {})
+    ccxt_exchanges = _layer_value(health, "layers", "L1_data_source", "ccxt", "exchanges") or []
+    if not isinstance(ccxt_exchanges, list):
+        ccxt_exchanges = []
+
+    features = [
+        {
+            "key": "data_source_management",
+            "title": "数据源管理",
+            "status": _feature_status(
+                bool(_ok(openbb_status) or _ok(ccxt_status)),
+                bool(_ok(clickhouse_status) or coverage["total_rows"] > 0),
+            ),
+            "front_page": "/data-sources",
+            "page_label": "数据源工作台",
+            "description": "查看 OpenBB、CCXT、宏观/新闻管道和 ClickHouse 本地缓存状态；手动触发小范围补数或归档测试。",
+            "apis": [
+                {"method": "GET", "path": "/api/v1/system/health", "purpose": "数据源和基础设施健康"},
+                {"method": "GET", "path": "/api/v1/market/data-ingestion-overview", "purpose": "10.1 数据接入总览"},
+                {"method": "GET", "path": "/api/v1/market/source-coverage", "purpose": "K线缓存覆盖范围"},
+                {"method": "GET", "path": "/api/v1/market/klines/{symbol}?provider=yfinance&fallback_exchange=okx", "purpose": "crypto provider 和备用源读取"},
+                {"method": "GET", "path": "/api/v1/market/backfill/status", "purpose": "补数状态"},
+                {"method": "POST", "path": "/api/v1/market/backfill", "purpose": "手动小范围补数测试"},
+            ],
+            "evidence": [
+                {"label": "OpenBB", "value": str(openbb_status or "unknown")},
+                {"label": "CCXT连接器", "value": f"{len(ccxt_exchanges)} 个已注册，实盘可用需逐个测试"},
+                {"label": "ClickHouse缓存", "value": f"{coverage['source_groups']} 组 / {coverage['total_rows']} 行"},
+                {"label": "宏观/新闻", "value": f"{pipeline_stats.get('macro_stored', 0)} 条宏观，{pipeline_stats.get('news_stored', 0)} 条新闻"},
+            ],
+        },
+        {
+            "key": "standardized_factors",
+            "title": "标准化数据与因子查看",
+            "status": _feature_status(counts["factor_snapshots"] > 0, counts["factor_definitions"] > 0),
+            "front_page": "/signals",
+            "page_label": "因子/信号",
+            "description": "查看因子字典、因子快照、信号事件和因子时序；页面会区分计算来源与上游数据来源。",
+            "apis": [
+                {"method": "GET", "path": "/api/v1/signals/factor-definitions", "purpose": "因子类型字典"},
+                {"method": "GET", "path": "/api/v1/signals/factors", "purpose": "因子快照明细"},
+                {"method": "GET", "path": "/api/v1/signals/events", "purpose": "策略信号事件"},
+                {"method": "GET", "path": "/api/v1/signals/context/{symbol}", "purpose": "AnalysisContext 输入材料"},
+            ],
+            "evidence": [
+                {"label": "因子类型", "value": f"{counts['factor_definitions']} 个"},
+                {"label": "因子快照", "value": f"{counts['factor_snapshots']} 条"},
+                {"label": "信号事件", "value": f"{counts['signal_events']} 条"},
+                {"label": "PIT能力", "value": str(factor_status or "unknown")},
+            ],
+        },
+        {
+            "key": "backtest_tasks",
+            "title": "回测任务",
+            "status": _feature_status(counts["backtest_results"] > 0),
+            "front_page": "/backtest",
+            "page_label": "回测",
+            "description": "创建策略回测、查看历史结果、参数优化和组合对比；回测结果进入数据库并可被审计页引用。",
+            "apis": [
+                {"method": "POST", "path": "/api/v1/strategy/backtest/run", "purpose": "运行回测"},
+                {"method": "GET", "path": "/api/v1/strategy/backtest/history", "purpose": "回测历史"},
+                {"method": "POST", "path": "/api/v1/strategy/backtest/batch", "purpose": "批量回测"},
+                {"method": "POST", "path": "/api/v1/strategy/optimize", "purpose": "参数优化"},
+            ],
+            "evidence": [
+                {"label": "回测结果", "value": f"{counts['backtest_results']} 条"},
+                {"label": "PIT回测", "value": f"{counts['pit_backtests']} 条"},
+                {"label": "完整复现包", "value": f"{counts['pit_repro_backtests']} 条"},
+            ],
+        },
+        {
+            "key": "audit_view",
+            "title": "审计查看",
+            "status": _feature_status(
+                counts["audit_logs"] > 0,
+                counts["backtest_results"] > 0,
+                counts["replay_sessions"] > 0,
+            ),
+            "front_page": "/audit",
+            "page_label": "回测与审计",
+            "description": "集中查看 point-in-time 回测、历史回放、审计日志、智能体决策和结果对比候选。",
+            "apis": [
+                {"method": "GET", "path": "/api/v1/audit/overview", "purpose": "审计工作台汇总"},
+                {"method": "GET", "path": "/api/v1/replay/sessions", "purpose": "历史回放会话"},
+                {"method": "GET", "path": "/api/v1/analytics/replay-backtest-comparison", "purpose": "回放与回测对比"},
+                {"method": "GET", "path": "/api/v1/coordination/history", "purpose": "智能体决策历史"},
+            ],
+            "evidence": [
+                {"label": "审计日志", "value": f"{counts['audit_logs']} 条"},
+                {"label": "历史回放", "value": f"{counts['completed_replays']} / {counts['replay_sessions']} 已完成"},
+                {"label": "严格可比样例", "value": f"{counts['strict_comparison_ready']} 条"},
+                {"label": "决策历史", "value": f"{counts['coordination_history']} 条"},
+            ],
+        },
+        {
+            "key": "system_monitoring",
+            "title": "系统状态监控",
+            "status": _feature_status(
+                _ok(infrastructure.get("postgresql")),
+                _ok(infrastructure.get("redis")),
+                bool(_ok(clickhouse_status) or coverage["total_rows"] > 0),
+            ),
+            "front_page": "/monitor",
+            "page_label": "系统监控",
+            "description": "把前端页面、后端接口、数据源、缓存、基础设施和 TradingAgents 状态放在一个页面里持续查看。",
+            "apis": [
+                {"method": "GET", "path": "/api/v1/system/frontend-api-overview", "purpose": "10.6 页面/API总览"},
+                {"method": "GET", "path": "/api/v1/system/health", "purpose": "系统健康"},
+                {"method": "GET", "path": "/api/v1/system/prd-flow", "purpose": "PRD全流程状态"},
+                {"method": "GET", "path": "/api/v1/system/pipeline", "purpose": "新闻/宏观管道状态"},
+            ],
+            "evidence": [
+                {"label": "PostgreSQL", "value": str(infrastructure.get("postgresql", "unknown"))},
+                {"label": "Redis", "value": str(infrastructure.get("redis", "unknown"))},
+                {"label": "ClickHouse", "value": str(clickhouse_status or "unknown")},
+                {"label": "TradingAgents", "value": str(tradingagents_status or "unknown")},
+            ],
+        },
+    ]
+
+    pages = [
+        {"path": "/dashboard", "label": "仪表盘", "role": "看加密行情、宏观、新闻和智能体概览"},
+        {"path": "/data-sources", "label": "数据源工作台", "role": "管理 OpenBB/CCXT/缓存/补数状态"},
+        {"path": "/signals", "label": "因子/信号", "role": "查看标准化数据加工后的因子和信号"},
+        {"path": "/backtest", "label": "回测", "role": "创建和查看策略回测任务"},
+        {"path": "/audit", "label": "回测与审计", "role": "查看 PIT、回放、审计、对比"},
+        {"path": "/monitor", "label": "系统监控", "role": "查看 10.6 前端/API/服务状态"},
+    ]
+
+    source_notes = [
+        {"name": "OpenBB", "role": "统一金融数据入口；当前主要通过 yfinance/FRED/OECD 等 provider 获取股票、宏观和部分行情能力。"},
+        {"name": "CCXT", "role": "交易所连接器层；当前页面会标注已注册连接器，不把未实测交易所写成已连通。"},
+        {"name": "ClickHouse", "role": "本地 K 线缓存和查询加速层；它不是上游数据源，真实来源会保存在 provider/exchange 字段。"},
+        {"name": "TradingAgents", "role": "默认决策引擎；消费 AnalysisContext 后输出结构化建议，服务状态在监控页展示。"},
+    ]
+
+    return {
+        "timestamp": int(time.time()),
+        "overall_status": "ready" if all(item["status"] == "ready" for item in features) else "check",
+        "features": features,
+        "pages": pages,
+        "counts": counts,
+        "market_coverage": coverage,
+        "pipeline": pipeline_stats,
+        "source_notes": source_notes,
+        "system": [
+            {"label": "OpenBB", "status": _status_label(openbb_status), "detail": _layer_value(health, "layers", "L1_data_source", "openbb", "detail")},
+            {"label": "CCXT", "status": _status_label(ccxt_status), "detail": f"{len(ccxt_exchanges)} 个连接器已注册"},
+            {"label": "FRED/OECD", "status": _status_label(fred_status), "detail": "宏观指标入口"},
+            {"label": "股票/yfinance", "status": _status_label(equity_status), "detail": _layer_value(health, "layers", "L1_data_source", "equity", "detail")},
+            {"label": "PostgreSQL", "status": _status_label(infrastructure.get("postgresql")), "detail": "主数据、审计、回测和决策记录"},
+            {"label": "Redis", "status": _status_label(infrastructure.get("redis")), "detail": "缓存和短生命周期状态"},
+            {"label": "ClickHouse", "status": _status_label(clickhouse_status), "detail": f"{coverage['total_rows']} 行本地K线缓存"},
+            {"label": "TradingAgents", "status": _status_label(tradingagents_status), "detail": "默认决策服务"},
+        ],
     }
 
 

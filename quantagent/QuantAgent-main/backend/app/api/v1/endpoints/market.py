@@ -70,13 +70,21 @@ def _bar_to_kline_data(bar: Any) -> KlineData:
     )
 
 
+def _split_csv(value: Optional[str]) -> List[str]:
+    return [item.strip() for item in (value or "").split(",") if item.strip()]
+
+
 @router.get("/klines/{symbol}", response_model=KlineResponse)
 async def get_klines(
     symbol: str,
     interval: str = Query("1h", description="Kline interval (1m, 5m, 15m, 1h, 4h, 1d)"),
     limit: int = Query(100, ge=1, le=1000),
     start_time: Optional[datetime] = None,
-    end_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None,
+    provider: str = Query("yfinance", description="OpenBB crypto provider"),
+    fallback_providers: Optional[str] = Query(None, description="Comma-separated OpenBB fallback providers"),
+    fallback_exchange: str = Query("okx", description="CCXT exchange fallback when local/OpenBB data is unavailable"),
+    allow_ccxt_fallback: bool = Query(True, description="Allow CCXT fallback for crypto data"),
 ):
     """
     从统一市场网关获取 K 线/Candlestick 数据
@@ -90,13 +98,30 @@ async def get_klines(
             limit=limit,
             start_time=start_time,
             end_time=end_time,
+            openbb_provider=provider,
+            openbb_fallback_providers=_split_csv(fallback_providers),
+            allow_ccxt_fallback=allow_ccxt_fallback,
+            fallback_exchange=fallback_exchange,
         )
+        metadata = await market_data_gateway.get_kline_metadata(symbol, interval)
+        metadata.update({
+            "requested_provider": provider,
+            "fallback_providers": _split_csv(fallback_providers),
+            "fallback_exchange": fallback_exchange if allow_ccxt_fallback else None,
+            "fallback_chain": [
+                "ClickHouse cache",
+                f"OpenBB/{provider}",
+                *[f"OpenBB/{item}" for item in _split_csv(fallback_providers)],
+                *( [f"CCXT/{fallback_exchange.upper()}"] if allow_ccxt_fallback and fallback_exchange else []),
+            ],
+        })
         
         return KlineResponse(
             symbol=symbol,
             interval=interval,
             data=klines,
-            source="market_data_gateway"
+            source="market_data_gateway",
+            metadata=metadata,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch klines: {str(e)}")
@@ -176,12 +201,24 @@ async def get_equity_price(
 
 
 @router.get("/ticker/{symbol}", response_model=TickerData)
-async def get_ticker(symbol: str):
+async def get_ticker(
+    symbol: str,
+    provider: str = Query("yfinance", description="OpenBB crypto provider"),
+    fallback_providers: Optional[str] = Query(None, description="Comma-separated OpenBB fallback providers"),
+    fallback_exchange: str = Query("okx", description="CCXT exchange fallback when local/OpenBB data is unavailable"),
+    allow_ccxt_fallback: bool = Query(True, description="Allow CCXT fallback for crypto data"),
+):
     """
     从统一市场网关获取 24hr ticker 数据
     """
     try:
-        ticker = await market_data_gateway.get_ticker(symbol)
+        ticker = await market_data_gateway.get_ticker(
+            symbol,
+            openbb_provider=provider,
+            openbb_fallback_providers=_split_csv(fallback_providers),
+            allow_ccxt_fallback=allow_ccxt_fallback,
+            fallback_exchange=fallback_exchange,
+        )
         if ticker is None:
             raise HTTPException(status_code=404, detail="Ticker unavailable from local storage/OpenBB")
         return ticker
@@ -209,15 +246,34 @@ async def get_symbols():
 
 
 @router.get("/price/{symbol}")
-async def get_price(symbol: str):
+async def get_price(
+    symbol: str,
+    provider: str = Query("yfinance", description="OpenBB crypto provider"),
+    fallback_providers: Optional[str] = Query(None, description="Comma-separated OpenBB fallback providers"),
+    fallback_exchange: str = Query("okx", description="CCXT exchange fallback when local/OpenBB data is unavailable"),
+    allow_ccxt_fallback: bool = Query(True, description="Allow CCXT fallback for crypto data"),
+):
     """
     获取指定交易对的当前价格（从统一市场网关）
     """
     try:
-        price = await market_data_gateway.get_price(symbol)
+        price = await market_data_gateway.get_price(
+            symbol,
+            openbb_provider=provider,
+            openbb_fallback_providers=_split_csv(fallback_providers),
+            allow_ccxt_fallback=allow_ccxt_fallback,
+            fallback_exchange=fallback_exchange,
+        )
         if price is None:
             raise HTTPException(status_code=404, detail="Price unavailable from local storage/OpenBB")
-        return {"symbol": symbol, "price": price, "source": "market_data_gateway"}
+        return {
+            "symbol": symbol,
+            "price": price,
+            "source": "market_data_gateway",
+            "provider": provider,
+            "fallback_providers": _split_csv(fallback_providers),
+            "fallback_exchange": fallback_exchange if allow_ccxt_fallback else None,
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -357,6 +413,45 @@ async def coordinate_agents(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Coordination failed: {str(e)}")
+
+
+class NativeTradingAgentsRequest(BaseModel):
+    symbol: str
+    interval: str = "1h"
+    trade_date: Optional[str] = None
+    selected_analysts: Optional[List[str]] = None
+
+
+@router.get("/tradingagents-native/preview/{symbol}")
+async def tradingagents_native_preview(
+    symbol: str,
+    interval: str = Query("1h", description="Display interval label for the preview"),
+):
+    """Preview the isolated upstream TradingAgentsGraph sandbox."""
+    from app.agents.tradingagents_adapter import tradingagents_adapter
+
+    canonical_symbol = Instrument.from_raw(symbol).symbol
+    result = await tradingagents_adapter.native_preview(canonical_symbol, interval)
+    if result.get("status") == "unavailable":
+        raise HTTPException(status_code=503, detail=result)
+    return result
+
+
+@router.post("/tradingagents-native/analyze")
+async def tradingagents_native_analyze(req: NativeTradingAgentsRequest):
+    """Run the upstream TradingAgentsGraph sandbox without writing decision history."""
+    from app.agents.tradingagents_adapter import tradingagents_adapter
+
+    canonical_symbol = Instrument.from_raw(req.symbol).symbol
+    result = await tradingagents_adapter.run_native_graph(
+        symbol=canonical_symbol,
+        interval=req.interval,
+        trade_date=req.trade_date,
+        selected_analysts=req.selected_analysts or ["market", "news", "social", "fundamentals"],
+    )
+    if str(result.get("status", "")).lower() not in {"ok", "success"}:
+        return result
+    return result
 
 
 # ============== Lightweight Coordinator (Frontend Results) ==============
@@ -654,6 +749,8 @@ class BackfillRequest(BaseModel):
     symbol: Optional[str] = None   # e.g. BTCUSDT, defaults to all
     interval: Optional[str] = None  # e.g. 1m, 1h, defaults to all
     mode: str = "sync"              # "full" or "sync"
+    provider: str = "yfinance"
+    fallback_providers: Optional[List[str]] = None
 
 
 class ParquetArchiveRequest(BaseModel):
@@ -693,18 +790,20 @@ async def trigger_backfill(req: BackfillRequest):
         raise HTTPException(status_code=400, detail=f"Invalid interval. Valid: {VALID_INTERVALS}")
 
     # Run backfill as a fire-and-forget background task
-    asyncio.create_task(_run_backfill(symbols, intervals, mode))
+    asyncio.create_task(_run_backfill(symbols, intervals, mode, req.provider, req.fallback_providers or []))
 
     return {
         "status": "started",
-        "message": f"补数任务已启动: {symbols} x {intervals}, mode={mode}",
+        "message": f"补数任务已启动: {symbols} x {intervals}, mode={mode}, provider={req.provider}",
         "symbols": symbols,
         "intervals": intervals,
         "mode": mode,
+        "provider": req.provider,
+        "fallback_providers": req.fallback_providers or [],
     }
 
 
-async def _run_backfill(symbols: List[str], intervals: List[str], mode: str):
+async def _run_backfill(symbols: List[str], intervals: List[str], mode: str, provider: str, fallback_providers: List[str]):
     """
     Background backfill implementation. Writes to ClickHouse for each symbol/interval.
     """
@@ -761,6 +860,8 @@ async def _run_backfill(symbols: List[str], intervals: List[str], mode: str):
                         limit=batch_limit,
                         start_time=datetime.fromtimestamp(current_ms / 1000, tz=timezone.utc),
                         end_time=datetime.fromtimestamp(window_end_ms / 1000, tz=timezone.utc),
+                        provider=provider,
+                        fallback_providers=fallback_providers,
                         persist=True,
                     )
                     if not bars:
@@ -912,6 +1013,152 @@ async def backfill_status():
     return {"intervals": result, "checked_at": now.isoformat()}
 
 
+@router.get("/source-coverage")
+async def source_coverage():
+    """Return source-aware market data coverage for data source diagnostics."""
+    from app.services.clickhouse_service import clickhouse_service
+
+    rows = await clickhouse_service.get_market_bar_source_ranges()
+    return {
+        "sources": rows,
+        "count": len(rows),
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get("/data-ingestion-overview")
+async def data_ingestion_overview() -> Dict[str, Any]:
+    """Return PRD 10.1 data ingestion status and provider/fallback map."""
+    from app.pipeline.storage.duckdb_store import pipeline_store
+    from app.services.clickhouse_service import clickhouse_service
+    from app.services.exchange_service import exchange_service
+    from app.services.openbb_data_service import openbb_data_service
+
+    source_ranges = await clickhouse_service.get_market_bar_source_ranges()
+    provider_totals: Dict[str, int] = {}
+    for row in source_ranges:
+        provider = str(row.get("provider") or "unknown")
+        provider_totals[provider] = provider_totals.get(provider, 0) + int(row.get("row_count") or 0)
+
+    crypto_sample = None
+    try:
+        response = await get_klines(
+            symbol="BTCUSDT",
+            interval="1h",
+            limit=1,
+            provider="yfinance",
+            fallback_providers=None,
+            fallback_exchange="okx",
+            allow_ccxt_fallback=True,
+        )
+        crypto_sample = {
+            "symbol": response.symbol,
+            "interval": response.interval,
+            "rows": len(response.data),
+            "source": response.source,
+            "metadata": response.metadata,
+        }
+    except Exception as exc:
+        crypto_sample = {"error": str(exc)[:160]}
+
+    equity_sample = None
+    try:
+        ticker = await openbb_data_service.get_equity_ticker(
+            "SPY",
+            provider="yfinance",
+            fallback_providers=[],
+        )
+        equity_sample = {
+            "symbol": "SPY",
+            "price": ticker.price if ticker else None,
+            "provider": "openbb:yfinance",
+            "status": "ok" if ticker else "unavailable",
+        }
+    except Exception as exc:
+        equity_sample = {"symbol": "SPY", "status": "error", "error": str(exc)[:160]}
+
+    latest_macro = pipeline_store.latest_macro()
+    latest_news = pipeline_store.query_news(symbol="BTC", limit=5)
+    exchanges = exchange_service.get_supported_exchanges()
+
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "requirements": [
+            {
+                "key": "crypto_market",
+                "title": "crypto 行情",
+                "status": "ok" if crypto_sample and not crypto_sample.get("error") else "check",
+                "primary": "ClickHouse cache + OpenBB/yfinance",
+                "fallback": "CCXT/OKX when local cache and OpenBB are unavailable",
+                "api": "/api/v1/market/klines/{symbol}?provider=yfinance&fallback_exchange=okx",
+                "evidence": crypto_sample,
+            },
+            {
+                "key": "equity_market",
+                "title": "股票行情",
+                "status": equity_sample.get("status", "check") if isinstance(equity_sample, dict) else "check",
+                "primary": "OpenBB equity provider",
+                "fallback": "fallback_providers query parameter, e.g. fmp/tiingo when credentials are configured",
+                "api": "/api/v1/market/equity/ticker/SPY?provider=yfinance&fallback_providers=fmp,tiingo",
+                "evidence": equity_sample,
+            },
+            {
+                "key": "news",
+                "title": "新闻",
+                "status": "ok" if latest_news else "check",
+                "primary": "DuckDB news cache, populated by OpenBB/yfinance news adapter",
+                "fallback": "On-demand live fetch when cache is empty",
+                "api": "/api/v1/market/news?symbol=BTC",
+                "evidence": {"stored_sample": len(latest_news), "provider": "openbb:yfinance"},
+            },
+            {
+                "key": "macro",
+                "title": "宏观数据",
+                "status": "ok" if latest_macro else "check",
+                "primary": "DuckDB macro cache, populated by OpenBB/FRED and OpenBB/OECD",
+                "fallback": "On-demand live fetch when cache is empty; FRED key is used when configured",
+                "api": "/api/v1/market/macro",
+                "evidence": {"indicator_count": len(latest_macro), "providers": ["openbb:fred", "openbb:oecd"]},
+            },
+            {
+                "key": "provider_switch",
+                "title": "OpenBB provider 切换",
+                "status": "ok" if openbb_data_service.available else "check",
+                "primary": "provider query parameter",
+                "fallback": "fallback_providers query parameter",
+                "api": "/api/v1/market/equity/klines/{symbol}?provider=yfinance&fallback_providers=fmp,tiingo",
+                "evidence": {
+                    "crypto_default": "yfinance",
+                    "equity_default": "yfinance",
+                    "macro": ["fred", "oecd"],
+                    "openbb_available": openbb_data_service.available,
+                },
+            },
+            {
+                "key": "degradation",
+                "title": "备用数据源降级",
+                "status": "ok" if exchanges else "check",
+                "primary": "OpenBB provider chain",
+                "fallback": "CCXT exchange fallback and DuckDB/ClickHouse local cache",
+                "api": "/api/v1/market/exchanges",
+                "evidence": {
+                    "ccxt_connectors_registered": len(exchanges),
+                    "default_crypto_fallback": "okx",
+                    "local_cache_rows": sum(int(row.get("row_count") or 0) for row in source_ranges),
+                },
+            },
+        ],
+        "provider_totals": provider_totals,
+        "source_groups": len(source_ranges),
+        "ccxt_exchanges": exchanges,
+        "notes": [
+            "ClickHouse 和 DuckDB 是本地缓存/存储层，不是上游数据源。",
+            "已注册 CCXT 连接器不等于所有交易所都已实时连通；实时可用性需要逐个交易所测试。",
+            "Binance 不作为默认降级源，避免 451 restricted location 误导；默认 crypto 降级交易所为 OKX。",
+        ],
+    }
+
+
 # ============== Multi-Exchange Market Data Endpoints (只读行情) ==============
 
 @router.get("/exchanges", tags=["Multi-Exchange"])
@@ -958,7 +1205,7 @@ async def get_exchange_klines(
             symbol=symbol,
             interval=interval,
             data=klines,
-            source=exchange_id
+            source=f"ccxt:{exchange_id}"
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch klines: {str(e)}")

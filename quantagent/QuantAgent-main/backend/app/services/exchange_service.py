@@ -93,7 +93,10 @@ class ExchangeService:
         if cache_key in self._exchanges:
             return self._exchanges[cache_key]
         
-        config = self._config.copy()
+        config = {
+            **self._config,
+            "options": dict(self._config.get("options", {})),
+        }
         
         if use_testnet and exchange_id in self.SUPPORTED_EXCHANGES:
             testnet_id = self.SUPPORTED_EXCHANGES[exchange_id].get("testnet")
@@ -105,6 +108,57 @@ class ExchangeService:
         
         self._exchanges[cache_key] = exchange
         return exchange
+
+    async def _close_exchange(self, exchange_id: str, use_testnet: bool, exchange: ccxt.Exchange) -> None:
+        cache_key = f"{exchange_id}_testnet" if use_testnet else exchange_id
+        try:
+            await exchange.close()
+        finally:
+            self._exchanges.pop(cache_key, None)
+
+    async def _persist_klines(
+        self,
+        exchange_id: str,
+        symbol: str,
+        timeframe: str,
+        klines: List[KlineData],
+        use_testnet: bool = False,
+    ) -> None:
+        if not klines:
+            return
+        try:
+            from app.services.clickhouse_service import clickhouse_service
+
+            exchange_name = f"{exchange_id}_testnet" if use_testnet else exchange_id
+            clean_symbol = symbol.replace("/", "").upper()
+            rows = [
+                {
+                    "open_time": k.timestamp,
+                    "exchange": exchange_name,
+                    "provider": "ccxt",
+                    "source_version": "ccxt",
+                    "schema_version": "bar.v1",
+                    "open": k.open,
+                    "high": k.high,
+                    "low": k.low,
+                    "close": k.close,
+                    "volume": k.volume,
+                    "close_time": k.close_time or k.timestamp,
+                    "quote_volume": k.quote_volume,
+                    "trades": k.trades,
+                }
+                for k in klines
+            ]
+            await clickhouse_service.insert_market_bars(
+                clean_symbol,
+                timeframe,
+                rows,
+                provider="ccxt",
+                exchange=exchange_name,
+                source_version="ccxt",
+            )
+        except Exception as exc:
+            logger.debug("[%s] market_bars persist skipped for %s/%s: %s", exchange_id, symbol, timeframe, exc)
     
     def _normalize_symbol(self, exchange_id: str, symbol: str) -> str:
         """根据交易所规范化交易对格式"""
@@ -157,12 +211,13 @@ class ExchangeService:
                     trades=int(item[8]) if len(item) > 8 and item[8] is not None else None,
                 ))
             
+            await self._persist_klines(exchange_id, symbol, timeframe, klines, use_testnet)
             return klines
         except Exception as e:
             logger.error(f"[{exchange_id}] Failed to fetch klines for {symbol}: {e}")
             raise Exception(f"[{exchange_id}] Failed to fetch klines for {symbol}: {str(e)}")
         finally:
-            await exchange.close()
+            await self._close_exchange(exchange_id, use_testnet, exchange)
     
     async def get_ticker(
         self,
@@ -201,7 +256,7 @@ class ExchangeService:
             logger.error(f"[{exchange_id}] Failed to fetch ticker for {symbol}: {e}")
             raise Exception(f"[{exchange_id}] Failed to fetch ticker for {symbol}: {str(e)}")
         finally:
-            await exchange.close()
+            await self._close_exchange(exchange_id, use_testnet, exchange)
     
     async def get_price(
         self,
@@ -237,7 +292,7 @@ class ExchangeService:
             logger.error(f"[{exchange_id}] Failed to fetch order book for {symbol}: {e}")
             raise Exception(f"[{exchange_id}] Failed to fetch order book for {symbol}: {str(e)}")
         finally:
-            await exchange.close()
+            await self._close_exchange(exchange_id, use_testnet, exchange)
     
     async def get_symbols(
         self,
@@ -265,7 +320,7 @@ class ExchangeService:
             logger.error(f"[{exchange_id}] Failed to fetch symbols: {e}")
             raise Exception(f"[{exchange_id}] Failed to fetch symbols: {str(e)}")
         finally:
-            await exchange.close()
+            await self._close_exchange(exchange_id, use_testnet, exchange)
     
     async def get_recent_trades(
         self,
@@ -294,7 +349,7 @@ class ExchangeService:
             logger.error(f"[{exchange_id}] Failed to fetch trades for {symbol}: {e}")
             raise Exception(f"[{exchange_id}] Failed to fetch trades for {symbol}: {str(e)}")
         finally:
-            await exchange.close()
+            await self._close_exchange(exchange_id, use_testnet, exchange)
     
     def get_supported_exchanges(self) -> List[Dict[str, str]]:
         """获取支持的交易所列表"""

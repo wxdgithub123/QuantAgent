@@ -1,0 +1,957 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QuantAgent PRD v1 完成情况详细报告</title>
+  <style>
+    :root {
+      --bg: #071019;
+      --bg-2: #0b1624;
+      --panel: rgba(12, 22, 36, 0.92);
+      --panel-2: rgba(15, 27, 44, 0.96);
+      --line: rgba(148, 163, 184, 0.18);
+      --text: #e6edf8;
+      --muted: #9fb0c8;
+      --soft: #cbd5e1;
+      --ok: #4ade80;
+      --ok-bg: rgba(74, 222, 128, 0.12);
+      --warn: #fbbf24;
+      --warn-bg: rgba(251, 191, 36, 0.12);
+      --bad: #fb7185;
+      --bad-bg: rgba(251, 113, 133, 0.12);
+      --blue: #38bdf8;
+      --blue-bg: rgba(56, 189, 248, 0.12);
+      --violet: #a78bfa;
+      --shadow: 0 24px 90px rgba(0, 0, 0, 0.36);
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 10% -10%, rgba(56, 189, 248, 0.22), transparent 34%),
+        radial-gradient(circle at 90% 6%, rgba(74, 222, 128, 0.14), transparent 28%),
+        radial-gradient(circle at 55% 42%, rgba(167, 139, 250, 0.08), transparent 32%),
+        linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+      font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+      line-height: 1.65;
+    }
+
+    a { color: #7dd3fc; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .wrap {
+      max-width: 1320px;
+      margin: 0 auto;
+      padding: 34px 22px 72px;
+    }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(125, 211, 252, 0.22);
+      border-radius: 30px;
+      padding: 34px;
+      background:
+        linear-gradient(135deg, rgba(12, 24, 40, 0.96), rgba(7, 16, 25, 0.92)),
+        radial-gradient(circle at bottom right, rgba(56, 189, 248, 0.18), transparent 50%);
+      box-shadow: var(--shadow);
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      width: 360px;
+      height: 360px;
+      right: -150px;
+      bottom: -180px;
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(56, 189, 248, 0.2), transparent 68%);
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border: 1px solid rgba(56, 189, 248, 0.28);
+      border-radius: 999px;
+      background: var(--blue-bg);
+      color: #bae6fd;
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+
+    h1 {
+      max-width: 980px;
+      margin: 18px 0 12px;
+      font-size: clamp(30px, 4vw, 52px);
+      line-height: 1.08;
+      letter-spacing: -0.04em;
+    }
+
+    .lead {
+      max-width: 1050px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 22px;
+    }
+
+    .button-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      padding: 10px 14px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .button-link.primary {
+      border-color: rgba(56, 189, 248, 0.36);
+      background: rgba(56, 189, 248, 0.18);
+      color: #e0f2fe;
+    }
+
+    .grid {
+      display: grid;
+      gap: 16px;
+    }
+
+    .kpis {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-top: 22px;
+    }
+
+    .card,
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--panel);
+      box-shadow: 0 14px 42px rgba(0, 0, 0, 0.24);
+    }
+
+    .card { padding: 18px; }
+    .panel { padding: 24px; }
+
+    .kpi-label {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .kpi-value {
+      margin: 0;
+      font-size: 26px;
+      line-height: 1.2;
+      font-weight: 800;
+    }
+
+    .kpi-note {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .section {
+      margin-top: 24px;
+    }
+
+    .section h2 {
+      margin: 0 0 10px;
+      font-size: 24px;
+      letter-spacing: -0.02em;
+    }
+
+    .section-desc {
+      margin: 0 0 18px;
+      color: var(--muted);
+    }
+
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .pill.ok {
+      color: var(--ok);
+      background: var(--ok-bg);
+      border: 1px solid rgba(74, 222, 128, 0.25);
+    }
+
+    .pill.warn {
+      color: var(--warn);
+      background: var(--warn-bg);
+      border: 1px solid rgba(251, 191, 36, 0.25);
+    }
+
+    .pill.bad {
+      color: var(--bad);
+      background: var(--bad-bg);
+      border: 1px solid rgba(251, 113, 133, 0.25);
+    }
+
+    .pill.info {
+      color: var(--blue);
+      background: var(--blue-bg);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(5, 12, 22, 0.55);
+    }
+
+    th,
+    td {
+      padding: 13px 12px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+      vertical-align: top;
+      font-size: 14px;
+    }
+
+    th {
+      color: #dbeafe;
+      text-align: left;
+      background: rgba(56, 189, 248, 0.08);
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    tr:last-child td { border-bottom: none; }
+    td strong { color: #f8fafc; }
+
+    .two-col {
+      grid-template-columns: 1.05fr 0.95fr;
+    }
+
+    .three-col {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .component-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .mini-title {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .mini-title h3 {
+      margin: 0;
+      font-size: 17px;
+    }
+
+    .mini-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .flow-step {
+      position: relative;
+      min-height: 118px;
+      padding: 14px;
+      border: 1px solid rgba(56, 189, 248, 0.22);
+      border-radius: 18px;
+      background: rgba(56, 189, 248, 0.08);
+    }
+
+    .flow-step h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+      color: #e0f2fe;
+    }
+
+    .flow-step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .note-box {
+      border: 1px solid rgba(251, 191, 36, 0.24);
+      border-radius: 20px;
+      padding: 18px;
+      background: rgba(251, 191, 36, 0.08);
+      color: #fde68a;
+    }
+
+    .note-box p {
+      margin: 0;
+      color: #fde68a;
+    }
+
+    .source-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .source-row {
+      display: grid;
+      grid-template-columns: 170px 1fr 220px;
+      gap: 12px;
+      align-items: start;
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      border-radius: 16px;
+      padding: 14px;
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .source-row strong { color: var(--text); }
+    .source-row span, .source-row p { color: var(--muted); }
+    .source-row p { margin: 0; }
+
+    .muted { color: var(--muted); }
+    .ok-text { color: var(--ok); }
+    .warn-text { color: var(--warn); }
+    .bad-text { color: var(--bad); }
+    .blue-text { color: var(--blue); }
+    .mono { font-family: Consolas, "SFMono-Regular", Menlo, monospace; }
+
+    .footer {
+      margin-top: 26px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+    }
+
+    @media (max-width: 1100px) {
+      .kpis,
+      .three-col,
+      .component-grid,
+      .two-col {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .flow {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .source-row {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .wrap { padding: 20px 12px 48px; }
+      .hero { padding: 22px; border-radius: 24px; }
+      .kpis,
+      .three-col,
+      .component-grid,
+      .two-col,
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      th, td { font-size: 12px; padding: 10px 8px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <span class="eyebrow">QuantAgent PRD v1 · 完成情况报告</span>
+      <h1>面向加密货币优先的量化研究与决策平台，第一阶段底座已基本完成</h1>
+      <p class="lead">
+        本报告根据《量化研究平台 PRD v1》的核心要求整理，覆盖数据接入、标准化存储、因子信号、TradingAgents 决策、回测审计、前端 API 六个主线。
+        报告中所有数量均来自当前本地服务接口的实时状态快照；已跑通的闭环会标清样例编号，仍需增强的部分会明确说明边界，避免把“库能力”误写成“业务已完成”。
+      </p>
+      <div class="hero-actions">
+        <a class="button-link primary" href="http://localhost:3002/dashboard">打开仪表盘</a>
+        <a class="button-link" href="http://localhost:3002/data-sources">数据源页面</a>
+        <a class="button-link" href="http://localhost:3002/signals">因子/信号页面</a>
+        <a class="button-link" href="http://localhost:3002/decisions">决策中心</a>
+        <a class="button-link" href="http://localhost:3002/audit">回测与审计</a>
+      </div>
+
+      <div class="grid kpis">
+        <div class="card">
+          <p class="kpi-label">PRD 主线状态</p>
+          <p class="kpi-value ok-text">6/6 可达</p>
+          <p class="kpi-note">/api/v1/system/prd-flow 返回 overall_status=ok</p>
+        </div>
+        <div class="card">
+          <p class="kpi-label">L5 因子 / 信号</p>
+          <p class="kpi-value">28,494 / 13,502</p>
+          <p class="kpi-note">33 个因子定义，信号覆盖 5 个主要加密标的</p>
+        </div>
+        <div class="card">
+          <p class="kpi-label">决策与审计</p>
+          <p class="kpi-value">53 + 44</p>
+          <p class="kpi-note">coordination_history 53 条；audit_logs 44 条</p>
+        </div>
+        <div class="card">
+          <p class="kpi-label">回测 / 回放</p>
+          <p class="kpi-value ok-text">14 / 11</p>
+          <p class="kpi-note">14 条回测；11 个回放会话，其中 1 个 completed，1 个严格可比样例</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <h2>1. 总体结论</h2>
+      <p class="section-desc">
+        这版已经不是只有 UI 或脚本的半成品，而是具备“数据进入、统一标准、入库、生成因子/信号、组装 AnalysisContext、交给 TradingAgents、写入决策审计、前端查看”的第一阶段闭环。
+      </p>
+      <div class="status-row">
+        <span class="pill ok">已完成：OpenBB 主入口</span>
+        <span class="pill ok">已完成：ClickHouse / PostgreSQL / Redis / Parquet 可用</span>
+        <span class="pill ok">已完成：L5 因子信号与因子字典</span>
+        <span class="pill ok">已完成：TradingAgents 服务接入</span>
+        <span class="pill ok">已完成：completed 回放样例</span>
+        <span class="pill ok">已完成：严格关联结果对比样例</span>
+      </div>
+      <div class="note-box" style="margin-top:16px;">
+        <p>
+          重要边界：当前版本适合定位为“研究与决策底座可用版”。它不是自动实盘机器人；实盘执行默认不作为当前交付目标。
+          回测、审计、决策历史都已经可见；当前已补出一个 completed 历史回放，并通过快速回测生成了严格关联的对比样例，最新严格样例为 backtest #14。
+        </p>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <h2>2. PRD 10.1 - 10.6 逐项完成情况</h2>
+      <p class="section-desc">下面按 PRD 功能章节逐项对应当前系统实现、证据和未完成边界。</p>
+      <table>
+        <thead>
+          <tr>
+            <th>PRD 要求</th>
+            <th>当前实现</th>
+            <th>真实证据</th>
+            <th>状态</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>10.1 数据接入</strong><br />支持 crypto 行情、股票行情、新闻、宏观数据；支持 OpenBB provider 切换和备用数据源。</td>
+            <td>
+              OpenBB SDK 可用，当前主 provider 为 yfinance；FRED 经 OpenBB 接入；CCXT 连接器可用；新闻与宏观进入 DuckDB；股票样例 SPY 可取。
+            </td>
+            <td>
+              OpenBB: ok；BTC/USDT 行情可取；SPY=754.60；FRED 指标 FEDFUNDS、DGS10、T10YIE、M2SL 可取；新闻接口返回 15 条 BTC 相关新闻。
+            </td>
+            <td><span class="pill ok">已完成可用</span></td>
+          </tr>
+          <tr>
+            <td><strong>10.2 标准化与存储</strong><br />统一平台对象；PostgreSQL / DuckDB / Parquet 分层存储；保留版本与时间语义。</td>
+            <td>
+              行情进入 ClickHouse 主时序库；PostgreSQL 保存回测、回放、订单、审计、协调历史；DuckDB 保存新闻/宏观；Parquet 归档历史快照；Redis/NATS 可连接。
+            </td>
+            <td>
+              ClickHouse connected；PostgreSQL connected；Redis connected；Parquet 16 个文件；market_bars source-aware 分组 33 个；数据对象带 provider、source_version、schema_version、available_time。
+            </td>
+            <td><span class="pill ok">已完成可用</span></td>
+          </tr>
+          <tr>
+            <td><strong>10.3 因子与信号</strong><br />技术指标、新闻情绪、事件标签、宏观因子、信号触发和上下文组装。</td>
+            <td>
+              已建立 FactorSnapshot、SignalEvent、factor_definitions；L5 pipeline 支持 MA、RSI、BOLL、MACD、EMA、ATR、Turtle、Ichimoku 等策略信号；新闻/宏观进入 AnalysisContext。
+            </td>
+            <td>
+              factor_snapshots=28,494；signal_events=13,502；factor_definitions=33；近 7 天信号 5,933；AnalysisContextBuilder 支持 PIT 过滤。
+            </td>
+            <td><span class="pill ok">已完成可用</span></td>
+          </tr>
+          <tr>
+            <td><strong>10.4 TradingAgents 分析</strong><br />支持技术、新闻、宏观、风控等多角色分析；支持结构化输出、多空辩论和组合建议。</td>
+            <td>
+              TradingAgents 独立服务已接入，避免与 OpenBB 依赖冲突；主链路消费 QuantAgent 的 AnalysisContext；DMXAPI/OpenAI 兼容模型 gpt-4o-mini 已配置；Ollama 也启用；原版 TradingAgentsGraph 作为实验入口手动调用。
+            </td>
+            <td>
+              tradingagents-service healthy；tradingagents_available=true；llm_provider=openai；openai_model=gpt-4o-mini；ollama_enabled=true；native_graph available=true/manual_only=true；coordination_history=53。
+            </td>
+            <td><span class="pill ok">已完成可用</span></td>
+          </tr>
+          <tr>
+            <td><strong>10.5 回测与审计</strong><br />支持 point-in-time 回测、决策回放、审计追踪、结果对比。</td>
+            <td>
+              回测结果已入库；历史回放会话可创建和启动；审计台已新增；PIT AnalysisContext 已按 available_time <= as_of_time 取数；普通回测/快速回测已开始保存 PIT 元数据；已生成 completed 回放和严格关联回测样例，可进入结果对比。
+            </td>
+            <td>
+              backtest_results=14；replay_sessions=11；running=2；pending=8；completed=1；audit_logs=44；coordination_history=53；PIT factor/signal/backtest=24,054/12,614/2；strict_comparison_ready=1。
+            </td>
+            <td><span class="pill ok">核心闭环可用</span></td>
+          </tr>
+          <tr>
+            <td><strong>10.6 前端与 API</strong><br />数据源管理、标准化数据、因子查看、回测任务、审计查看、系统状态监控。</td>
+            <td>
+              已有 Dashboard、数据源、因子/信号、决策中心、回放、回测、性能分析和回测审计页；本次新增独立“系统状态监控”页面，集中展示 PRD 10.6 五项要求对应的前端入口、后端 API、真实数据证据和数据来源说明。
+            </td>
+            <td>
+              可访问页面：/dashboard、/data-sources、/signals、/decisions、/replay、/backtest、/analytics、/audit、/monitor；新增接口 /api/v1/system/frontend-api-overview，并继续使用 /api/v1/system/health、/api/v1/system/prd-flow、/api/v1/audit/overview。
+            </td>
+            <td><span class="pill ok">已完成可用</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section panel">
+      <h2>重点：PRD 10.5 回测与审计明细</h2>
+      <p class="section-desc">
+        你文档里写的 10.5 包含四个验收点：point-in-time 回测、决策回放、审计追踪、结果对比。当前已经有可演示闭环：PIT 输入可查、历史回放有 completed 样例、审计记录可查、回放与回测有严格关联对比样例，最新 quick backtest #14 已写入 PIT 元数据。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>PRD 10.5 要求</th>
+            <th>现在系统支持到什么程度</th>
+            <th>前端在哪里看</th>
+            <th>当前真实状态</th>
+            <th>下一步</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>支持 point-in-time 回测</strong></td>
+            <td>
+              AnalysisContext 已经按 <span class="mono">available_time &lt;= as_of_time</span> 规则取数，因子和信号都有 available_time / as_of_time 字段，可用于防未来函数的决策复现。
+              普通策略回测入口已增加 as_of_time；快速回测已把回放结束时间、实际 K 线窗口、行数和读取层写入 backtest_results.metrics.pit。
+            </td>
+            <td>
+              <a href="http://localhost:3002/audit">/audit 回测与审计</a><br />
+              <a href="http://localhost:3002/signals">/signals 因子/信号</a>
+            </td>
+            <td>
+              PIT 因子快照 24,054 条；PIT 信号事件 12,614 条；PIT 回测记录 2 条；最新 #14 使用 664 根 K 线，读取层为 clickhouse:klines，并保存 source_snapshot_id、params_hash、strategy_version、engine_version。
+            </td>
+            <td><span class="pill warn">继续强化</span> 后续把数据快照 ID、因子版本、策略版本也绑定到每次回测。</td>
+          </tr>
+          <tr>
+            <td><strong>支持决策回放</strong></td>
+            <td>
+              历史回放会话可以创建、启动和查看状态；回放会话使用独立 session_id，避免和全局模拟盘混在一起。当前已有 completed 样例，也仍有 running 会话在继续跑。
+            </td>
+            <td>
+              <a href="http://localhost:3002/replay">/replay 历史回放</a><br />
+              <a href="http://localhost:3002/audit">/audit 回测与审计</a>
+            </td>
+            <td>
+              replay_sessions=11；running=2；pending=8；completed=1。已完成样例：REPLAY_20260529_f36383。
+            </td>
+            <td><span class="pill ok">可使用</span> 后续可继续让 running 会话跑完，增加更多样本。</td>
+          </tr>
+          <tr>
+            <td><strong>支持审计追踪</strong></td>
+            <td>
+              决策审计已经写入 coordination_history，包含最终建议、置信度、角色意见、输入快照 ID、风险说明等；系统级关键操作写入 audit_logs。
+            </td>
+            <td>
+              <a href="http://localhost:3002/decisions">/decisions 决策中心</a><br />
+              <a href="http://localhost:3002/audit">/audit 回测与审计</a>
+            </td>
+            <td>
+              coordination_history=53；audit_logs=44。最新新增 REPLAY_QUICK_BACKTEST_RUN，记录 replay_session_id、backtest_id、PIT 窗口和核心指标。
+            </td>
+            <td><span class="pill ok">可使用</span> 下一步把数据拉取、回放启动、参数保存也统一写入 audit_logs。</td>
+          </tr>
+          <tr>
+            <td><strong>支持结果对比</strong></td>
+            <td>
+              后端已有回放 vs 回测对比接口和前端入口。当前 completed 回放已明确关联 quick backtest #14，属于同标的、同周期、同策略、同初始资金的严格对比样例。
+            </td>
+            <td>
+              <a href="http://localhost:3002/analytics">/analytics 性能分析</a><br />
+              <a href="http://localhost:3002/audit">/audit 回测与审计</a>
+            </td>
+            <td>
+              backtest_results=14；linked_replays=9；strict_comparison_ready=1。严格样例：REPLAY_20260529_f36383 → backtest #14。
+            </td>
+            <td><span class="pill ok">可使用</span> 在 /audit 打开严格对比样例，或直接进 /analytics 查看差异。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section panel">
+      <h2>3. 主流程链路</h2>
+      <p class="section-desc">PRD 的主线是“外部数据源 → OpenBB → 标准化 → 存储 → 因子信号 → AnalysisContext → TradingAgents → 审计/回测”。当前实现如下：</p>
+      <div class="flow">
+        <div class="flow-step">
+          <h3>L1 数据源</h3>
+          <p>OpenBB/yfinance、FRED/OECD、CCXT、新闻源、股票样例。</p>
+        </div>
+        <div class="flow-step">
+          <h3>L2 统一接入</h3>
+          <p>MarketDataGateway 与 OpenBBDataService 做 provider fallback。</p>
+        </div>
+        <div class="flow-step">
+          <h3>L3 标准化</h3>
+          <p>Instrument、Bar、NewsEvent、MacroEvent 保留时间与版本字段。</p>
+        </div>
+        <div class="flow-step">
+          <h3>L4 存储</h3>
+          <p>ClickHouse 主时序库，PostgreSQL 主状态，DuckDB/Parquet 分析归档。</p>
+        </div>
+        <div class="flow-step">
+          <h3>L5 因子信号</h3>
+          <p>33 个因子定义，28,494 条快照，13,502 条信号事件。</p>
+        </div>
+        <div class="flow-step">
+          <h3>L6 TradingAgents</h3>
+          <p>消费 AnalysisContext 输出结构化建议，写入 coordination_history。</p>
+        </div>
+        <div class="flow-step">
+          <h3>L7 回测审计</h3>
+          <p>回测、回放、审计台、决策追踪和结果对比接口。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <h2>4. 数据来源与真实含义</h2>
+      <p class="section-desc">为了避免误解，下面把当前页面看到的数据来源讲清楚。这里区分“库支持”“项目实际使用”“前端实际展示”。</p>
+      <div class="source-list">
+        <div class="source-row">
+          <strong>Crypto K线</strong>
+          <p>主链路是 OpenBB/yfinance 拉取后写入 ClickHouse。前端 K 线和回测主要读取 ClickHouse 缓存；ClickHouse 不是真正来源，而是本地时序缓存。</p>
+          <span>真实上游：OpenBB/yfinance；补充：CCXT/OKX</span>
+        </div>
+        <div class="source-row">
+          <strong>CCXT</strong>
+          <p>CCXT 是交易所连接库，当前健康检查显示库可注册 7 个交易所连接器。但为了避免误导，前端交易所选择只暴露当前实际使用的 OKX。</p>
+          <span>用途：实时交易所报价、未来执行接口补充</span>
+        </div>
+        <div class="source-row">
+          <strong>新闻</strong>
+          <p>新闻接口当前从 DuckDB 读取结构化新闻记录，来源链路主要是 OpenBB/yfinance 新闻。原版 TradingAgentsGraph 实验入口会使用自己的 Google News RSS，不属于主链路。</p>
+          <span>当前 BTC 新闻：15 条</span>
+        </div>
+        <div class="source-row">
+          <strong>宏观数据</strong>
+          <p>宏观指标通过 OpenBB 的 FRED/OECD 链路进入 DuckDB，并保留 provider、schema_version、available_time。</p>
+          <span>FEDFUNDS、DGS10、T10YIE、M2SL、CPI、失业率</span>
+        </div>
+        <div class="source-row">
+          <strong>股票样例</strong>
+          <p>SPY 用来验证平台可扩展到股票/ETF，但本项目仍按“加密货币优先”。</p>
+          <span>OpenBB/yfinance：SPY=754.60</span>
+        </div>
+        <div class="source-row">
+          <strong>Parquet 归档</strong>
+          <p>Parquet 是历史快照和回放输入的归档格式，不是实时行情源。当前已有 16 个归档文件。</p>
+          <span>路径：data/market</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <h2>5. 组件对应表完成情况</h2>
+      <p class="section-desc">对应 PRD 第 6 节“组件对应表”。</p>
+      <div class="grid component-grid">
+        <div class="card mini-card">
+          <div class="mini-title"><h3>OpenBB</h3><span class="pill ok">已接入</span></div>
+          <p>统一金融数据入口，当前用于 crypto、股票、FRED/OECD 宏观和新闻链路。provider 当前主用 yfinance，并支持 fallback。</p>
+        </div>
+        <div class="card mini-card">
+          <div class="mini-title"><h3>CCXT</h3><span class="pill warn">补充接入</span></div>
+          <p>库层连接器可用，健康检查显示 7 个交易所连接器；前端实际只展示 OKX，避免把库能力误认为已全部验收。</p>
+        </div>
+        <div class="card mini-card">
+          <div class="mini-title"><h3>feedparser / RSSHub</h3><span class="pill warn">部分替代</span></div>
+          <p>主新闻链路当前使用 OpenBB/yfinance + DuckDB；原版 TradingAgentsGraph 实验入口会用 Google News RSS。独立 RSSHub 聚合服务未作为主链路启用。</p>
+        </div>
+        <div class="card mini-card">
+          <div class="mini-title"><h3>PostgreSQL</h3><span class="pill ok">已接入</span></div>
+          <p>保存回测、回放、订单、审计、风险事件、协调决策、因子信号等主状态。</p>
+        </div>
+        <div class="card mini-card">
+          <div class="mini-title"><h3>DuckDB</h3><span class="pill ok">已接入</span></div>
+          <p>用于新闻、宏观和 Parquet 扫描；支持分析型读取和归档查询。</p>
+        </div>
+        <div class="card mini-card">
+          <div class="mini-title"><h3>Parquet</h3><span class="pill ok">已接入</span></div>
+          <p>已有 16 个历史归档文件，用于历史快照、回放输入和备份。</p>
+        </div>
+        <div class="card mini-card">
+          <div class="mini-title"><h3>Redis / NATS</h3><span class="pill ok">已连接</span></div>
+          <p>Redis 用于缓存与短生命周期状态；NATS 当前健康检查 connected。</p>
+        </div>
+        <div class="card mini-card">
+          <div class="mini-title"><h3>pandas / NumPy / 指标计算</h3><span class="pill ok">已使用</span></div>
+          <p>技术指标和回测信号已落地，支持 MA、RSI、BOLL、MACD、ATR、Turtle、Ichimoku 等。</p>
+        </div>
+        <div class="card mini-card">
+          <div class="mini-title"><h3>TradingAgents</h3><span class="pill ok">已接入</span></div>
+          <p>默认决策链可消费 AnalysisContext；独立服务隔离依赖；原版 TradingAgentsGraph 作为实验入口，不默认替换主链路。</p>
+        </div>
+        <div class="card mini-card">
+          <div class="mini-title"><h3>FastAPI / Web UI</h3><span class="pill ok">已接入</span></div>
+          <p>FastAPI 提供标准接口；Web UI 已覆盖仪表盘、数据源、因子信号、决策、回测、回放、性能分析和审计。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <h2>6. 前端页面入口</h2>
+      <p class="section-desc">下面这些页面是当前可以给使用者操作和查看的入口。</p>
+      <table>
+        <thead>
+          <tr>
+            <th>页面</th>
+            <th>用途</th>
+            <th>链接</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>仪表盘</strong></td>
+            <td>查看行情、智能体概览、系统诊断和主要导航。</td>
+            <td><a href="http://localhost:3002/dashboard">http://localhost:3002/dashboard</a></td>
+          </tr>
+          <tr>
+            <td><strong>数据源</strong></td>
+            <td>查看 OpenBB、CCXT、ClickHouse、Parquet、新闻、宏观数据来源和覆盖情况。</td>
+            <td><a href="http://localhost:3002/data-sources">http://localhost:3002/data-sources</a></td>
+          </tr>
+          <tr>
+            <td><strong>因子/信号</strong></td>
+            <td>查看 33 个因子定义、因子快照、信号事件和因子来源。</td>
+            <td><a href="http://localhost:3002/signals">http://localhost:3002/signals</a></td>
+          </tr>
+          <tr>
+            <td><strong>决策中心</strong></td>
+            <td>查看 TradingAgents 结构化决策、角色意见、输入材料数量和原版 Graph 实验入口。</td>
+            <td><a href="http://localhost:3002/decisions">http://localhost:3002/decisions</a></td>
+          </tr>
+          <tr>
+            <td><strong>回测</strong></td>
+            <td>运行策略回测、查看回测历史、参数和收益指标。</td>
+            <td><a href="http://localhost:3002/backtest">http://localhost:3002/backtest</a></td>
+          </tr>
+          <tr>
+            <td><strong>历史回放</strong></td>
+            <td>创建历史回放、启动/暂停回放、为后续结果对比准备会话。</td>
+            <td><a href="http://localhost:3002/replay">http://localhost:3002/replay</a></td>
+          </tr>
+          <tr>
+            <td><strong>回测与审计</strong></td>
+            <td>本次新增，用于集中查看 PRD 10.5：PIT、回放状态、审计日志、决策历史和对比准备度。</td>
+            <td><a href="http://localhost:3002/audit">http://localhost:3002/audit</a></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section panel">
+      <h2>7. 当前实际数据快照</h2>
+      <p class="section-desc">截至本报告生成时，系统内可见的数据状态如下。</p>
+      <div class="grid three-col">
+        <div class="card">
+          <p class="kpi-label">行情覆盖</p>
+          <p class="kpi-value">33 组</p>
+          <p class="kpi-note">source-aware market_bars 分组；主流币种多周期已回填。</p>
+        </div>
+        <div class="card">
+          <p class="kpi-label">Parquet</p>
+          <p class="kpi-value">16 文件</p>
+          <p class="kpi-note">历史归档文件，不是实时行情源。</p>
+        </div>
+        <div class="card">
+          <p class="kpi-label">宏观指标</p>
+          <p class="kpi-value">6 项</p>
+          <p class="kpi-note">FRED/OECD：利率、10Y、美债通胀预期、M2、CPI、失业率。</p>
+        </div>
+        <div class="card">
+          <p class="kpi-label">新闻</p>
+          <p class="kpi-value">15 条</p>
+          <p class="kpi-note">BTCUSDT 当前新闻样例，来源 DuckDB 标准化记录。</p>
+        </div>
+        <div class="card">
+          <p class="kpi-label">PIT 可见数据</p>
+          <p class="kpi-value">24,054 / 12,614 / 2</p>
+          <p class="kpi-note">带 available_time 的因子快照 / 信号事件 / 已写 PIT 元数据的回测。</p>
+        </div>
+        <div class="card">
+          <p class="kpi-label">回放状态</p>
+          <p class="kpi-value ok-text">1 completed</p>
+          <p class="kpi-note">另有 2 个 running、8 个 pending；已有关联回测 #14。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <h2>8. 还需要继续完善的地方</h2>
+      <p class="section-desc">这些不是“没做”，而是从可用底座走向完整生产级闭环还要继续推进的点。</p>
+      <table>
+        <thead>
+          <tr>
+            <th>优先级</th>
+            <th>事项</th>
+            <th>为什么重要</th>
+            <th>建议动作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="pill info">P1</span></td>
+            <td><strong>继续积累更多 completed 回放</strong></td>
+            <td>当前已有 1 个 completed 样例，但更多样本能帮助验证不同区间、不同币种、不同周期下的稳定性。</td>
+            <td>在 /replay 页面观察当前 running 会话，跑完后继续生成对应 quick backtest。</td>
+          </tr>
+          <tr>
+            <td><span class="pill ok">P0 已完成</span></td>
+            <td><strong>完成回放 vs 回测对比样例</strong></td>
+            <td>PRD 10.5 的“结果对比”已有 completed 回放和严格关联 quick backtest。</td>
+            <td>当前样例：REPLAY_20260529_f36383 → backtest #14；后续继续增加样本即可。</td>
+          </tr>
+          <tr>
+            <td><span class="pill info">P1</span></td>
+            <td><strong>把审计日志覆盖面扩大</strong></td>
+            <td>当前 audit_logs=44，决策历史较完整；后续可继续把配置变更、数据拉取、回放启动等关键动作统一规范化。</td>
+            <td>对数据源拉取、回放控制、策略参数保存、模型调用写入统一 AuditRecord。</td>
+          </tr>
+          <tr>
+            <td><span class="pill info">P1</span></td>
+            <td><strong>RSSHub/feedparser 主链路补齐</strong></td>
+            <td>PRD 提到 feedparser/RSSHub；当前新闻主链路主要是 OpenBB/yfinance，RSS 主要出现在原版 TradingAgentsGraph 实验入口。</td>
+            <td>新增可配置 RSS 源列表，进入 NewsEvent 标准表，并在数据源页面标明来源。</td>
+          </tr>
+          <tr>
+            <td><span class="pill info">P1</span></td>
+            <td><strong>继续补齐 PIT 版本追踪</strong></td>
+            <td>普通回测和快速回测已保存 PIT 元数据；生产级复现还应记录数据快照版本、因子版本和策略版本。</td>
+            <td>source_snapshot_id 和 strategy_version 已补；后续继续补 factor_version、upstream_origin 和数据归档版本。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section panel">
+      <h2>9. API 与检查入口</h2>
+      <p class="section-desc">用于后续复查和开发定位的关键接口。</p>
+      <table>
+        <thead>
+          <tr>
+            <th>接口</th>
+            <th>用途</th>
+            <th>当前说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono">GET /api/v1/system/prd-flow</td>
+            <td>查看 PRD 10.1-10.6 总体状态。</td>
+            <td>当前 overall_status=ok，6 个 stage 均可达。</td>
+          </tr>
+          <tr>
+            <td class="mono">GET /api/v1/system/health</td>
+            <td>查看 OpenBB、CCXT、FRED、ClickHouse、TradingAgents 服务健康。</td>
+            <td>当前 L1/L4/L5/L6/infrastructure 均返回 ok/connected。</td>
+          </tr>
+          <tr>
+            <td class="mono">GET /api/v1/system/frontend-api-overview</td>
+            <td>查看 PRD 10.6 前端页面与 API 对应关系。</td>
+            <td>用于 /monitor 页面，展示数据源管理、因子查看、回测任务、审计查看、系统监控五项状态。</td>
+          </tr>
+          <tr>
+            <td class="mono">GET /api/v1/signals/summary</td>
+            <td>查看因子与信号统计。</td>
+            <td>当前 28,494 因子快照，13,502 信号事件。</td>
+          </tr>
+          <tr>
+            <td class="mono">GET /api/v1/signals/context/BTCUSDT</td>
+            <td>生成 TradingAgents 可消费的 AnalysisContext。</td>
+            <td>支持 as_of_time，按 available_time <= as_of_time 过滤。</td>
+          </tr>
+          <tr>
+            <td class="mono">GET /api/v1/audit/overview</td>
+            <td>查看 PRD 10.5 回测与审计概览。</td>
+            <td>本次新增，用于 /audit 页面展示。</td>
+          </tr>
+          <tr>
+            <td class="mono">GET /api/v1/replay/sessions</td>
+            <td>查看历史回放会话。</td>
+            <td>当前 11 个会话，1 completed，2 running，8 pending；completed 样例已关联 backtest #14。</td>
+          </tr>
+          <tr>
+            <td class="mono">GET /api/v1/coordination/history</td>
+            <td>查看 TradingAgents / 协调器决策历史。</td>
+            <td>当前 53 条。</td>
+          </tr>
+          <tr>
+            <td class="mono">GET /api/v1/analytics/replay-backtest-comparison</td>
+            <td>查看回放与回测结果对比。</td>
+            <td>用于严格关联样例的收益、回撤、权益曲线和交易差异分析。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section panel">
+      <h2>10. 最终判断</h2>
+      <p class="section-desc">
+        按 PRD v1 的第一阶段目标，平台已经形成了可展示、可操作、可继续扩展的研究与决策底座。核心链路 OpenBB → 标准化 → 存储 → 因子信号 → AnalysisContext → TradingAgents → 决策审计已经建立。
+      </p>
+      <div class="grid two-col">
+        <div class="card">
+          <h3 style="margin-top:0;">可以向使用者展示的能力</h3>
+          <p class="muted">
+            数据源状态、加密行情覆盖、股票样例、宏观指标、新闻数据、因子字典、信号事件、TradingAgents 决策、回测历史、历史回放会话、审计概览、系统状态监控。
+          </p>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">暂不应承诺为完全完成的能力</h3>
+          <p class="muted">
+            多样本回放对比、全量 RSSHub/feedparser 主链路、普通策略回测全链路 PIT 绑定、生产级自动实盘执行。
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <p class="footer">
+      生成时间：2026-05-29 17:14（Asia/Shanghai） · 项目目录：QuantAgent-feature-prd10.4-agent / QuantAgent-main
+    </p>
+  </div>
+</body>
+</html>

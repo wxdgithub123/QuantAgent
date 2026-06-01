@@ -18,7 +18,8 @@ from app.services.position_analysis_service import position_analysis_service
 from app.services.paper_trading_service import paper_trading_service
 from app.services.market_data_gateway import market_data_gateway
 from app.services.database import get_db, get_db_session, redis_get, redis_set
-from app.models.db_models import BacktestResult, EquitySnapshot, PaperTrade, ReplaySession
+from app.models.db_models import AuditLog, BacktestResult, EquitySnapshot, PaperTrade, ReplaySession
+from app.services.reproducibility import enrich_pit_metadata, stable_params_hash
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -548,6 +549,42 @@ def _normalize_symbol(symbol: str) -> str:
     return symbol
 
 
+def _iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _build_replay_compare_pit_metadata(
+    *,
+    df,
+    replay_session_id: str,
+    start_time: datetime,
+    end_time: datetime,
+    data_source: str,
+) -> Dict[str, Any]:
+    index_min = df.index.min() if df is not None and len(df) else None
+    index_max = df.index.max() if df is not None and len(df) else None
+    return {
+        "enabled": True,
+        "rule": "bar_time <= replay_end_time",
+        "scope": "replay_compare_backtest",
+        "replay_session_id": replay_session_id,
+        "as_of_time": _iso(end_time),
+        "requested_start_time": _iso(start_time),
+        "requested_end_time": _iso(end_time),
+        "actual_start_time": _iso(index_min),
+        "actual_end_time": _iso(index_max),
+        "row_count": int(len(df)) if df is not None else 0,
+        "data_source": data_source,
+        "note": "快速对比回测使用回放会话的时间窗口，确保和 completed replay 严格对齐。",
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Replay Quick Backtest — 自动用相同条件运行回测
 # ─────────────────────────────────────────────────────────────────────────────
@@ -630,7 +667,7 @@ async def replay_quick_backtest(replay_session_id: str):
     except ValueError:
         raise HTTPException(status_code=400, detail=f"不支持的策略类型: {strategy_type}")
 
-    # 4. 获取 Binance K 线数据（从 start_time 开始取 limit 根）
+    # 4. 获取 K 线数据（优先走主数据网关/本地缓存）
     symbol_ccxt = symbol
     if "/" not in symbol_ccxt:
         for quote in ("USDT", "BTC", "ETH", "BNB", "BUSD"):
@@ -648,6 +685,24 @@ async def replay_quick_backtest(replay_session_id: str):
 
     if len(df) < 20:
         raise HTTPException(status_code=400, detail="回测区间内数据不足（需要至少 20 根 K 线）")
+
+    params_hash = stable_params_hash(params)
+    pit_metadata = enrich_pit_metadata(
+        _build_replay_compare_pit_metadata(
+            df=df,
+            replay_session_id=replay_session_id,
+            start_time=start_time,
+            end_time=end_time,
+            data_source="market_data_gateway",
+        ),
+        symbol=symbol,
+        interval=interval,
+        strategy_type=strategy_type,
+        params=params,
+        params_hash=params_hash,
+        data_source="market_data_gateway",
+        replay_session_id=replay_session_id,
+    )
 
     # 5. 构建信号函数并运行回测
     from app.services.strategy_templates import build_signal_func
@@ -693,10 +748,6 @@ async def replay_quick_backtest(replay_session_id: str):
     markers.sort(key=lambda x: x["time"])
 
     # 8. 持久化到数据库
-    import hashlib, json
-    params_json = json.dumps(params, sort_keys=True)
-    params_hash = hashlib.sha256(params_json.encode()).hexdigest()
-
     metrics_dict = {
         "total_return": result["total_return"],
         "annual_return": result["annual_return"],
@@ -708,6 +759,7 @@ async def replay_quick_backtest(replay_session_id: str):
         "total_commission": result.get("total_commission", 0.0),
         "initial_capital": initial_capital,
         "final_capital": result["final_capital"],
+        "pit": pit_metadata,
     }
 
     backtest_db_id = None
@@ -726,6 +778,26 @@ async def replay_quick_backtest(replay_session_id: str):
         session.add(bt_row)
         await session.flush()
         backtest_db_id = bt_row.id
+        session.add(
+            AuditLog(
+                action="REPLAY_COMPARE_BACKTEST_RUN",
+                user_id="system",
+                resource=symbol,
+                details={
+                    "replay_session_id": replay_session_id,
+                    "backtest_id": backtest_db_id,
+                    "strategy_type": strategy_type,
+                    "interval": interval,
+                    "params": params,
+                    "pit": pit_metadata,
+                    "metrics": {
+                        "total_return": metrics_dict["total_return"],
+                        "max_drawdown": metrics_dict["max_drawdown"],
+                        "total_trades": metrics_dict["total_trades"],
+                    },
+                },
+            )
+        )
         await session.commit()
 
     import logging

@@ -907,6 +907,31 @@ class SkillWorkflowDB(Base):
 # ── L3/L5: Factor & Signal persistence ─────────────────────────────────────
 
 
+class FactorDefinitionDB(Base):
+    """Factor catalog used to explain snapshot rows in product UI."""
+
+    __tablename__ = "factor_definitions"
+    __table_args__ = (
+        Index("idx_factor_def_category", "category"),
+        Index("idx_factor_def_active", "is_active"),
+    )
+
+    factor_name = Column(String(100), primary_key=True)
+    display_name = Column(String(120), nullable=False)
+    category = Column(String(40), nullable=False)
+    family = Column(String(60), nullable=True)
+    description = Column(Text, nullable=False, default="")
+    calculation = Column(Text, nullable=False, default="")
+    upstream_data = Column(String(160), nullable=False, default="")
+    provider_hint = Column(String(160), nullable=False, default="")
+    unit = Column(String(40), nullable=False, default="")
+    default_interval = Column(String(20), nullable=True)
+    sort_order = Column(Integer, nullable=False, default=1000)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class FactorSnapshotDB(Base):
     """Persisted factor/indicator values for audit trail and reproducibility."""
 

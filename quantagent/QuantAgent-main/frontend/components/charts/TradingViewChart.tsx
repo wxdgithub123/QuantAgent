@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createChart, CandlestickSeries, IChartApi, ISeriesApi, CandlestickData, Time } from "lightweight-charts";
+import { Activity, Database, HardDrive, RefreshCw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 interface TradingViewChartProps {
@@ -17,12 +18,41 @@ interface KlineItem {
   close: number;
 }
 
+interface KlineMetadata {
+  active_source?: string;
+  cache?: string;
+  provider?: string;
+  exchange?: string;
+  updated_at?: string | null;
+}
+
+function formatSourceLabel(metadata: KlineMetadata | null) {
+  if (!metadata) return "数据源待确认";
+  if (metadata.provider && metadata.exchange) {
+    return `${metadata.provider}:${metadata.exchange}`;
+  }
+  return metadata.active_source || "market_data_gateway";
+}
+
+function formatUpdatedAt(value?: string | null) {
+  if (!value) return "未同步";
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return value;
+  return dt.toLocaleString(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function TradingViewChart({ symbol = "BTCUSDT", interval = "1h" }: TradingViewChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [metadata, setMetadata] = useState<KlineMetadata | null>(null);
 
   const createFallbackCandleData = (): CandlestickData<Time>[] => {
     const now = Math.floor(Date.now() / 1000);
@@ -124,7 +154,7 @@ export function TradingViewChart({ symbol = "BTCUSDT", interval = "1h" }: Tradin
       try {
         chartRef.current = null;
         candlestickSeriesRef.current = null;
-      } catch (e) {
+      } catch {
         // Ignore cleanup errors
       }
     };
@@ -142,7 +172,8 @@ export function TradingViewChart({ symbol = "BTCUSDT", interval = "1h" }: Tradin
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
-        const result = (await response.json()) as { data: KlineItem[] };
+        const result = (await response.json()) as { data: KlineItem[]; metadata?: KlineMetadata };
+        setMetadata(result.metadata ?? null);
         
         if (!chartRef.current || !candlestickSeriesRef.current) return;
         
@@ -163,6 +194,7 @@ export function TradingViewChart({ symbol = "BTCUSDT", interval = "1h" }: Tradin
           const fallbackData = createFallbackCandleData();
           candlestickSeriesRef.current.setData(fallbackData);
           chartRef.current.timeScale().fitContent();
+          setMetadata(null);
           setErrorMessage("实时行情暂不可用，已切换为本地演示数据");
         }
       } finally {
@@ -181,7 +213,24 @@ export function TradingViewChart({ symbol = "BTCUSDT", interval = "1h" }: Tradin
             <span className="text-xl font-bold">{symbol}</span>
             <span className="text-sm font-normal text-slate-400">永续合约</span>
           </CardTitle>
-          <div className="flex items-center gap-2" />
+          <div className="flex flex-wrap items-center justify-end gap-2 text-[11px] text-slate-300">
+            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-emerald-200">
+              <Activity className="h-3 w-3" />
+              K线: {formatSourceLabel(metadata)}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-1 text-sky-200">
+              <HardDrive className="h-3 w-3" />
+              缓存: {metadata?.cache || "ClickHouse 缓存"}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-slate-600 bg-slate-800/80 px-2 py-1 text-slate-300">
+              <RefreshCw className="h-3 w-3" />
+              {formatUpdatedAt(metadata?.updated_at)}
+            </span>
+          </div>
+        </div>
+        <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500">
+          <Database className="h-3 w-3" />
+          这里显示的是 K 线实际来源；右上角“执行场所”只影响下单、持仓、风控和交易所实时报价。
         </div>
         {errorMessage && <div className="text-xs text-amber-300 mt-2">{errorMessage}</div>}
       </CardHeader>

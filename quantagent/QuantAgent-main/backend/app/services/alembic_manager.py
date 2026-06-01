@@ -16,6 +16,7 @@ Usage:
 """
 
 import logging
+import asyncio
 from pathlib import Path
 from typing import Optional
 
@@ -74,13 +75,13 @@ class AlembicManager:
                 tables_exist = await self._tables_exist(engine)
                 if tables_exist:
                     logger.info("Tables exist (likely from init-scripts) — stamping baseline migration")
-                    command.stamp(cfg, "001_initial_schema")
+                    await asyncio.to_thread(command.stamp, cfg, "001_initial_schema")
                 else:
                     logger.info("No tables found — running baseline migration")
-                    command.upgrade(cfg, "001")
+                    await asyncio.to_thread(command.upgrade, cfg, "001")
             else:
                 logger.info(f"Current migration revision: {current_rev} — running pending migrations")
-                command.upgrade(cfg, "head")
+                await asyncio.to_thread(command.upgrade, cfg, "head")
 
         except Exception as e:
             logger.error(f"Alembic upgrade failed: {e}")
@@ -97,7 +98,7 @@ class AlembicManager:
         """
         cfg = self._get_config()
         try:
-            command.stamp(cfg, revision)
+            await asyncio.to_thread(command.stamp, cfg, revision)
             logger.info(f"Database stamped at revision: {revision}")
         except Exception as e:
             logger.error(f"Alembic stamp failed: {e}")

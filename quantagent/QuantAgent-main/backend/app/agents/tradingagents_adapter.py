@@ -75,6 +75,60 @@ class TradingAgentsAdapter:
                 "detail": str(exc)[:200],
             }
 
+    async def native_preview(self, symbol: str, interval: str = "1h") -> Dict[str, Any]:
+        """Return the native upstream TradingAgentsGraph sandbox preview."""
+        url = f"{self.service_url}/native/preview/{symbol}"
+        timeout = aiohttp.ClientTimeout(total=min(float(self.timeout_seconds), 10.0))
+        try:
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
+                async with session.get(url, params={"interval": interval}) as resp:
+                    data = await resp.json(content_type=None)
+                    return {
+                        "status": "ok" if resp.status == 200 else "error",
+                        "service_url": self.service_url,
+                        "http_status": resp.status,
+                        "detail": data,
+                    }
+        except Exception as exc:
+            return {
+                "status": "unavailable",
+                "service_url": self.service_url,
+                "detail": str(exc)[:200],
+            }
+
+    async def run_native_graph(
+        self,
+        symbol: str,
+        interval: str = "1h",
+        trade_date: Optional[str] = None,
+        selected_analysts: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Run the native upstream TradingAgentsGraph sandbox path."""
+        payload = {
+            "symbol": symbol,
+            "interval": interval,
+            "trade_date": trade_date,
+            "selected_analysts": selected_analysts or ["market", "news", "social", "fundamentals"],
+        }
+        url = f"{self.service_url}/native/analyze"
+        timeout = aiohttp.ClientTimeout(total=max(float(self.timeout_seconds), 240.0))
+        try:
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
+                async with session.post(url, json=payload) as resp:
+                    body = await resp.json(content_type=None)
+                    body["http_status"] = resp.status
+                    return body
+        except Exception as exc:
+            return {
+                "status": "error",
+                "symbol": symbol,
+                "error": str(exc)[:500],
+                "raw": {
+                    "mode": "native_graph",
+                    "service_url": self.service_url,
+                },
+            }
+
     async def run_analysis(
         self,
         symbol: str,

@@ -94,6 +94,16 @@ def _row_to_kline(row: Dict[str, Any]) -> KlineData:
     )
 
 
+def _serialize_time(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, pd.Timestamp):
+        value = value.to_pydatetime()
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
 class MarketDataGateway:
     """Local storage + OpenBB-first market data access."""
 
@@ -104,6 +114,10 @@ class MarketDataGateway:
         limit: int = 100,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
+        openbb_provider: str = "yfinance",
+        openbb_fallback_providers: Optional[List[str]] = None,
+        allow_ccxt_fallback: bool = True,
+        fallback_exchange: str = "okx",
         allow_binance_fallback: bool = False,
     ) -> List[KlineData]:
         clean_symbol = _clean_symbol(symbol)
@@ -129,6 +143,8 @@ class MarketDataGateway:
             limit=openbb_limit,
             start_time=openbb_start,
             end_time=end_time,
+            provider=openbb_provider,
+            fallback_providers=openbb_fallback_providers,
             persist=True,
         )
         if bars:
@@ -138,6 +154,27 @@ class MarketDataGateway:
 
         if rows:
             return rows
+
+        if allow_ccxt_fallback and fallback_exchange:
+            try:
+                from app.services.exchange_service import exchange_service
+
+                since = int(start_time.timestamp() * 1000) if start_time else None
+                return await exchange_service.get_klines(
+                    exchange_id=fallback_exchange,
+                    symbol=_to_ccxt_symbol(clean_symbol),
+                    timeframe=interval,
+                    limit=limit,
+                    since=since,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "CCXT fallback failed for %s/%s via %s: %s",
+                    clean_symbol,
+                    interval,
+                    fallback_exchange,
+                    exc,
+                )
 
         if allow_binance_fallback:
             try:
@@ -161,6 +198,8 @@ class MarketDataGateway:
         limit: int = 100,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
+        provider: str = "yfinance",
+        fallback_providers: Optional[List[str]] = None,
         persist: bool = False,
     ) -> List[BarData]:
         from app.services.openbb_data_service import openbb_data_service
@@ -171,8 +210,8 @@ class MarketDataGateway:
             start=start_time,
             end=end_time,
             limit=limit,
-            provider="yfinance",
-            fallback_providers=[],
+            provider=provider,
+            fallback_providers=fallback_providers or [],
         )
         if bars and persist:
             await self.persist_bars(_clean_symbol(symbol), interval, bars)
@@ -181,6 +220,10 @@ class MarketDataGateway:
     async def get_ticker(
         self,
         symbol: str,
+        openbb_provider: str = "yfinance",
+        openbb_fallback_providers: Optional[List[str]] = None,
+        allow_ccxt_fallback: bool = True,
+        fallback_exchange: str = "okx",
         allow_binance_fallback: bool = False,
     ) -> Optional[TickerData]:
         clean_symbol = _clean_symbol(symbol)
@@ -190,9 +233,24 @@ class MarketDataGateway:
 
         from app.services.openbb_data_service import openbb_data_service
 
-        ticker = await openbb_data_service.get_crypto_ticker(clean_symbol)
+        ticker = await openbb_data_service.get_crypto_ticker(
+            clean_symbol,
+            provider=openbb_provider,
+            fallback_providers=openbb_fallback_providers,
+        )
         if ticker:
             return ticker
+
+        if allow_ccxt_fallback and fallback_exchange:
+            try:
+                from app.services.exchange_service import exchange_service
+
+                return await exchange_service.get_ticker(
+                    fallback_exchange,
+                    _to_ccxt_symbol(clean_symbol),
+                )
+            except Exception as exc:
+                logger.warning("CCXT ticker fallback failed for %s via %s: %s", clean_symbol, fallback_exchange, exc)
 
         if allow_binance_fallback:
             try:
@@ -206,10 +264,70 @@ class MarketDataGateway:
     async def get_price(
         self,
         symbol: str,
+        openbb_provider: str = "yfinance",
+        openbb_fallback_providers: Optional[List[str]] = None,
+        allow_ccxt_fallback: bool = True,
+        fallback_exchange: str = "okx",
         allow_binance_fallback: bool = False,
     ) -> Optional[float]:
-        ticker = await self.get_ticker(symbol, allow_binance_fallback=allow_binance_fallback)
+        ticker = await self.get_ticker(
+            symbol,
+            openbb_provider=openbb_provider,
+            openbb_fallback_providers=openbb_fallback_providers,
+            allow_ccxt_fallback=allow_ccxt_fallback,
+            fallback_exchange=fallback_exchange,
+            allow_binance_fallback=allow_binance_fallback,
+        )
         return ticker.price if ticker else None
+
+    async def get_kline_metadata(
+        self,
+        symbol: str,
+        interval: str = "1h",
+    ) -> Dict[str, Any]:
+        """Describe the source currently backing dashboard K-lines."""
+        clean_symbol = _clean_symbol(symbol)
+        metadata: Dict[str, Any] = {
+            "active_source": "market_data_gateway",
+            "cache": "clickhouse:klines",
+            "symbol": clean_symbol,
+            "interval": interval,
+            "provider": "unknown",
+            "exchange": "unknown",
+            "updated_at": None,
+            "source_groups": [],
+        }
+        try:
+            from app.services.clickhouse_service import clickhouse_service
+
+            ranges = await clickhouse_service.get_market_bar_source_ranges()
+            groups = [
+                {
+                    **item,
+                    "min_time": _serialize_time(item.get("min_time")),
+                    "max_time": _serialize_time(item.get("max_time")),
+                }
+                for item in ranges
+                if item.get("symbol") == clean_symbol and item.get("interval") == interval
+            ]
+            metadata["source_groups"] = groups
+
+            if groups:
+                latest = max(groups, key=lambda item: item.get("max_time") or "")
+                metadata["provider"] = latest.get("provider") or "unknown"
+                metadata["exchange"] = latest.get("exchange") or "unknown"
+                metadata["updated_at"] = latest.get("max_time")
+                metadata["active_source"] = f"{metadata['provider']}:{metadata['exchange']}"
+            else:
+                max_time = await clickhouse_service.get_max_timestamp(clean_symbol, interval)
+                metadata["updated_at"] = _serialize_time(max_time)
+                if max_time:
+                    metadata["provider"] = "legacy"
+                    metadata["exchange"] = "clickhouse"
+                    metadata["active_source"] = "clickhouse:legacy_klines"
+        except Exception as exc:
+            logger.debug("Kline metadata unavailable for %s/%s: %s", clean_symbol, interval, exc)
+        return metadata
 
     async def get_symbols(self) -> List[SymbolInfo]:
         from app.core.config import settings
@@ -231,6 +349,10 @@ class MarketDataGateway:
         limit: int = 100,
         start: Optional[datetime] = None,
         end: Optional[datetime] = None,
+        openbb_provider: str = "yfinance",
+        openbb_fallback_providers: Optional[List[str]] = None,
+        allow_ccxt_fallback: bool = True,
+        fallback_exchange: str = "okx",
         allow_binance_fallback: bool = False,
     ) -> pd.DataFrame:
         klines = await self.get_klines(
@@ -239,6 +361,10 @@ class MarketDataGateway:
             limit=limit,
             start_time=start,
             end_time=end,
+            openbb_provider=openbb_provider,
+            openbb_fallback_providers=openbb_fallback_providers,
+            allow_ccxt_fallback=allow_ccxt_fallback,
+            fallback_exchange=fallback_exchange,
             allow_binance_fallback=allow_binance_fallback,
         )
         if not klines:
@@ -268,16 +394,34 @@ class MarketDataGateway:
         rows = [
             {
                 "open_time": bar.datetime,
+                "instrument_id": bar.instrument_id or _clean_symbol(symbol),
+                "exchange": bar.exchange,
+                "provider": bar.provider,
+                "source_version": bar.source_version or "openbb-sdk",
+                "schema_version": bar.schema_version,
                 "open": bar.open,
                 "high": bar.high,
                 "low": bar.low,
                 "close": bar.close,
                 "volume": bar.volume,
                 "close_time": bar.bar_end_time or bar.datetime,
+                "available_time": bar.available_time,
+                "vwap": bar.vwap,
+                "volume_notional": bar.volume_notional,
+                "transactions": bar.transactions,
             }
             for bar in bars
         ]
-        return await clickhouse_service.insert_klines(_clean_symbol(symbol), interval, rows)
+        legacy_written = await clickhouse_service.insert_klines(_clean_symbol(symbol), interval, rows)
+        source_written = await clickhouse_service.insert_market_bars(
+            _clean_symbol(symbol),
+            interval,
+            rows,
+            provider=rows[0].get("provider") or "openbb",
+            exchange=rows[0].get("exchange") or "openbb",
+            source_version=rows[0].get("source_version") or "openbb-sdk",
+        )
+        return legacy_written or source_written
 
     async def _get_local_klines(
         self,
@@ -351,6 +495,8 @@ class MarketDataGateway:
         start: datetime,
         end: Optional[datetime] = None,
         limit: int = 1000,
+        provider: str = "yfinance",
+        fallback_providers: Optional[List[str]] = None,
     ) -> int:
         end = end or datetime.now(timezone.utc)
         bars = await self.get_openbb_bars(
@@ -359,6 +505,8 @@ class MarketDataGateway:
             limit=limit,
             start_time=_as_utc(start),
             end_time=_as_utc(end),
+            provider=provider,
+            fallback_providers=fallback_providers,
             persist=True,
         )
         return len(bars)

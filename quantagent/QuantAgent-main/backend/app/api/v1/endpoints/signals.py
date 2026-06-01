@@ -105,15 +105,19 @@ async def get_factors(
     try:
         async with get_db() as session:
             conditions = []
+            factor_conditions = []
             params: Dict[str, Any] = {}
             if symbol:
                 conditions.append("symbol = :symbol")
+                factor_conditions.append("fs.symbol = :symbol")
                 params["symbol"] = symbol
             if factor_name:
                 conditions.append("factor_name = :factor_name")
+                factor_conditions.append("fs.factor_name = :factor_name")
                 params["factor_name"] = factor_name
 
             where_clause = " AND ".join(conditions) if conditions else "1=1"
+            factor_where_clause = " AND ".join(factor_conditions) if factor_conditions else "1=1"
 
             # Count
             count_sql = f"SELECT COUNT(*) FROM factor_snapshots WHERE {where_clause}"
@@ -121,9 +125,12 @@ async def get_factors(
             total = r.scalar() or 0
 
             # Query
-            query_sql = f"""SELECT id, symbol, timestamp, factor_name, factor_value, parameters, source,
-interval, provider, data_source, source_version, schema_version, available_time, as_of_time
-FROM factor_snapshots WHERE {where_clause}
+            query_sql = f"""SELECT fs.id, fs.symbol, fs.timestamp, fs.factor_name, fs.factor_value, fs.parameters, fs.source,
+fs.interval, fs.provider, fs.data_source, fs.source_version, fs.schema_version, fs.available_time, fs.as_of_time,
+fd.display_name, fd.category, fd.family, fd.description, fd.calculation, fd.upstream_data, fd.provider_hint, fd.unit
+FROM factor_snapshots fs
+LEFT JOIN factor_definitions fd ON fd.factor_name = fs.factor_name
+WHERE {factor_where_clause}
 ORDER BY timestamp DESC LIMIT :limit OFFSET :offset"""
             params["limit"] = limit
             params["offset"] = offset
@@ -145,11 +152,116 @@ ORDER BY timestamp DESC LIMIT :limit OFFSET :offset"""
                     "schema_version": row[11],
                     "available_time": row[12].isoformat() if row[12] else None,
                     "as_of_time": row[13].isoformat() if row[13] else None,
+                    "definition": {
+                        "display_name": row[14] or row[3],
+                        "category": row[15] or "未分类",
+                        "family": row[16],
+                        "description": row[17] or "",
+                        "calculation": row[18] or "",
+                        "upstream_data": row[19] or "未记录",
+                        "provider_hint": row[20] or "",
+                        "unit": row[21] or "",
+                    },
                 })
 
             return {"data": rows, "total": total, "limit": limit, "offset": offset}
     except Exception as e:
         logger.error(f"Failed to fetch factors: {e}")
+        return {"data": [], "total": 0, "error": str(e)}
+
+
+@router.get("/factor-definitions")
+async def get_factor_definitions(
+    category: Optional[str] = Query(None, description="Filter by factor category"),
+    include_inactive: bool = Query(False),
+) -> Dict[str, Any]:
+    """List the factor catalog with observed snapshot counts."""
+    try:
+        async with get_db() as session:
+            conditions = []
+            params: Dict[str, Any] = {}
+            if category:
+                conditions.append("fd.category = :category")
+                params["category"] = category
+            if not include_inactive:
+                conditions.append("fd.is_active IS TRUE")
+
+            where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+            sql = f"""
+WITH observed AS (
+    SELECT
+        factor_name,
+        COUNT(*) AS snapshot_count,
+        COUNT(DISTINCT symbol) AS symbol_count,
+        MAX(timestamp) AS latest_timestamp,
+        STRING_AGG(DISTINCT COALESCE(provider, '未记录'), ', ' ORDER BY COALESCE(provider, '未记录')) AS providers,
+        STRING_AGG(DISTINCT COALESCE(data_source, '未记录'), ', ' ORDER BY COALESCE(data_source, '未记录')) AS data_sources
+    FROM factor_snapshots
+    GROUP BY factor_name
+)
+SELECT
+    fd.factor_name,
+    fd.display_name,
+    fd.category,
+    fd.family,
+    fd.description,
+    fd.calculation,
+    fd.upstream_data,
+    fd.provider_hint,
+    fd.unit,
+    fd.default_interval,
+    fd.sort_order,
+    fd.is_active,
+    COALESCE(o.snapshot_count, 0) AS snapshot_count,
+    COALESCE(o.symbol_count, 0) AS symbol_count,
+    o.latest_timestamp,
+    COALESCE(o.providers, '') AS observed_providers,
+    COALESCE(o.data_sources, '') AS observed_data_sources
+FROM factor_definitions fd
+LEFT JOIN observed o ON o.factor_name = fd.factor_name
+{where_clause}
+ORDER BY fd.sort_order, fd.factor_name
+"""
+            r = await session.execute(text(sql), params)
+            rows = []
+            for row in r.fetchall():
+                rows.append({
+                    "factor_name": row[0],
+                    "display_name": row[1],
+                    "category": row[2],
+                    "family": row[3],
+                    "description": row[4],
+                    "calculation": row[5],
+                    "upstream_data": row[6],
+                    "provider_hint": row[7],
+                    "unit": row[8],
+                    "default_interval": row[9],
+                    "sort_order": row[10],
+                    "is_active": row[11],
+                    "snapshot_count": row[12],
+                    "symbol_count": row[13],
+                    "latest_timestamp": row[14].isoformat() if row[14] else None,
+                    "observed_providers": [item.strip() for item in (row[15] or "").split(",") if item.strip()],
+                    "observed_data_sources": [item.strip() for item in (row[16] or "").split(",") if item.strip()],
+                })
+
+            r = await session.execute(text("SELECT COUNT(*) FROM factor_snapshots"))
+            snapshot_total = r.scalar() or 0
+            r = await session.execute(text("SELECT COUNT(DISTINCT factor_name) FROM factor_snapshots"))
+            observed_factor_count = r.scalar() or 0
+            by_category: Dict[str, int] = {}
+            for row in rows:
+                by_category[row["category"]] = by_category.get(row["category"], 0) + 1
+
+            return {
+                "data": rows,
+                "total": len(rows),
+                "snapshot_total": snapshot_total,
+                "observed_factor_count": observed_factor_count,
+                "by_category": by_category,
+            }
+    except Exception as e:
+        logger.error(f"Failed to fetch factor definitions: {e}", exc_info=True)
         return {"data": [], "total": 0, "error": str(e)}
 
 
@@ -272,6 +384,17 @@ async def get_signals_summary() -> Dict[str, Any]:
             event_total = r.scalar() or 0
             r = await session.execute(text("SELECT COUNT(*) FROM factor_snapshots"))
             factor_total = r.scalar() or 0
+            r = await session.execute(text("SELECT COUNT(DISTINCT factor_name) FROM factor_snapshots"))
+            distinct_factor_count = r.scalar() or 0
+
+            r = await session.execute(text("""
+SELECT COALESCE(fd.category, '未分类') AS category, COUNT(DISTINCT fs.factor_name) AS cnt
+FROM factor_snapshots fs
+LEFT JOIN factor_definitions fd ON fd.factor_name = fs.factor_name
+GROUP BY COALESCE(fd.category, '未分类')
+ORDER BY cnt DESC
+"""))
+            by_factor_category = {row[0]: row[1] for row in r.fetchall()}
 
             # Recent signals (last 7 days)
             r = await session.execute(text(
@@ -281,11 +404,13 @@ async def get_signals_summary() -> Dict[str, Any]:
 
             return {
                 "factor_total": factor_total,
+                "distinct_factor_count": distinct_factor_count,
                 "event_total": event_total,
                 "recent_7d": recent_7d,
                 "by_signal_type": by_type,
                 "by_strategy": by_strategy,
                 "by_symbol": by_symbol,
+                "by_factor_category": by_factor_category,
             }
     except Exception as e:
         logger.error(f"Failed to fetch signals summary: {e}")
