@@ -7,6 +7,7 @@ import { WfeCompareChart } from "@/components/charts/WfeCompareChart";
 import { ParamStabilityChart } from "@/components/charts/ParamStabilityChart";
 import { EquityCurveChart } from "@/components/charts/EquityCurveChart";
 import { MarketConfigPanel } from "@/components/backtest/MarketConfigPanel";
+import { AppTopNav } from "@/components/navigation/AppTopNav";
 import { createChart, LineSeries, createSeriesMarkers, IChartApi, ISeriesApi, Time } from "lightweight-charts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -16,9 +17,9 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import {
   BarChart3, TrendingUp, TrendingDown, Activity, RefreshCw,
-  Play, ChevronRight, Info, ArrowLeft, Clock, DollarSign,
-  BarChart2, Percent, AlertTriangle, CheckCircle2, Terminal, BookOpen, LayoutDashboard,
-  HelpCircle, History, Trash2, X, Layers, Server, Zap, Brain
+  Play, ChevronRight, Info, Clock,
+  BarChart2, AlertTriangle, CheckCircle2,
+  HelpCircle, History, Trash2, Layers, Server
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -53,6 +54,28 @@ interface BacktestMetrics {
   final_capital: number;
 }
 
+interface PitMetadata {
+  enabled?: boolean;
+  rule?: string;
+  scope?: string;
+  as_of_time?: string | null;
+  requested_as_of_time?: string | null;
+  requested_start_time?: string | null;
+  requested_end_time?: string | null;
+  actual_start_time?: string | null;
+  actual_end_time?: string | null;
+  row_count?: number;
+  data_source?: string;
+  source_layer?: string;
+  source_snapshot_id?: string;
+  params_hash?: string;
+  strategy_version?: string;
+  engine_version?: string;
+  reproducibility_level?: string;
+  note?: string;
+  upstream_note?: string;
+}
+
 interface TradeRecord {
   entry_time: string;
   exit_time: string;
@@ -83,6 +106,7 @@ interface BacktestResult {
   markers: TradeMarker[];
   trades: TradeRecord[];
   created_at: string;
+  pit?: PitMetadata;
 }
 
 interface OptimizeResultFull {
@@ -120,6 +144,35 @@ interface OptimizeWarning {
   recommendation: string;
 }
 
+interface BacktestTaskResult {
+  index: number;
+  status: string;
+  params: Record<string, number>;
+  backtest_id?: number | null;
+  metrics?: Partial<BacktestMetrics>;
+  error?: string;
+}
+
+interface BacktestTask {
+  task_id: string;
+  status: string;
+  kind: string;
+  created_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  symbol: string;
+  interval: string;
+  strategy_type: string;
+  total_runs: number;
+  completed_runs: number;
+  failed_runs: number;
+  max_parallel: number;
+  storage?: string;
+  queue_scope?: string;
+  results?: BacktestTaskResult[];
+  error?: string;
+}
+
 // ─── Metric Card ──────────────────────────────────────────────────────────────
 function MetricCard({ label, value, positive, sub }: { label: string; value: string; positive?: boolean; sub?: string }) {
   return (
@@ -145,6 +198,44 @@ const METRIC_LABELS: Record<string, { label: string; format: (v: number) => stri
 };
 
 const COMPOSITION_NAMES: Record<string, string> = { weighted: "加权组合", voting: "投票组合" };
+const STRATEGY_TYPE_LABELS: Record<string, string> = {
+  ma: "均线金叉策略",
+  rsi: "RSI 超买超卖策略",
+  boll: "布林带均值回归策略",
+  macd: "MACD 金叉死叉策略",
+  ema_triple: "三线 EMA 趋势系统",
+  atr_trend: "ATR 趋势追踪策略",
+  turtle: "海龟交易法则",
+  ichimoku: "一目均衡表趋势策略",
+};
+
+function formatStrategyTypeLabel(strategyType?: string | null, templates: Template[] = []) {
+  const raw = (strategyType || "").trim();
+  if (!raw) return "未知策略";
+  const template = templates.find((item) => item.id === raw);
+  return template?.name || STRATEGY_TYPE_LABELS[raw.toLowerCase()] || raw;
+}
+
+function researchSnapshotHref(symbol: string, interval: string, asOfTime?: string | null) {
+  const params = new URLSearchParams({
+    symbol,
+    interval,
+  });
+  if (asOfTime) params.set("as_of_time", asOfTime);
+  return `/dashboard?${params.toString()}`;
+}
+
+function getResultAsOfTime(result?: BacktestResult | null) {
+  return result?.pit?.as_of_time || result?.pit?.actual_end_time || result?.created_at || null;
+}
+
+function describeDataSource(source?: string | null) {
+  if (!source) return "来源待确认";
+  if (source === "clickhouse:klines") return "ClickHouse 本地 K 线缓存";
+  if (source === "market_data_gateway") return "行情网关实时/近实时读取";
+  if (source === "market_data_gateway:fallback") return "行情网关备用读取";
+  return source;
+}
 
 function MetricsComparisonTable({
   comparisons,
@@ -577,8 +668,12 @@ function LaunchPaperBotDialog({
         <div className="bg-secondary/50 rounded-xl p-3 mb-4 border border-border/50">
           <p className="text-xs text-muted-foreground mb-1">将从以下回测结果创建 Paper Bot：</p>
           <div className="flex items-center gap-2 mb-2">
-            <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20">
-              {result.strategy_type}
+            <Badge
+              variant="outline"
+              className="text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20"
+              title={result.strategy_type}
+            >
+              {formatStrategyTypeLabel(result.strategy_type)}
             </Badge>
             <span className="text-sm text-foreground/80">{result.symbol} / {result.interval}</span>
           </div>
@@ -725,6 +820,7 @@ export default function BacktestPage() {
   // Date range (optional)
   const [startTime, setStartTime] = useState<string>('');
   const [endTime, setEndTime] = useState<string>('');
+  const [asOfTime, setAsOfTime] = useState<string>('');
 
   // Run state
   const [running, setRunning]   = useState(false);
@@ -766,6 +862,9 @@ export default function BacktestPage() {
   const [optApplyDialogOpen, setOptApplyDialogOpen] = useState(false);
   const [optSelectedParams, setOptSelectedParams] = useState<Record<string, number> | null>(null);
   const [optSelectedRank, setOptSelectedRank] = useState<number>(0);
+  const [batchSubmitting, setBatchSubmitting] = useState(false);
+  const [batchTask, setBatchTask] = useState<BacktestTask | null>(null);
+  const [batchError, setBatchError] = useState<string | null>(null);
 
   // ── Build param_ranges from optParamRanges config ─────────────────────────
   const buildParamRanges = (): Record<string, number[]> => {
@@ -848,6 +947,85 @@ export default function BacktestPage() {
       setOptRunning(false);
     }
   };
+
+  const refreshBatchTask = useCallback(async (taskId: string) => {
+    try {
+      const res = await fetch(`/api/v1/strategy/backtest/tasks/${taskId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "回测任务状态读取失败");
+      setBatchTask(data as BacktestTask);
+      return data as BacktestTask;
+    } catch (err: any) {
+      setBatchError(err.message || "回测任务状态读取失败");
+      return null;
+    }
+  }, []);
+
+  const handleSubmitBatchBacktest = async () => {
+    const ranges = buildParamRanges();
+    if (Object.keys(ranges).length === 0) {
+      setBatchError("请至少配置一个参数范围");
+      return;
+    }
+    setBatchSubmitting(true);
+    setBatchError(null);
+    setBatchTask(null);
+    try {
+      const requestBody: Record<string, any> = {
+        strategy_type: selectedType,
+        symbol,
+        interval,
+        limit,
+        initial_capital: initialCapital,
+        params: paramValues,
+        param_grid: ranges,
+        max_parallel: 5,
+      };
+      if (startTime && endTime) {
+        requestBody.start_time = new Date(startTime).toISOString();
+        requestBody.end_time = new Date(endTime).toISOString();
+      }
+      if (asOfTime) {
+        requestBody.as_of_time = new Date(asOfTime).toISOString();
+      }
+      const res = await fetch("/api/v1/strategy/backtest/parameter-batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "后台批量回测提交失败");
+      setBatchTask({
+        task_id: data.task_id,
+        status: data.status,
+        kind: "parameter_batch",
+        symbol,
+        interval,
+        strategy_type: selectedType,
+        total_runs: data.total_runs,
+        completed_runs: 0,
+        failed_runs: 0,
+        max_parallel: data.max_parallel,
+        storage: "PostgreSQL backtest_results",
+        queue_scope: "in_process_memory",
+        results: [],
+      });
+      setTimeout(() => refreshBatchTask(data.task_id), 1000);
+    } catch (err: any) {
+      setBatchError(err.message || "后台批量回测提交失败");
+    } finally {
+      setBatchSubmitting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!batchTask?.task_id) return;
+    if (!["queued", "running"].includes(batchTask.status)) return;
+    const timer = window.setTimeout(() => {
+      refreshBatchTask(batchTask.task_id);
+    }, 2000);
+    return () => window.clearTimeout(timer);
+  }, [batchTask?.task_id, batchTask?.status, refreshBatchTask]);
 
   const handleOptApplyToBacktest = () => {
     if (!optResult) return;
@@ -1236,6 +1414,9 @@ export default function BacktestPage() {
         requestBody.start_time = new Date(startTime).toISOString();
         requestBody.end_time = new Date(endTime).toISOString();
       }
+      if (asOfTime) {
+        requestBody.as_of_time = new Date(asOfTime).toISOString();
+      }
       const res = await fetch("/api/v1/strategy/backtest/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1296,49 +1477,42 @@ export default function BacktestPage() {
   };
 
   const m = result?.metrics;
+  const resultAsOfTime = getResultAsOfTime(result);
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
-        <div className="container mx-auto px-4 py-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center">
-                <BarChart3 className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <h1 className="text-lg font-bold text-foreground">QuantAgent OS</h1>
-                <p className="text-[10px] text-muted-foreground">策略回测可视化</p>
-              </div>
-            </div>
-            <nav className="hidden md:flex items-center gap-1">
-              <Link href="/dashboard" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-                <LayoutDashboard className="w-4 h-4" /> 仪表盘
-              </Link>
-              <span className="px-3 py-1.5 text-sm text-blue-400 bg-blue-500/10 rounded-lg border border-blue-500/20 font-medium flex items-center gap-1.5">
-                <BarChart2 className="w-4 h-4" /> 回测
-              </span>
-              <Link href="/replay" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-                <History className="w-4 h-4" /> 历史回放
-              </Link>
-              <Link href="/strategies" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-                <BookOpen className="w-4 h-4" /> 策略库
-              </Link>
-              <Link href="/terminal" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-                <Terminal className="w-4 h-4" /> 终端
-              </Link>
-              <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
-                <Server className="w-4 h-4" /> Hummingbot
-              </Link>
-              <Link href="/signals" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Layers className="w-4 h-4" /> 因子/信号</Link>
-              <Link href="/decisions" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Brain className="w-4 h-4" /> 决策中心</Link>
-            </nav>
-          </div>
-        </div>
-      </header>
+      <AppTopNav
+        activeSection="backtest"
+        title="策略回测"
+        subtitle="PIT 数据切片、参数验证、交易明细与研究台回看"
+      />
 
       <main className="container mx-auto px-4 py-6">
+        <Card className="mb-6 border-cyan-500/20 bg-cyan-500/5">
+          <CardContent className="grid gap-4 p-4 md:grid-cols-4">
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-cyan-300">PIT 规则</p>
+              <p className="mt-1 text-sm text-foreground">只使用截止时间前可见的数据</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">K 线按 bar_time 截断；Agent 上下文按 available_time 截断。</p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-cyan-300">数据来源</p>
+              <p className="mt-1 text-sm text-foreground">行情网关 / ClickHouse 缓存</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">ClickHouse 是本地存储层，不是原始交易所或 OpenBB provider。</p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-cyan-300">结果保存</p>
+              <p className="mt-1 text-sm text-foreground">当前保存到 PostgreSQL</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">DuckDB 结果库属于 PRD 后续补齐项，页面不冒充已完成。</p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-cyan-300">联动入口</p>
+              <p className="mt-1 text-sm text-foreground">交易点可跳回研究台</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">点击“建仓上下文”会带上 symbol、interval 和 as_of_time。</p>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Mode Switcher Tab */}
         <div className="flex items-center gap-1 bg-secondary/50 p-1 rounded-xl border border-border/50 mb-6">
           <button
@@ -1400,6 +1574,16 @@ export default function BacktestPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* ── Left: Config Panel ── */}
             <div className="lg:col-span-1 space-y-4">
+            <Card className="border-blue-500/20 bg-blue-500/5">
+              <CardContent className="space-y-2 p-4 text-xs text-muted-foreground">
+                <div className="flex items-center gap-2 text-blue-300">
+                  <CheckCircle2 className="h-4 w-4" />
+                  <span className="font-medium">主回测链路</span>
+                </div>
+                <p>本模式会把策略参数、交易对、时间范围和 PIT 截止时间发送到后端回测引擎，并保存结果与审计日志。</p>
+                <p>如果只在“日期范围”里填结束时间，K 线窗口会按该范围裁剪；如果额外填写“数据截止时间”，后端会强制不使用截止时间之后的 K 线。</p>
+              </CardContent>
+            </Card>
             {/* Strategy Selection */}
             <Card className="bg-card border-border/50">
               <CardHeader className="pb-3">
@@ -1493,6 +1677,7 @@ export default function BacktestPage() {
               limit={limit} setLimit={setLimit}
               startTime={startTime} setStartTime={setStartTime}
               endTime={endTime} setEndTime={setEndTime}
+              asOfTime={asOfTime} setAsOfTime={setAsOfTime}
               initialCapital={initialCapital} setInitialCapital={setInitialCapital}
               symbols={symbols} intervals={intervals} limitOptions={limitOptions}
               accentColor="blue"
@@ -1534,16 +1719,59 @@ export default function BacktestPage() {
                 {/* Result Header */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20 text-xs">
-                      {result.strategy_type.toUpperCase()}
+                    <Badge
+                      variant="outline"
+                      className="bg-blue-500/10 text-blue-400 border-blue-500/20 text-xs"
+                      title={result.strategy_type}
+                    >
+                      {formatStrategyTypeLabel(result.strategy_type, templates)}
                     </Badge>
                     <Badge variant="outline" className="bg-secondary text-foreground/80 border-slate-600 text-xs">
                       {result.symbol} / {result.interval}
                     </Badge>
                     <span className="text-xs text-muted-foreground">{(result.metrics?.total_trades ?? result.trades?.length ?? 0)} 笔交易</span>
                   </div>
-                  <span className="text-xs text-muted-foreground">{new Date(result.created_at).toLocaleString()}</span>
+                  <div className="flex items-center gap-3">
+                    <Link
+                      href={researchSnapshotHref(result.symbol, result.interval, resultAsOfTime)}
+                      className="text-xs text-cyan-300 hover:text-cyan-200"
+                    >
+                      回看结果时点
+                    </Link>
+                    <span className="text-xs text-muted-foreground">{new Date(result.created_at).toLocaleString()}</span>
+                  </div>
                 </div>
+
+                <Card className="border-cyan-500/20 bg-cyan-500/5">
+                  <CardContent className="grid gap-3 p-4 text-xs md:grid-cols-4">
+                    <div>
+                      <p className="text-muted-foreground">本次数据截止</p>
+                      <p className="mt-1 font-mono text-cyan-100">
+                        {resultAsOfTime ? new Date(resultAsOfTime).toLocaleString() : "未返回"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">实际 K 线窗口</p>
+                      <p className="mt-1 text-cyan-100">
+                        {result.pit?.actual_start_time ? new Date(result.pit.actual_start_time).toLocaleDateString() : "未知"}
+                        {" → "}
+                        {result.pit?.actual_end_time ? new Date(result.pit.actual_end_time).toLocaleDateString() : "未知"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">K 线行数 / 来源层</p>
+                      <p className="mt-1 text-cyan-100">
+                        {result.pit?.row_count ?? "未知"} 根 · {describeDataSource(result.pit?.data_source)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">可复现标识</p>
+                      <p className="mt-1 truncate font-mono text-cyan-100" title={result.pit?.source_snapshot_id || ""}>
+                        {result.pit?.source_snapshot_id ? result.pit.source_snapshot_id.slice(0, 12) : "未生成"}
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
 
                 {/* Metrics Grid */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -1568,6 +1796,11 @@ export default function BacktestPage() {
                     value={(m!.sharpe_ratio ?? 0).toFixed(3)}
                     positive={(m!.sharpe_ratio ?? 0) >= 1}
                     sub={(m!.sharpe_ratio ?? 0) >= 2 ? "优秀" : (m!.sharpe_ratio ?? 0) >= 1 ? "良好" : (m!.sharpe_ratio ?? 0) >= 0.5 ? "一般" : "较差"}
+                  />
+                  <MetricCard
+                    label="信息比率"
+                    value="待接入"
+                    sub="需要稳定基准收益序列"
                   />
                   <MetricCard label="胜率" value={`${(m!.win_rate ?? 0).toFixed(1)}%`} positive={(m!.win_rate ?? 0) >= 50} />
                   <MetricCard label="盈亏比" value={(m!.profit_factor ?? 0) >= 999 ? "∞" : (m!.profit_factor ?? 0).toFixed(2)} positive={(m!.profit_factor ?? 0) >= 1.5} />
@@ -1625,7 +1858,7 @@ export default function BacktestPage() {
                         <table className="w-full text-xs">
                           <thead>
                             <tr className="border-b border-border">
-                              {["建仓时间", "平仓时间", "建仓价", "平仓价", "数量", "盈亏", "盈亏%"].map(h => (
+                              {["建仓时间", "平仓时间", "建仓价", "平仓价", "数量", "盈亏", "盈亏%", "回看"].map(h => (
                                 <th key={h} className="px-3 py-2 text-left text-muted-foreground font-medium">{h}</th>
                               ))}
                             </tr>
@@ -1643,6 +1876,14 @@ export default function BacktestPage() {
                                 </td>
                                 <td className={`px-3 py-2 font-mono ${t.pnl_pct >= 0 ? "text-green-400" : "text-red-400"}`}>
                                   {t.pnl_pct >= 0 ? "+" : ""}{Number(t.pnl_pct).toFixed(2)}%
+                                </td>
+                                <td className="px-3 py-2">
+                                  <Link
+                                    href={researchSnapshotHref(result.symbol, result.interval, t.entry_time || resultAsOfTime)}
+                                    className="text-cyan-300 hover:text-cyan-200"
+                                  >
+                                    建仓上下文
+                                  </Link>
                                 </td>
                               </tr>
                             ))}
@@ -1671,8 +1912,12 @@ export default function BacktestPage() {
                     return (
                       <div key={i} className="flex items-center justify-between p-3 bg-secondary/50 rounded-xl border border-border/50 hover:border-slate-600/50 transition-colors group">
                         <div className="flex items-center gap-3 flex-1 cursor-pointer" onClick={() => setResult(h as any)}>
-                          <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20">
-                            {h.strategy_type}
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20"
+                            title={h.strategy_type}
+                          >
+                            {formatStrategyTypeLabel(h.strategy_type, templates)}
                           </Badge>
                           <span className="text-sm text-foreground/80">{h.symbol} / {h.interval}</span>
                           <span className="text-xs text-muted-foreground">{(h.metrics?.total_trades ?? h.trades?.length ?? 0)} 笔</span>
@@ -1682,6 +1927,13 @@ export default function BacktestPage() {
                             {ret >= 0 ? "+" : ""}{ret.toFixed(2)}%
                           </span>
                           <span className="text-[10px] text-muted-foreground">{new Date(h.created_at).toLocaleDateString()}</span>
+                          <Link
+                            href={researchSnapshotHref(h.symbol, h.interval, getResultAsOfTime(h as BacktestResult))}
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-[10px] text-cyan-300 hover:text-cyan-200"
+                          >
+                            回看
+                          </Link>
                           <button
                             onClick={(e) => { e.stopPropagation(); setDeleteTarget(h); }}
                             className="p-1.5 rounded-lg text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors opacity-0 group-hover:opacity-100"
@@ -1706,6 +1958,16 @@ export default function BacktestPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* ── Left: Composition Config Panel ── */}
           <div className="lg:col-span-1 space-y-4">
+            <Card className="border-purple-500/20 bg-purple-500/5">
+              <CardContent className="space-y-2 p-4 text-xs text-muted-foreground">
+                <div className="flex items-center gap-2 text-purple-300">
+                  <Info className="h-4 w-4" />
+                  <span className="font-medium">研究辅助模式</span>
+                </div>
+                <p>组合对比用于比较多个规则策略的收益曲线和信号贡献，不会调用 TradingAgents，也不会生成 OrderIntent。</p>
+                <p>如果要满足 PRD 的“Agent 输入和决策还原”，请优先使用单一策略回测 + 审计台联动。</p>
+              </CardContent>
+            </Card>
             {/* Strategy Multi-Select */}
             <Card className="bg-card border-border/50">
               <CardHeader className="pb-3">
@@ -1942,6 +2204,16 @@ export default function BacktestPage() {
         {backtestMode === "wfa" && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-1 space-y-4">
+              <Card className="border-orange-500/20 bg-orange-500/5">
+                <CardContent className="space-y-2 p-4 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-2 text-orange-300">
+                    <Info className="h-4 w-4" />
+                    <span className="font-medium">稳健性检查</span>
+                  </div>
+                  <p>WFA 用滚动窗口检查参数稳定性，适合判断策略是否过拟合。</p>
+                  <p>它目前不是 TradingAgents 决策回测，也不会写入每笔 Agent 推理链。</p>
+                </CardContent>
+              </Card>
               {/* Strategy Selection */}
               <Card className="bg-card border-border/50">
                 <CardHeader className="pb-3">
@@ -2206,6 +2478,17 @@ export default function BacktestPage() {
           <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
             {/* ── Left Config Panel ── */}
             <div className="xl:col-span-1 space-y-4">
+              <Card className="border-emerald-500/20 bg-emerald-500/5">
+                <CardContent className="space-y-2 p-4 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-2 text-emerald-300">
+                    <Info className="h-4 w-4" />
+                  <span className="font-medium">参数组合对比</span>
+                </div>
+                <p>这里用于对比不同参数组合，结果可一键应用回单一策略回测。</p>
+                <p>已接入轻量后台批量回测：最多 5 个参数组合并行，每个成功组合都会保存一条回测结果。</p>
+                <p>当前任务状态保存在后端进程内；服务重启会丢任务状态，但已完成的回测结果仍在 PostgreSQL。</p>
+              </CardContent>
+            </Card>
               {/* Strategy Selection */}
               <Card className="bg-card border-border/50">
                 <CardHeader className="pb-3">
@@ -2506,16 +2789,109 @@ export default function BacktestPage() {
                 )}
               </Button>
 
+              <Button
+                onClick={handleSubmitBatchBacktest}
+                disabled={batchSubmitting || Object.keys(optParamRanges).length === 0}
+                variant="outline"
+                className="w-full gap-2 border-emerald-500/30 bg-emerald-500/5 text-emerald-200 hover:bg-emerald-500/10"
+              >
+                {batchSubmitting ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    提交后台任务...
+                  </>
+                ) : (
+                  <>
+                    <History className="w-4 h-4" />
+                    提交后台批量回测（并行 5 个）
+                  </>
+                )}
+              </Button>
+
               {/* Error */}
               {optError && (
                 <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-red-400">
                   {optError}
                 </div>
               )}
+              {batchError && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-red-400">
+                  {batchError}
+                </div>
+              )}
             </div>
 
             {/* ── Right Results Panel ── */}
             <div className="xl:col-span-3 space-y-4">
+              {batchTask && (
+                <Card className="border-emerald-500/20 bg-emerald-500/5">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-foreground text-sm flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-2">
+                        <History className="w-4 h-4 text-emerald-300" />
+                        后台批量回测任务
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs text-emerald-200 hover:bg-emerald-500/10"
+                        onClick={() => refreshBatchTask(batchTask.task_id)}
+                      >
+                        刷新
+                      </Button>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+                      <MetricCard label="任务状态" value={batchTask.status} />
+                      <MetricCard label="总组合数" value={String(batchTask.total_runs)} />
+                      <MetricCard label="已完成" value={String(batchTask.completed_runs)} positive={batchTask.completed_runs > 0} />
+                      <MetricCard label="失败" value={String(batchTask.failed_runs)} positive={batchTask.failed_runs === 0} />
+                      <MetricCard label="并行上限" value={`${batchTask.max_parallel} 个`} />
+                    </div>
+                    <div className="rounded-xl border border-emerald-500/15 bg-background/40 p-3 text-xs text-muted-foreground">
+                      <p>任务 ID：<span className="font-mono text-emerald-200">{batchTask.task_id}</span></p>
+                      <p>保存位置：{batchTask.storage || "PostgreSQL backtest_results"}；队列范围：{batchTask.queue_scope === "in_process_memory" ? "后端进程内存" : batchTask.queue_scope || "未知"}</p>
+                    </div>
+                    {(batchTask.results || []).length > 0 && (
+                      <div className="overflow-x-auto rounded-xl border border-border/50">
+                        <table className="w-full text-xs">
+                          <thead className="bg-secondary/40">
+                            <tr>
+                              {["序号", "状态", "回测ID", "收益", "Sharpe", "参数 / 错误"].map(h => (
+                                <th key={h} className="px-3 py-2 text-left text-muted-foreground font-medium">{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(batchTask.results || []).slice(0, 20).map((item) => (
+                              <tr key={item.index} className="border-t border-border/40">
+                                <td className="px-3 py-2 font-mono text-muted-foreground">#{item.index + 1}</td>
+                                <td className="px-3 py-2">
+                                  <Badge variant="outline" className={item.status === "completed" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : "border-red-500/30 bg-red-500/10 text-red-300"}>
+                                    {item.status === "completed" ? "完成" : "失败"}
+                                  </Badge>
+                                </td>
+                                <td className="px-3 py-2 font-mono text-cyan-200">{item.backtest_id || "—"}</td>
+                                <td className="px-3 py-2 font-mono text-foreground">
+                                  {item.metrics?.total_return === undefined ? "—" : `${item.metrics.total_return >= 0 ? "+" : ""}${item.metrics.total_return.toFixed(2)}%`}
+                                </td>
+                                <td className="px-3 py-2 font-mono text-foreground">
+                                  {item.metrics?.sharpe_ratio === undefined ? "—" : item.metrics.sharpe_ratio.toFixed(3)}
+                                </td>
+                                <td className="px-3 py-2 text-muted-foreground">
+                                  {item.error || Object.entries(item.params || {}).map(([k, v]) => `${k}=${v}`).join("，")}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+
               {!optResult ? (
                 <div className="flex flex-col items-center justify-center h-96 text-muted-foreground border border-border rounded-2xl">
                   <TrendingUp className="w-16 h-16 mb-4 opacity-30" />

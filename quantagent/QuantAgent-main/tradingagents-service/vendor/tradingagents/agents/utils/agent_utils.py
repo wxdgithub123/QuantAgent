@@ -1,0 +1,80 @@
+from typing import Any
+from collections.abc import Callable
+
+from langchain_core.messages import HumanMessage, RemoveMessage
+
+from tradingagents.agents.utils.agent_states import AgentState
+from tradingagents.agents.utils.tool_registry import (
+    ANALYST_TOOL_REGISTRY,
+    get_analyst_tools,
+    get_analyst_tool_names,
+)
+from tradingagents.agents.utils.news_data_tools import (
+    get_news,
+    get_global_news,
+    get_market_context,
+    get_earnings_calendar,
+    get_insider_transactions,
+)
+
+# Re-export tools for convenience
+from tradingagents.agents.utils.core_stock_tools import get_stock_data
+from tradingagents.agents.utils.fundamental_data_tools import (
+    get_cashflow,
+    get_fundamentals,
+    get_balance_sheet,
+    get_short_interest,
+    get_analyst_ratings,
+    get_dividends_splits,
+    get_income_statement,
+    get_institutional_holders,
+)
+from tradingagents.agents.utils.technical_indicators_tools import get_indicators
+
+__all__ = [
+    "ANALYST_TOOL_REGISTRY",
+    "create_msg_delete",
+    "get_analyst_ratings",
+    "get_analyst_tool_names",
+    "get_analyst_tools",
+    "get_balance_sheet",
+    "get_cashflow",
+    "get_dividends_splits",
+    "get_earnings_calendar",
+    "get_fundamentals",
+    "get_global_news",
+    "get_income_statement",
+    "get_indicators",
+    "get_insider_transactions",
+    "get_institutional_holders",
+    "get_market_context",
+    "get_news",
+    "get_short_interest",
+    "get_stock_data",
+]
+
+
+def create_msg_delete() -> Callable[[AgentState], dict[str, Any]]:
+    """Create a function that deletes messages from the agent state.
+
+    Returns:
+        Callable[[AgentState], dict[str, Any]]: A function that takes an AgentState
+            and returns a dictionary with operations to remove existing messages
+            and add a placeholder message.
+    """
+
+    def delete_messages(state: AgentState) -> dict[str, Any]:
+        """Clear messages and add placeholder for Anthropic compatibility.
+
+        Args:
+            state (AgentState): The current state of the agent.
+
+        Returns:
+            dict[str, Any]: A dictionary containing the 'messages' key with a list
+                of RemoveMessage operations and a placeholder HumanMessage.
+        """
+        removal_operations = [RemoveMessage(id=m.id) for m in state.messages]
+        placeholder = HumanMessage(content="Continue")
+        return {"messages": [*removal_operations, placeholder]}
+
+    return delete_messages

@@ -13,6 +13,7 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install -r requirements.txt
 
+COPY vendor ./vendor
 COPY main.py .
 
 EXPOSE 8010

@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
 
 from app.services.database import get_db
@@ -37,9 +37,102 @@ def _safe_dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _safe_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _cp1252_reverse_map() -> Dict[int, int]:
+    mapping: Dict[int, int] = {}
+    for byte in range(0x80, 0xA0):
+        try:
+            char = bytes([byte]).decode("cp1252")
+        except UnicodeDecodeError:
+            continue
+        mapping[ord(char)] = byte
+    return mapping
+
+
+_CP1252_REVERSE = _cp1252_reverse_map()
+_MOJIBAKE_MARKERS = ("Ã", "Â", "â", "å", "æ", "ç", "ä", "ï¼", "\ufffd")
+
+
+def _looks_like_mojibake(value: str) -> bool:
+    return any(marker in value for marker in _MOJIBAKE_MARKERS) or any(
+        0x80 <= ord(char) <= 0x9F for char in value
+    )
+
+
+def _repair_text(value: str) -> str:
+    """Repair common UTF-8 text accidentally decoded as Latin-1/Windows-1252.
+
+    The database remains immutable; this only improves human-facing API output.
+    """
+    if not value or not _looks_like_mojibake(value):
+        return value
+
+    raw = bytearray()
+    for char in value:
+        codepoint = ord(char)
+        if codepoint <= 0xFF:
+            raw.append(codepoint)
+        elif codepoint in _CP1252_REVERSE:
+            raw.append(_CP1252_REVERSE[codepoint])
+        else:
+            return value
+
+    try:
+        repaired = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return value
+
+    has_cjk = any("\u4e00" <= char <= "\u9fff" for char in repaired)
+    if has_cjk and not _looks_like_mojibake(repaired):
+        return repaired
+    return value
+
+
+def _repair_json(value: Any) -> Any:
+    if isinstance(value, str):
+        return _repair_text(value)
+    if isinstance(value, list):
+        return [_repair_json(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _repair_json(item) for key, item in value.items()}
+    return value
+
+
 async def _scalar(session, sql: str, params: Optional[Dict[str, Any]] = None) -> int:
     result = await session.execute(text(sql), params or {})
     return int(result.scalar() or 0)
+
+
+def _snapshot_count(snapshot: Dict[str, Any], *keys: str) -> int:
+    for key in keys:
+        value = snapshot.get(key)
+        if isinstance(value, list):
+            return len(value)
+    return 0
+
+
+def _decision_payload(row: Any) -> Dict[str, Any]:
+    return {
+        "id": row["id"],
+        "symbol": row["symbol"],
+        "timestamp": _iso(row["timestamp"]),
+        "final_signal": row["final_signal"],
+        "confidence": _safe_float(row["confidence"]),
+        "vote_breakdown": _safe_dict(row["vote_breakdown"]),
+        "risk_veto": bool(row["risk_veto"]),
+        "summary": _repair_text(row["summary"] or ""),
+        "agent_signals": _repair_json(_safe_list(row["agent_signals"])),
+        "bull_view": _repair_text(row["bull_view"] or ""),
+        "bear_view": _repair_text(row["bear_view"] or ""),
+        "input_snapshot_ids": _safe_dict(row["input_snapshot_ids"]),
+        "role_opinions": _repair_json(_safe_list(row["role_opinions"])),
+        "position_advice": _repair_json(_safe_dict(row["position_advice"])),
+        "risk_notes": _repair_text(row["risk_notes"] or ""),
+        "created_at": _iso(row["created_at"]),
+    }
 
 
 def _support_level(key: str, counts: Dict[str, int]) -> str:
@@ -86,6 +179,7 @@ async def get_prd105_audit_overview(
                 "pending_replays": await _scalar(session, "SELECT COUNT(*) FROM replay_sessions WHERE status = 'pending'"),
                 "failed_replays": await _scalar(session, "SELECT COUNT(*) FROM replay_sessions WHERE status = 'failed'"),
                 "audit_logs": await _scalar(session, "SELECT COUNT(*) FROM audit_logs"),
+                "order_intent_events": await _scalar(session, "SELECT COUNT(*) FROM audit_logs WHERE action LIKE 'ORDER_INTENT_%'"),
                 "coordination_history": await _scalar(session, "SELECT COUNT(*) FROM coordination_history"),
                 "paper_trades": await _scalar(session, "SELECT COUNT(*) FROM paper_trades"),
                 "equity_snapshots": await _scalar(session, "SELECT COUNT(*) FROM equity_snapshots"),
@@ -207,6 +301,21 @@ async def get_prd105_audit_overview(
                         """
                         SELECT id, action, user_id, resource, details, ip_address, created_at
                         FROM audit_logs
+                        ORDER BY created_at DESC
+                        LIMIT :limit
+                        """
+                    ),
+                    {"limit": limit},
+                )
+            ).mappings().all()
+
+            order_intent_rows = (
+                await session.execute(
+                    text(
+                        """
+                        SELECT id, action, user_id, resource, details, ip_address, created_at
+                        FROM audit_logs
+                        WHERE action LIKE 'ORDER_INTENT_%'
                         ORDER BY created_at DESC
                         LIMIT :limit
                         """
@@ -353,6 +462,19 @@ async def get_prd105_audit_overview(
                 for row in audit_rows
             ]
 
+            latest_order_intents = [
+                {
+                    "id": row["id"],
+                    "action": row["action"],
+                    "user_id": row["user_id"],
+                    "resource": row["resource"],
+                    "details": _safe_dict(row["details"]),
+                    "ip_address": row["ip_address"],
+                    "created_at": _iso(row["created_at"]),
+                }
+                for row in order_intent_rows
+            ]
+
             latest_decisions = [
                 {
                     "id": row["id"],
@@ -425,6 +547,13 @@ async def get_prd105_audit_overview(
                     "support_level": _support_level("audit_trail", counts),
                     "status": "ready" if counts["audit_logs"] or counts["coordination_history"] else "partial",
                     "description": "系统动作进入 audit_logs，TradingAgents/协调决策进入 coordination_history，可追溯输入快照、角色意见和最终建议。",
+                },
+                {
+                    "key": "execution_chain",
+                    "title": "执行闭环",
+                    "support_level": "已有 OrderIntent 记录" if counts["order_intent_events"] else "待生成 OrderIntent 样例",
+                    "status": "ready" if counts["order_intent_events"] else "partial",
+                    "description": "TradingAgents 建议可手动生成 OrderIntent，经 RiskGuard 检查后进入模拟盘；WAIT/观望会明确记录为 NO_ACTION，不会下单。",
                 },
                 {
                     "key": "result_comparison",
@@ -505,6 +634,7 @@ async def get_prd105_audit_overview(
                 "latest_backtests": latest_backtests,
                 "latest_replays": latest_replays,
                 "latest_audit_logs": latest_audit_logs,
+                "latest_order_intents": latest_order_intents,
                 "latest_decisions": latest_decisions,
                 "comparison_candidates": comparison_candidates,
                 "next_actions": next_actions,
@@ -519,6 +649,230 @@ async def get_prd105_audit_overview(
             "latest_backtests": [],
             "latest_replays": [],
             "latest_audit_logs": [],
+            "latest_order_intents": [],
             "latest_decisions": [],
             "comparison_candidates": [],
         }
+
+
+@router.get("/records/{audit_id}/export")
+async def export_audit_record(audit_id: int) -> Dict[str, Any]:
+    """Export one immutable audit log row as JSON for manual review."""
+    async with get_db() as session:
+        row = (
+            await session.execute(
+                text(
+                    """
+                    SELECT id, action, user_id, resource, details, ip_address, created_at
+                    FROM audit_logs
+                    WHERE id = :audit_id
+                    """
+                ),
+                {"audit_id": audit_id},
+            )
+        ).mappings().first()
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Audit record {audit_id} not found")
+
+    details = _safe_dict(row["details"])
+    decision_id = (
+        _safe_dict(details.get("intent")).get("decision_id")
+        or _safe_dict(details.get("decision")).get("id")
+    )
+
+    decision = None
+    if decision_id:
+        async with get_db() as session:
+            decision_row = (
+                await session.execute(
+                    text(
+                        """
+                        SELECT id, symbol, timestamp, final_signal, confidence, risk_veto,
+                               summary, input_snapshot_ids, role_opinions, agent_signals,
+                               position_advice, risk_notes, created_at
+                        FROM coordination_history
+                        WHERE id = :decision_id
+                        """
+                    ),
+                    {"decision_id": int(decision_id)},
+                )
+            ).mappings().first()
+        if decision_row:
+            decision = {
+                "id": decision_row["id"],
+                "symbol": decision_row["symbol"],
+                "timestamp": _iso(decision_row["timestamp"]),
+                "final_signal": decision_row["final_signal"],
+                "confidence": _safe_float(decision_row["confidence"]),
+                "risk_veto": bool(decision_row["risk_veto"]),
+                "summary": decision_row["summary"] or "",
+                "input_snapshot_ids": _safe_dict(decision_row["input_snapshot_ids"]),
+                "role_opinions": decision_row["role_opinions"] or [],
+                "agent_signals": decision_row["agent_signals"] or [],
+                "position_advice": _safe_dict(decision_row["position_advice"]),
+                "risk_notes": decision_row["risk_notes"] or "",
+                "created_at": _iso(decision_row["created_at"]),
+            }
+
+    return {
+        "schema_version": "audit_export.v1",
+        "exported_at": datetime.utcnow().isoformat(),
+        "immutability_note": "This endpoint only reads audit_logs and related decision context; it does not modify persisted records.",
+        "audit_record": {
+            "id": row["id"],
+            "action": row["action"],
+            "user_id": row["user_id"],
+            "resource": row["resource"],
+            "details": details,
+            "ip_address": row["ip_address"],
+            "created_at": _iso(row["created_at"]),
+        },
+        "linked_decision": decision,
+    }
+
+
+@router.get("/decisions/{decision_id}")
+async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
+    """Return one decision with its immutable audit and execution chain.
+
+    This endpoint is intentionally read-only. It joins the persisted
+    coordination decision with OrderIntent audit events and paper trades so the
+    frontend can show the PRD stage-2 audit trail without inventing rows.
+    """
+    async with get_db() as session:
+        decision_row = (
+            await session.execute(
+                text(
+                    """
+                    SELECT id, symbol, timestamp, final_signal, confidence,
+                           vote_breakdown, risk_veto, summary, agent_signals,
+                           bull_view, bear_view, input_snapshot_ids, role_opinions,
+                           position_advice, risk_notes, created_at
+                    FROM coordination_history
+                    WHERE id = :decision_id
+                    """
+                ),
+                {"decision_id": decision_id},
+            )
+        ).mappings().first()
+
+        if not decision_row:
+            raise HTTPException(status_code=404, detail=f"Decision {decision_id} not found")
+
+        order_intent_rows = (
+            await session.execute(
+                text(
+                    """
+                    SELECT id, action, user_id, resource, details, ip_address, created_at
+                    FROM audit_logs
+                    WHERE action LIKE 'ORDER_INTENT_%'
+                      AND (
+                        details->'intent'->>'decision_id' = :decision_id_text
+                        OR details->'decision'->>'id' = :decision_id_text
+                      )
+                    ORDER BY created_at ASC
+                    """
+                ),
+                {"decision_id_text": str(decision_id)},
+            )
+        ).mappings().all()
+
+        trade_rows = (
+            await session.execute(
+                text(
+                    """
+                    SELECT id, strategy_id, client_order_id, symbol, exchange_id, side,
+                           order_type, quantity, price, benchmark_price, fee,
+                           funding_fee, pnl, status, mode, session_id, data_source,
+                           created_at
+                    FROM paper_trades
+                    WHERE strategy_id = 'tradingagents'
+                       OR client_order_id LIKE :intent_prefix
+                    ORDER BY created_at DESC
+                    LIMIT 50
+                    """
+                ),
+                {"intent_prefix": f"OI-{decision_id}-%"},
+            )
+        ).mappings().all()
+
+    decision = _decision_payload(decision_row)
+    snapshot = _safe_dict(decision.get("input_snapshot_ids"))
+    roles = _safe_list(decision.get("role_opinions")) or _safe_list(decision.get("agent_signals"))
+
+    order_intents = [
+        {
+            "id": row["id"],
+            "action": row["action"],
+            "user_id": row["user_id"],
+            "resource": row["resource"],
+            "details": _safe_dict(row["details"]),
+            "ip_address": row["ip_address"],
+            "created_at": _iso(row["created_at"]),
+            "export_url": f"/api/v1/audit/records/{row['id']}/export",
+        }
+        for row in order_intent_rows
+    ]
+    intent_ids = {
+        _safe_dict(_safe_dict(row.get("details")).get("intent")).get("intent_id")
+        for row in order_intents
+    }
+    intent_ids.discard(None)
+
+    linked_trades = []
+    for row in trade_rows:
+        client_order_id = row["client_order_id"]
+        if intent_ids and client_order_id not in intent_ids:
+            continue
+        if not intent_ids and client_order_id and not str(client_order_id).startswith(f"OI-{decision_id}-"):
+            continue
+        linked_trades.append(
+            {
+                "id": row["id"],
+                "strategy_id": row["strategy_id"],
+                "client_order_id": client_order_id,
+                "symbol": row["symbol"],
+                "exchange_id": row["exchange_id"],
+                "side": row["side"],
+                "order_type": row["order_type"],
+                "quantity": _safe_float(row["quantity"]),
+                "price": _safe_float(row["price"]),
+                "benchmark_price": _safe_float(row["benchmark_price"]),
+                "fee": _safe_float(row["fee"]),
+                "funding_fee": _safe_float(row["funding_fee"]),
+                "pnl": _safe_float(row["pnl"]),
+                "status": row["status"],
+                "mode": row["mode"],
+                "session_id": row["session_id"],
+                "data_source": row["data_source"],
+                "created_at": _iso(row["created_at"]),
+            }
+        )
+
+    return {
+        "schema_version": "decision_audit_detail.v1",
+        "generated_at": datetime.utcnow().isoformat(),
+        "immutability_note": "This endpoint only reads persisted decision, audit, and paper trade records.",
+        "decision": decision,
+        "trace_summary": {
+            "input_snapshot_id_groups": len(snapshot),
+            "factor_snapshots": _snapshot_count(snapshot, "factor_snapshot_ids", "factor_ids"),
+            "signal_events": _snapshot_count(snapshot, "signal_event_ids", "signal_ids"),
+            "news_events": _snapshot_count(snapshot, "news_payload_ids", "news_event_ids"),
+            "macro_events": _snapshot_count(snapshot, "macro_keys", "macro_event_ids"),
+            "role_outputs": len(roles),
+            "order_intent_events": len(order_intents),
+            "paper_trades": len(linked_trades),
+            "risk_blocked": any(row["action"] == "ORDER_INTENT_BLOCKED" for row in order_intents),
+            "executed": any(row["action"] == "ORDER_INTENT_EXECUTED" for row in order_intents),
+        },
+        "role_outputs": roles,
+        "order_intent_events": order_intents,
+        "paper_trades": linked_trades,
+        "links": {
+            "research_snapshot": f"/dashboard?symbol={decision['symbol']}&interval=1h&as_of_time={decision['timestamp'] or ''}",
+            "decision_center": f"/decisions?symbol={decision['symbol']}",
+            "audit_export": order_intents[-1]["export_url"] if order_intents else None,
+        },
+    }

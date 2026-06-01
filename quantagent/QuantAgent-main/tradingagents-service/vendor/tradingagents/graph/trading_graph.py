@@ -1,0 +1,624 @@
+import re
+import json
+from typing import Any
+import logging
+from pathlib import Path
+from datetime import datetime
+from functools import cached_property
+from collections.abc import Callable
+
+from pydantic import Field, BaseModel, ConfigDict, computed_field, model_validator
+from langgraph.prebuilt import ToolNode
+from langgraph.graph.state import CompiledStateGraph
+from langchain_core.messages import AnyMessage, HumanMessage, messages_to_dict
+from langchain_core.callbacks import BaseCallbackHandler
+
+from tradingagents.llm import ChatModel, build_chat_model
+from tradingagents.config import TradingAgentsConfig, set_config
+from tradingagents.runtime import RunContext, set_run_context, reset_run_context
+from tradingagents.dataflows.yfinance import _close_on_or_before
+from tradingagents.agents.utils.memory import FinancialSituationMemory
+from tradingagents.agents.utils.agent_states import AgentState
+from tradingagents.agents.utils.tool_registry import ANALYST_TOOL_REGISTRY
+
+from .setup import SUPPORTED_ANALYSTS, GraphSetup, MemoryComponents
+from .reflection import Reflector, ReflectionScores, ReflectionOutcomeContext
+from .propagation import Propagator
+from .conditional_logic import ConditionalLogic
+from .signal_processing import SignalProcessor, TradeRecommendation
+
+logger = logging.getLogger(__name__)
+_SAFE_PATH_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+
+# Bump when the on-disk shape of full_states_log_<TICKER>_<DATE>.json changes
+# in a way that requires migration on read. The reflect CLI reads logs
+# possibly produced by older releases, so always go through the migration
+# helper in :mod:`tradingagents.interface.reflect` rather than expecting v2
+# directly.
+_STATE_LOG_SCHEMA_VERSION = 2
+_CURRENCY_PATTERNS = (
+    re.compile(r"# Reporting currency \(info\.financialCurrency\):\s*([A-Z]{3}|UNKNOWN)"),
+    re.compile(r"# Reported currency:\s*([A-Z]{3}|UNKNOWN)"),
+)
+
+
+def _safe_path_component(value: str) -> str:
+    """Return a filesystem-safe name for per-ticker result paths."""
+    safe = _SAFE_PATH_CHARS.sub("_", value.strip()).strip("._")
+    return safe or "unknown"
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write ``content`` to ``path`` atomically and as UTF-8.
+
+    A crash mid-write must never leave a half-written log on disk that
+    a subsequent reflection step or downstream tool would silently
+    parse as truncated JSON.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    tmp.replace(path)
+
+
+def _extract_currency_from_report(report: str) -> str | None:
+    """Return the first currency marker found in a fundamentals report."""
+    for pattern in _CURRENCY_PATTERNS:
+        match = pattern.search(report)
+        if match:
+            currency = match.group(1)
+            return None if currency == "UNKNOWN" else currency
+    return None
+
+
+def _tool_error_handler(exc: Exception) -> str:
+    """Return a non-retry message when a LangGraph tool raises.
+
+    Without this handler, any yfinance hiccup produces a traceback inside
+    the tool's ``ToolMessage.content``; the analyst then re-invokes the
+    same call and can burn the entire ``max_recur_limit`` budget. This
+    formatter instructs the LLM to stop retrying that exact call.
+    """
+    return (
+        f"[TOOL_ERROR] {type(exc).__name__}: {exc}. "
+        "Do not retry this exact call; either try a different argument, "
+        "skip this data source, or summarize what you already have."
+    )
+
+
+class TradingAgentsGraph(BaseModel):
+    """Main class that orchestrates the trading agents framework."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    # --- User-configurable fields ---
+    selected_analysts: list[str] = Field(
+        default_factory=lambda: list(SUPPORTED_ANALYSTS),
+        title="Selected Analysts",
+        description="List of analyst types to include in the trading graph",
+    )
+    debug: bool = Field(
+        default=False,
+        title="Debug Mode",
+        description="Enable debug mode with step-by-step tracing output",
+    )
+    config: TradingAgentsConfig = Field(
+        ..., title="Configuration", description="Trading agents configuration settings"
+    )
+    callbacks: list[BaseCallbackHandler] = Field(
+        default_factory=list,
+        title="Callbacks",
+        description="Optional callback handlers for tracking LLM/tool statistics",
+    )
+
+    # --- Mutable runtime state (updated by propagate() etc.) ---
+    curr_state: AgentState | None = Field(
+        default=None,
+        title="Current State",
+        description="Current graph execution state, populated after propagate()",
+    )
+    ticker: str = Field(
+        default="", title="Ticker", description="Current stock ticker symbol being analyzed"
+    )
+    log_states_dict: dict[str, Any] = Field(
+        default_factory=dict,
+        title="Log States",
+        description="Accumulated state logs keyed by trade date",
+    )
+
+    @model_validator(mode="after")
+    def _setup(self) -> "TradingAgentsGraph":
+        """Run side effects: register the active config singleton and create dirs.
+
+        Returns:
+            TradingAgentsGraph: The validated and setup instance.
+        """
+        set_config(self.config)
+        self.config.data_cache_dir.mkdir(parents=True, exist_ok=True)
+        return self
+
+    # --- Derived state (lazily computed from config) ---
+
+    def _create_llm(self, model: str) -> ChatModel:
+        """Create a ChatModel instance based on config.
+
+        Args:
+            model (str): Model identifier.
+
+        Returns:
+            ChatModel: The initialized ChatModel instance.
+        """
+        return build_chat_model(
+            self.config.llm_provider,
+            model,
+            reasoning_effort=self.config.reasoning_effort,
+            callbacks=self.callbacks or None,
+        )
+
+    @computed_field
+    @cached_property
+    def deep_thinking_llm(self) -> ChatModel:
+        """Deep thinking LLM instance, derived from config.
+
+        Returns:
+            ChatModel: Deep thinking LLM instance.
+        """
+        return self._create_llm(self.config.deep_think_llm)
+
+    @computed_field
+    @cached_property
+    def quick_thinking_llm(self) -> ChatModel:
+        """Quick thinking LLM instance, derived from config.
+
+        Returns:
+            ChatModel: Quick thinking LLM instance.
+        """
+        return self._create_llm(self.config.quick_think_llm)
+
+    def _memory_path(self, name: str) -> Path:
+        """Return the JSONL storage path for a memory ``name`` under data_cache_dir."""
+        return self.config.data_cache_dir / "memories" / f"{name}.jsonl"
+
+    def _make_memory(self, name: str) -> FinancialSituationMemory:
+        """Construct a :class:`FinancialSituationMemory` wired to its on-disk file."""
+        return FinancialSituationMemory(name=name, storage_path=self._memory_path(name))
+
+    @computed_field
+    @cached_property
+    def bull_memory(self) -> FinancialSituationMemory:
+        """Bull-researcher memory, persisted to ``<data_cache_dir>/memories/bull_memory.jsonl``."""
+        return self._make_memory("bull_memory")
+
+    @computed_field
+    @cached_property
+    def bear_memory(self) -> FinancialSituationMemory:
+        """Bear-researcher memory, persisted to ``<data_cache_dir>/memories/bear_memory.jsonl``."""
+        return self._make_memory("bear_memory")
+
+    @computed_field
+    @cached_property
+    def trader_memory(self) -> FinancialSituationMemory:
+        """Trader memory, persisted to ``<data_cache_dir>/memories/trader_memory.jsonl``."""
+        return self._make_memory("trader_memory")
+
+    @computed_field
+    @cached_property
+    def invest_judge_memory(self) -> FinancialSituationMemory:
+        """Investment-judge memory, persisted under ``<data_cache_dir>/memories/``."""
+        return self._make_memory("invest_judge_memory")
+
+    @computed_field
+    @cached_property
+    def risk_manager_memory(self) -> FinancialSituationMemory:
+        """Risk-manager memory, persisted under ``<data_cache_dir>/memories/``."""
+        return self._make_memory("risk_manager_memory")
+
+    @computed_field
+    @cached_property
+    def tool_nodes(self) -> dict[str, ToolNode]:
+        """Tool nodes for different data sources.
+
+        Returns:
+            dict[str, ToolNode]: A dictionary mapping data source names to ToolNodes.
+        """
+        return {
+            analyst_type: ToolNode(list(tools), handle_tool_errors=_tool_error_handler)
+            for analyst_type, tools in ANALYST_TOOL_REGISTRY.items()
+        }
+
+    @computed_field
+    @cached_property
+    def graph(self) -> CompiledStateGraph:
+        """Compiled LangGraph workflow, derived from config and selected analysts.
+
+        Returns:
+            CompiledStateGraph: The compiled state graph workflow.
+        """
+        memories = MemoryComponents(
+            bull=self.bull_memory,
+            bear=self.bear_memory,
+            trader=self.trader_memory,
+            invest_judge=self.invest_judge_memory,
+            risk_manager=self.risk_manager_memory,
+        )
+        graph_setup = GraphSetup(
+            quick_thinking_llm=self.quick_thinking_llm,
+            deep_thinking_llm=self.deep_thinking_llm,
+            tool_nodes=self.tool_nodes,
+            memories=memories,
+            conditional_logic=ConditionalLogic(
+                max_debate_rounds=self.config.max_debate_rounds,
+                max_risk_discuss_rounds=self.config.max_risk_discuss_rounds,
+            ),
+        )
+        return graph_setup.setup_graph(self.selected_analysts)
+
+    @computed_field
+    @cached_property
+    def propagator(self) -> Propagator:
+        """Graph propagator for state initialization.
+
+        Returns:
+            Propagator: A Propagator instance.
+        """
+        return Propagator(max_recur_limit=self.config.max_recur_limit)
+
+    @computed_field
+    @cached_property
+    def reflector(self) -> Reflector:
+        """Post-trade reflector for memory updates.
+
+        Returns:
+            Reflector: A Reflector instance.
+        """
+        return Reflector(quick_thinking_llm=self.quick_thinking_llm)
+
+    @computed_field
+    @cached_property
+    def signal_processor(self) -> SignalProcessor:
+        """Signal processor for extracting BUY/SELL/HOLD decisions.
+
+        Returns:
+            SignalProcessor: A SignalProcessor instance.
+        """
+        return SignalProcessor()
+
+    # --- Public methods ---
+
+    def propagate(
+        self,
+        company_name: str,
+        trade_date: str,
+        analysis_context: dict[str, Any] | None = None,
+        on_message: Callable[[AnyMessage], None] | None = None,
+        on_state: Callable[[AgentState], None] | None = None,
+    ) -> tuple[AgentState, TradeRecommendation]:
+        """Run the trading agents graph for a company on a specific date.
+
+        Args:
+            company_name (str): Company name or ticker symbol.
+            trade_date (str): Trading date in YYYY-MM-DD format.
+            on_message (Callable[[AnyMessage], None] | None, optional):
+                Callback invoked once per newly-produced message during the
+                stream. When provided, takes precedence over the default
+                debug print path so callers (CLI, TUI) can route output
+                through Rich panels instead of message.pretty_print().
+                Defaults to None.
+            on_state (Callable[[AgentState], None] | None, optional):
+                Callback invoked once per stream chunk with the full
+                AgentState snapshot. Used by the Textual TUI to update the
+                phase progress sidebar from analyst-report / debate
+                fields; the CLI does not need this. Defaults to None.
+
+        Returns:
+            tuple[AgentState, TradeRecommendation]: The final agent state
+            (with ``final_trade_recommendation`` populated) and the
+            structured BUY / SELL / HOLD recommendation extracted from the
+            Risk Judge output. Defaults to a HOLD recommendation with
+            ``warning_message`` set when the risk-judge output is empty or
+            ambiguous; see :func:`extract_trade_recommendation`.
+
+        Raises:
+            RuntimeError: If the graph execution produces no output.
+        """
+        self.ticker = company_name
+
+        init_agent_state = self.propagator.create_initial_state(company_name, trade_date)
+        args = self.propagator.get_graph_args(callbacks=self.callbacks or None)
+        run_context_token = set_run_context(
+            RunContext(
+                ticker=company_name,
+                trade_date=init_agent_state.trade_date,
+                response_language=self.config.response_language,
+                analysis_context=analysis_context,
+            )
+        )
+
+        # Stream in "values" mode (set by Propagator.get_graph_args) so each chunk
+        # is the full state snapshot after a node runs. The graph clears
+        # state.messages between analysts via Msg Clear nodes, so the only way
+        # to capture every round of LLM dialogue is to collect messages as they
+        # appear in stream chunks (deduped by id).
+        raw_state = None
+        last_emitted_id = None
+        collected: dict[str, AnyMessage] = {}
+        try:
+            for chunk in self.graph.stream(init_agent_state, **args):
+                last_emitted_id = self._dispatch_messages(
+                    chunk, collected, last_emitted_id, on_message
+                )
+                if on_state is not None:
+                    self._dispatch_state(chunk, on_state)
+                raw_state = chunk
+        finally:
+            reset_run_context(run_context_token)
+
+        if raw_state is None:
+            raise RuntimeError("Graph produced no output")
+
+        final_state = (
+            AgentState.model_validate(raw_state) if isinstance(raw_state, dict) else raw_state
+        )
+
+        recommendation = self._enrich_recommendation(
+            self.process_signal(final_state.final_trade_decision), final_state
+        )
+        final_state = final_state.model_copy(update={"final_trade_recommendation": recommendation})
+
+        self.curr_state = final_state
+        self._log_state(trade_date, final_state, list(collected.values()))
+        return final_state, recommendation
+
+    def _dispatch_messages(
+        self,
+        chunk: Any,  # noqa: ANN401  # langgraph stream chunk is dict|AgentState|None
+        collected: dict[str, AnyMessage],
+        last_emitted_id: str | None,
+        on_message: Callable[[AnyMessage], None] | None,
+    ) -> str | None:
+        """Forward newly-arrived messages from one stream chunk.
+
+        Mutates ``collected`` so the eventual ``_log_state`` call sees
+        every message that ever flew past, even those wiped by Msg
+        Clear nodes between analyst phases.
+
+        Args:
+            chunk (Any): One snapshot from ``graph.stream`` -- either a
+                dict (the common case) or an AgentState-like object.
+            collected (dict[str, AnyMessage]): Per-run accumulator
+                mapping message ID to message; updated in-place.
+            last_emitted_id (str | None): The ID of the last message
+                already forwarded to ``on_message`` / pretty_print.
+            on_message (Callable[[AnyMessage], None] | None): External
+                renderer callback. When None, falls back to
+                ``message.pretty_print`` if ``self.debug`` is set.
+
+        Returns:
+            str | None: The new ``last_emitted_id`` after this chunk.
+        """
+        messages = (
+            chunk.get("messages") if isinstance(chunk, dict) else getattr(chunk, "messages", None)
+        )
+        if not messages:
+            return last_emitted_id
+        for msg in messages:
+            mid = getattr(msg, "id", None)
+            if mid and mid not in collected:
+                collected[mid] = msg
+        latest = messages[-1]
+        if latest.id == last_emitted_id:
+            return last_emitted_id
+        if on_message is not None:
+            on_message(latest)
+        elif self.debug:
+            latest.pretty_print()
+        return latest.id
+
+    def _dispatch_state(
+        self,
+        chunk: Any,  # noqa: ANN401  # langgraph stream chunk is dict|AgentState
+        on_state: Callable[[AgentState], None],
+    ) -> None:
+        """Validate ``chunk`` as :class:`AgentState` and invoke ``on_state``.
+
+        The TUI's phase sidebar is a best-effort observer, so any
+        validation or callback failure is logged at debug level and
+        swallowed -- a broken hook must never abort a paid LLM run.
+
+        Args:
+            chunk (Any): One stream-chunk snapshot.
+            on_state (Callable[[AgentState], None]): Caller-provided
+                state observer.
+        """
+        try:
+            snapshot = AgentState.model_validate(chunk) if isinstance(chunk, dict) else chunk
+            on_state(snapshot)
+        except Exception:
+            logger.debug("on_state hook failed", exc_info=True)
+
+    def _log_state(
+        self, trade_date: str, final_state: AgentState, all_messages: list[AnyMessage]
+    ) -> None:
+        """Log final state and conversation history for a graph run.
+
+        Args:
+            trade_date (str): Trade date in YYYY-MM-DD format.
+            final_state (AgentState): The final agent state to log.
+            all_messages (list[AnyMessage]): Every message observed across the
+                graph run, in arrival order. Required because per-analyst Msg
+                Clear nodes wipe ``final_state.messages`` between rounds.
+        """
+        invest = final_state.investment_debate_state
+        risk = final_state.risk_debate_state
+        self.log_states_dict[str(trade_date)] = {
+            "company_of_interest": final_state.company_of_interest,
+            "trade_date": final_state.trade_date,
+            "market_report": final_state.market_report,
+            "sentiment_report": final_state.sentiment_report,
+            "news_report": final_state.news_report,
+            "fundamentals_report": final_state.fundamentals_report,
+            "situation_summary": final_state.situation_summary,
+            "investment_debate_state": {
+                "bull_history": invest.bull_history,
+                "bear_history": invest.bear_history,
+                "history": invest.history,
+                "current_response": invest.current_response,
+                "judge_decision": invest.judge_decision,
+            },
+            "trader_investment_decision": final_state.trader_investment_plan,
+            "risk_debate_state": {
+                "aggressive_history": risk.aggressive_history,
+                "conservative_history": risk.conservative_history,
+                "neutral_history": risk.neutral_history,
+                "history": risk.history,
+                "judge_decision": risk.judge_decision,
+            },
+            "investment_plan": final_state.investment_plan,
+            "final_trade_decision": final_state.final_trade_decision,
+            "final_trade_recommendation": (
+                final_state.final_trade_recommendation.model_dump()
+                if final_state.final_trade_recommendation is not None
+                else None
+            ),
+        }
+
+        ticker_name = _safe_path_component(self.ticker or "unknown")
+        directory = self.config.results_dir / ticker_name
+        directory.mkdir(parents=True, exist_ok=True)
+
+        log_path = directory / f"full_states_log_{ticker_name}_{trade_date}.json"
+        payload = {"schema_version": _STATE_LOG_SCHEMA_VERSION, "runs": self.log_states_dict}
+        _atomic_write_text(log_path, json.dumps(payload, indent=2, ensure_ascii=False))
+
+        # Save complete conversation log (includes raw tool results: stock data,
+        # indicators, news, financials, insider transactions, etc.)
+        self._save_conversation_log(
+            directory=directory,
+            ticker_name=ticker_name,
+            trade_date=trade_date,
+            messages=all_messages,
+        )
+
+    def _save_conversation_log(
+        self, directory: Path, ticker_name: str, trade_date: str, messages: list[AnyMessage]
+    ) -> None:
+        """Save text and JSON conversation logs including raw tool call results.
+
+        Args:
+            directory (Path): Output directory path.
+            ticker_name (str): Ticker symbol for naming the log files.
+            trade_date (str): Trade date.
+            messages (list[AnyMessage]): Full conversation collected across the graph run.
+        """
+        # Drop the "Continue" placeholders injected by Msg Clear nodes — they
+        # are graph plumbing for Anthropic's message-ordering rules, not real
+        # conversation turns.
+        filtered = [
+            msg
+            for msg in messages
+            if not (isinstance(msg, HumanMessage) and msg.content == "Continue")
+        ]
+
+        # Human-readable text log (same format as debug pretty_print output)
+        txt_path = directory / f"conversation_log_{ticker_name}_{trade_date}.txt"
+        try:
+            txt_content = "".join(msg.pretty_repr() + "\n" for msg in filtered)
+            _atomic_write_text(txt_path, txt_content)
+            logger.info("Conversation log saved to %s", txt_path)
+        except Exception:
+            logger.warning("Failed to save conversation text log", exc_info=True)
+
+        # Structured JSON log (machine-readable, for programmatic analysis)
+        json_path = directory / f"conversation_log_{ticker_name}_{trade_date}.json"
+        try:
+            _atomic_write_text(
+                json_path, json.dumps(messages_to_dict(filtered), indent=2, ensure_ascii=False)
+            )
+            logger.info("Conversation JSON saved to %s", json_path)
+        except Exception:
+            logger.warning("Failed to save conversation JSON log", exc_info=True)
+
+    def reflect_and_remember(
+        self,
+        returns_losses: float,
+        state: AgentState | None = None,
+        outcome_context: ReflectionOutcomeContext | None = None,
+    ) -> dict[str, ReflectionScores | None]:
+        """Reflect on the decision chain and append lessons to every memory.
+
+        When ``state`` is ``None`` the most recent ``self.curr_state`` from
+        :meth:`propagate` is used; pass an explicit state when reflecting on a
+        run loaded from disk (e.g. via the ``reflect`` CLI subcommand).
+
+        Args:
+            returns_losses: Actual returns or losses from the trade.
+            state: Optional explicit AgentState. When omitted, falls back to
+                the most recent run-state cached on the graph instance.
+            outcome_context: Optional structured entry / exit / benchmark
+                context for reflection and later backtest aggregation.
+
+        Raises:
+            RuntimeError: If no state is available to reflect on.
+
+        Returns:
+            Mapping of memory component to parsed reflection scores. Values
+            are ``None`` when the reflector response omitted or malformed the
+            required score block.
+        """
+        target = state if state is not None else self.curr_state
+        if target is None:
+            raise RuntimeError(
+                "No state available to reflect on. Run propagate() first or pass state=..."
+            )
+        return {
+            "bull_researcher": self.reflector.reflect_bull_researcher(
+                target, returns_losses, self.bull_memory, outcome_context
+            ),
+            "bear_researcher": self.reflector.reflect_bear_researcher(
+                target, returns_losses, self.bear_memory, outcome_context
+            ),
+            "trader": self.reflector.reflect_trader(
+                target, returns_losses, self.trader_memory, outcome_context
+            ),
+            "investment_judge": self.reflector.reflect_invest_judge(
+                target, returns_losses, self.invest_judge_memory, outcome_context
+            ),
+            "risk_manager": self.reflector.reflect_risk_manager(
+                target, returns_losses, self.risk_manager_memory, outcome_context
+            ),
+        }
+
+    def process_signal(self, full_signal: str) -> TradeRecommendation:
+        """Process a Risk-Judge text payload into a structured recommendation.
+
+        Args:
+            full_signal (str): The raw text signal.
+
+        Returns:
+            TradeRecommendation: The structured decision (signal, size,
+            target, stop, horizon, confidence, rationale), defaulting to a
+            HOLD recommendation with ``warning_message`` set when the input
+            is empty or ambiguous.
+        """
+        return self.signal_processor.process_signal(full_signal)
+
+    def _enrich_recommendation(
+        self, recommendation: TradeRecommendation, state: AgentState
+    ) -> TradeRecommendation:
+        """Attach deterministic price / currency context to a parsed recommendation."""
+        updates: dict[str, Any] = {}
+
+        currency = _extract_currency_from_report(state.fundamentals_report)
+        if currency is not None and recommendation.currency is None:
+            updates["currency"] = currency
+
+        if recommendation.entry_reference_price is None:
+            try:
+                trade_dt = datetime.strptime(state.trade_date, "%Y-%m-%d")
+                price = _close_on_or_before(state.company_of_interest, trade_dt)
+            except Exception:
+                logger.debug("Failed to enrich recommendation with entry price", exc_info=True)
+                price = None
+            if price is not None:
+                updates["entry_reference_price"] = price
+
+        return recommendation.model_copy(update=updates) if updates else recommendation

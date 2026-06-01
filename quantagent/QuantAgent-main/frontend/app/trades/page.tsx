@@ -1,18 +1,17 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { AppTopNav } from "@/components/navigation/AppTopNav";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  ArrowLeft, RefreshCw, Download, TrendingUp, TrendingDown,
-  BarChart3, Clock, DollarSign, Filter, AlertTriangle,
-  Activity, BarChart, History, Server, Zap, Layers, Brain
+  RefreshCw, Download, TrendingUp, TrendingDown,
+  Clock, Filter, AlertTriangle, BarChart3
 } from "lucide-react";
 
 const API_BASE = ""; // 客户端请求强制使用相对路径，通过 Next.js rewrites 转发到后端
@@ -113,64 +112,21 @@ export default function TradesPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
-        <div className="container mx-auto px-4 py-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Link href="/dashboard" className="text-muted-foreground hover:text-foreground transition-colors">
-                <ArrowLeft className="w-5 h-5" />
-              </Link>
-              <div className="w-9 h-9 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center">
-                <BarChart3 className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <h1 className="text-lg font-bold text-foreground">交易流水</h1>
-                <p className="text-[10px] text-muted-foreground">Trade Pairs & History</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {/* Navigation */}
-              <nav className="hidden md:flex items-center gap-1 mr-4">
-                <Link href="/dashboard" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
-                  仪表盘
-                </Link>
-                <Link href="/trades" className="px-2 py-1 text-xs text-blue-400 bg-blue-500/10 rounded border border-blue-500/20 font-medium">
-                  交易流水
-                </Link>
-                <Link href="/analytics" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
-                  性能分析
-                </Link>
-                <Link href="/backtest" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
-                  回测
-                </Link>
-                <Link href="/replay" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
-                  历史回放
-                </Link>
-                <Link href="/terminal" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
-                  终端
-                </Link>
-                <Link href="/hummingbot" className="px-2 py-1 text-xs text-cyan-400 hover:text-cyan-100 rounded hover:bg-cyan-500/10">
-                  <span className="flex items-center gap-1"><Server className="w-3 h-3" /> Hummingbot</span>
-                </Link>
-                <Link href="/signals" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary flex items-center gap-1"><Layers className="w-3 h-3" /> 因子/信号</Link>
-                <Link href="/decisions" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary flex items-center gap-1"><Brain className="w-3 h-3" /> 决策中心</Link>
-              </nav>
-              <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-foreground" onClick={fetchPairs}>
-                <RefreshCw className="w-3 h-3 mr-1" /> 刷新
-              </Button>
-              <Button variant="outline" size="sm" className="h-8 text-xs border-border text-foreground/80 hover:bg-secondary" onClick={handleExportCSV}>
-                <Download className="w-3 h-3 mr-1" /> 导出CSV
-              </Button>
-              <Link href="/analytics">
-                <Button variant="outline" size="sm" className="h-8 text-xs border-blue-500/30 text-blue-400 hover:bg-blue-500/10">
-                  性能分析
-                </Button>
-              </Link>
-            </div>
-          </div>
-        </div>
-      </header>
+      <AppTopNav
+        activeSection="trades"
+        title="交易流水"
+        subtitle="模拟盘订单与持仓历史"
+        rightSlot={
+          <>
+            <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-foreground" onClick={fetchPairs}>
+              <RefreshCw className="w-3 h-3 mr-1" /> 刷新
+            </Button>
+            <Button variant="outline" size="sm" className="h-8 text-xs border-border text-foreground/80 hover:bg-secondary" onClick={handleExportCSV}>
+              <Download className="w-3 h-3 mr-1" /> 导出CSV
+            </Button>
+          </>
+        }
+      />
 
       <main className="container mx-auto px-4 py-6 space-y-6">
         {/* Summary Cards */}

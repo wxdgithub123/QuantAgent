@@ -54,31 +54,6 @@ export function TradingViewChart({ symbol = "BTCUSDT", interval = "1h" }: Tradin
   const [errorMessage, setErrorMessage] = useState("");
   const [metadata, setMetadata] = useState<KlineMetadata | null>(null);
 
-  const createFallbackCandleData = (): CandlestickData<Time>[] => {
-    const now = Math.floor(Date.now() / 1000);
-    let lastClose = 50000;
-    const data: CandlestickData<Time>[] = [];
-
-    for (let i = 199; i >= 0; i--) {
-      const time = now - i * 3600;
-      const drift = (Math.random() - 0.5) * 1200;
-      const open = lastClose;
-      const close = Math.max(1000, open + drift);
-      const high = Math.max(open, close) + Math.random() * 300;
-      const low = Math.min(open, close) - Math.random() * 300;
-      data.push({
-        time: time as Time,
-        open,
-        high,
-        low,
-        close,
-      });
-      lastClose = close;
-    }
-
-    return data;
-  };
-
   // Reset chart data when symbol changes
   useEffect(() => {
     if (candlestickSeriesRef.current) {
@@ -189,13 +164,14 @@ export function TradingViewChart({ symbol = "BTCUSDT", interval = "1h" }: Tradin
         
         candlestickSeriesRef.current?.setData(candleData);
         chartRef.current?.timeScale().fitContent();
+        if (candleData.length === 0) {
+          setErrorMessage("暂无 K 线数据；页面不会使用示例数据填充。");
+        }
       } catch {
         if (chartRef.current && candlestickSeriesRef.current) {
-          const fallbackData = createFallbackCandleData();
-          candlestickSeriesRef.current.setData(fallbackData);
-          chartRef.current.timeScale().fitContent();
+          candlestickSeriesRef.current.setData([]);
           setMetadata(null);
-          setErrorMessage("实时行情暂不可用，已切换为本地演示数据");
+          setErrorMessage("K 线数据暂不可用；页面未使用示例数据填充。");
         }
       } finally {
         setIsLoading(false);
@@ -230,7 +206,7 @@ export function TradingViewChart({ symbol = "BTCUSDT", interval = "1h" }: Tradin
         </div>
         <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500">
           <Database className="h-3 w-3" />
-          这里显示的是 K 线实际来源；右上角“执行场所”只影响下单、持仓、风控和交易所实时报价。
+          这里显示的是 K 线实际来源；模拟盘的标记价格和模拟成交参考另由 CCXT/OKX 报价提供。
         </div>
         {errorMessage && <div className="text-xs text-amber-300 mt-2">{errorMessage}</div>}
       </CardHeader>

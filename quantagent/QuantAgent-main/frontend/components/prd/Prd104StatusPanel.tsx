@@ -147,10 +147,10 @@ function buildChecks(state: StatusState): CheckItem[] {
       ok: readString(health, ["layers", "L6_decision", "tradingagents_service", "status"]) === "ok",
       detail: tradingEnabled
         ? `TradingAgents 已启用 · ${llmProvider || "LLM"} · ${llmModel || "模型未识别"}`
-        : "TradingAgents 可用但未设为默认",
+        : "TradingAgents 默认决策链未启用",
       note: openaiConfigured
         ? `模型通道: ${shortBaseUrl(llmBaseUrl)}`
-        : "尚未配置可用的大模型 API Key。",
+        : "未配置模型通道时，只能使用本地基线评分或提示配置模型。",
       icon: Brain,
     },
   ];

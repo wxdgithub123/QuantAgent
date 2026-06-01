@@ -162,7 +162,7 @@ class TradingAgentsAdapter:
         }
 
         url = f"{self.service_url}/analyze"
-        timeout = aiohttp.ClientTimeout(total=float(self.timeout_seconds))
+        timeout = aiohttp.ClientTimeout(total=max(float(self.timeout_seconds), 300.0))
         try:
             async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
                 async with session.post(url, json=payload) as resp:
@@ -175,7 +175,11 @@ class TradingAgentsAdapter:
                         )
                         return None
         except Exception as exc:
-            logger.warning("[tradingagents] service call failed: %s", exc)
+            logger.warning(
+                "[tradingagents] service call failed: %s: %r",
+                type(exc).__name__,
+                exc,
+            )
             return None
 
         if str(body.get("status", "")).lower() not in {"ok", "success"}:
@@ -210,6 +214,13 @@ class TradingAgentsAdapter:
 
         risk_flagged = bool(raw.get("risk_flagged", False))
         raw_payload = raw.get("raw") if isinstance(raw.get("raw"), dict) else {}
+        position_advice = raw.get("position_advice") if isinstance(raw.get("position_advice"), dict) else {}
+        internal_chain = raw_payload.get("internal_chain")
+        if isinstance(internal_chain, list):
+            position_advice = {
+                **position_advice,
+                "tradingagents_internal_chain": internal_chain,
+            }
 
         return CoordinationResult(
             symbol=symbol,
@@ -223,7 +234,7 @@ class TradingAgentsAdapter:
             role_opinions=analyst_reports,
             input_snapshot_ids=raw_payload.get("input_snapshot_ids", {}),
             risk_notes=str(raw.get("risk_notes") or ""),
-            position_advice=raw.get("position_advice") or {},
+            position_advice=position_advice,
             timestamp=datetime.now(timezone.utc),
         )
 

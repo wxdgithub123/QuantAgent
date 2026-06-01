@@ -2359,7 +2359,7 @@ function PaperBotMonitorSection({
             Hummingbot Paper Bot 运行监控
           </h2>
           <p className="text-muted-foreground text-xs mt-1 ml-10">
-            当前仅展示 Paper Bot 运行状态和模拟数据，不执行真实交易。
+            当前仅展示 Paper Bot 运行状态和模拟盘数据，不执行真实交易。
           </p>
         </div>
         <Button

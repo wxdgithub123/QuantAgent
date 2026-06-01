@@ -1,0 +1,62 @@
+from typing import Any
+from collections.abc import Callable
+
+from tradingagents.llm import ChatModel
+from tradingagents.agents.prompts import load_prompt
+from tradingagents.agents.utils.memory import FinancialSituationMemory, format_memories_for_prompt
+from tradingagents.agents.utils.content import flatten_message_content
+from tradingagents.agents.utils.agent_states import AgentState, InvestDebateState
+
+
+def create_research_manager(
+    llm: ChatModel, memory: FinancialSituationMemory
+) -> Callable[[AgentState], dict[str, Any]]:
+    """Creates a research manager node for the trading graph.
+
+    Args:
+        llm (ChatModel): The language model to use for generating responses.
+        memory (FinancialSituationMemory): The memory module for retrieving past financial situations.
+
+    Returns:
+        Callable[[AgentState], dict[str, Any]]: A function representing the research manager node.
+    """
+
+    def research_manager_node(state: AgentState) -> dict[str, Any]:
+        """Executes the research manager logic to evaluate research and formulate an investment plan.
+
+        Args:
+            state (AgentState): The current state of the agent, including various reports and debate state.
+
+        Returns:
+            dict[str, Any]: A dictionary containing the updated investment_debate_state and the investment_plan.
+        """
+        debate = state.investment_debate_state
+
+        past_memories = memory.get_memories(
+            state.situation_summary or state.combined_reports, n_matches=2
+        )
+        past_memory_str = format_memories_for_prompt(past_memories)
+
+        prompt = load_prompt("research_manager").format(
+            market_research_report=state.market_report,
+            sentiment_report=state.sentiment_report,
+            news_report=state.news_report,
+            fundamentals_report=state.fundamentals_report,
+            past_memory_str=past_memory_str,
+            history=debate.history,
+        )
+        response = llm.invoke(prompt)
+        response_content = flatten_message_content(response.content)
+
+        new_debate_state = InvestDebateState(
+            judge_decision=response_content,
+            history=debate.history,
+            bear_history=debate.bear_history,
+            bull_history=debate.bull_history,
+            current_response=response_content,
+            count=debate.count,
+        )
+
+        return {"investment_debate_state": new_debate_state, "investment_plan": response_content}
+
+    return research_manager_node

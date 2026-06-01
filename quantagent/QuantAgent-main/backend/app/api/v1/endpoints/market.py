@@ -74,6 +74,313 @@ def _split_csv(value: Optional[str]) -> List[str]:
     return [item.strip() for item in (value or "").split(",") if item.strip()]
 
 
+def _json_value(value: Any, fallback: Any = None) -> Any:
+    """Accept JSONB/list/dict/string values returned by different DB drivers."""
+    if value is None:
+        return fallback
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return fallback if fallback is not None else value
+    return value
+
+
+def _safe_float(value: Any, default: Optional[float] = None) -> Optional[float]:
+    try:
+        number = float(value)
+        if number != number:
+            return default
+        return number
+    except Exception:
+        return default
+
+
+def _format_metric(value: Any) -> str:
+    number = _safe_float(value)
+    if number is None:
+        return "N/A"
+    if abs(number) >= 1000:
+        return f"{number:,.2f}"
+    if abs(number) >= 1:
+        return f"{number:.2f}"
+    return f"{number:.4f}"
+
+
+def _bar_typical_price(bar: Dict[str, Any]) -> Optional[float]:
+    high = _safe_float(bar.get("high"))
+    low = _safe_float(bar.get("low"))
+    close = _safe_float(bar.get("close"))
+    if high is None or low is None or close is None:
+        return _safe_float(bar.get("close"))
+    return (high + low + close) / 3
+
+
+def _build_bar_panel(bars: List[Dict[str, Any]], display_limit: int = 48) -> Dict[str, Any]:
+    visible = bars[-display_limit:]
+    quote_volume_present = any(_safe_float(bar.get("quote_volume")) is not None for bar in visible)
+    weighted_sum = 0.0
+    volume_sum = 0.0
+    panel_rows: List[Dict[str, Any]] = []
+
+    for bar in visible:
+        volume = _safe_float(bar.get("volume"), 0.0) or 0.0
+        quote_volume = _safe_float(bar.get("quote_volume"))
+        if quote_volume is not None and volume > 0:
+            vwap = quote_volume / volume
+            method = "quote_volume_exact"
+        else:
+            vwap = _bar_typical_price(bar)
+            method = "typical_price_proxy"
+        if vwap is not None and volume > 0:
+            weighted_sum += vwap * volume
+            volume_sum += volume
+        row = {
+            **bar,
+            "vwap": vwap,
+            "vwap_method": method,
+        }
+        panel_rows.append(row)
+
+    window_vwap = weighted_sum / volume_sum if volume_sum > 0 else None
+    latest = panel_rows[-1] if panel_rows else None
+    return {
+        "rows": panel_rows,
+        "displayed": len(panel_rows),
+        "latest": latest,
+        "summary": {
+            "open": latest.get("open") if latest else None,
+            "high": latest.get("high") if latest else None,
+            "low": latest.get("low") if latest else None,
+            "close": latest.get("close") if latest else None,
+            "volume": latest.get("volume") if latest else None,
+            "vwap": latest.get("vwap") if latest else None,
+            "window_vwap": window_vwap,
+            "vwap_method": "quote_volume_exact" if quote_volume_present else "typical_price_proxy",
+            "source": latest.get("provider") or latest.get("data_source") if latest else None,
+        },
+        "note": (
+            "精确 VWAP：使用上游 quote_volume / volume 计算。"
+            if quote_volume_present
+            else "估算 VWAP：当前标准化 Bar 没有 quote_volume，使用 (high+low+close)/3 的典型价格按成交量加权；它不是交易所逐笔成交 VWAP。"
+        ),
+    }
+
+
+def _factor_bucket(name: str) -> str:
+    normalized = (name or "").lower()
+    if normalized.startswith("macro_"):
+        return "macro"
+    if "sentiment" in normalized or normalized.startswith("news_") or normalized.startswith("social_"):
+        return "sentiment"
+    return "technical"
+
+
+def _build_factor_panel(
+    factors: Dict[str, Any],
+    macro_events: List[Dict[str, Any]],
+    as_of_time: str,
+) -> Dict[str, Any]:
+    groups: Dict[str, List[Dict[str, Any]]] = {
+        "technical": [],
+        "sentiment": [],
+        "macro": [],
+    }
+    for name, value in sorted(factors.items()):
+        bucket = _factor_bucket(name)
+        groups[bucket].append({
+            "name": name,
+            "value": value,
+            "as_of_time": as_of_time,
+            "alignment_rule": "available_time <= as_of_time",
+        })
+
+    macro_tags = []
+    for event in macro_events[:10]:
+        indicator = event.get("indicator") or event.get("name") or event.get("series_id")
+        if not indicator:
+            continue
+        macro_tags.append({
+            "label": str(indicator),
+            "value": event.get("value"),
+            "event_time": event.get("event_time") or event.get("timestamp") or event.get("date"),
+            "provider": event.get("provider"),
+            "alignment_rule": "available_time <= as_of_time",
+        })
+
+    return {
+        "groups": groups,
+        "macro_event_tags": macro_tags,
+        "as_of_time": as_of_time,
+        "alignment_rule": "available_time <= as_of_time",
+    }
+
+
+def _build_signal_condition(signal: Dict[str, Any]) -> str:
+    factors = signal.get("factors") if isinstance(signal.get("factors"), dict) else {}
+    strategy = str(signal.get("source_strategy") or "").lower()
+    signal_type = signal.get("signal_type") or "WAIT"
+    signal_label = {"BUY": "买入", "SELL": "卖出", "WAIT": "观望", "HOLD": "持有"}.get(
+        str(signal_type).upper(),
+        str(signal_type),
+    )
+    if strategy in {"ma", "ma_cross"} and factors:
+        return f"均线条件：SMA5={_format_metric(factors.get('sma_5'))}，SMA20={_format_metric(factors.get('sma_20'))}，输出{signal_label}。"
+    if strategy == "rsi" and factors:
+        return f"RSI 条件：RSI14={_format_metric(factors.get('rsi_14'))}，低于 30 偏超卖，高于 70 偏超买。"
+    if strategy == "boll" and factors:
+        return f"布林带条件：位置百分比={_format_metric(factors.get('boll_pct_b'))}，中轨={_format_metric(factors.get('boll_mid'))}。"
+    if strategy == "macd" and factors:
+        return f"MACD 条件：DIF={_format_metric(factors.get('macd_dif'))}，DEA={_format_metric(factors.get('macd_dea'))}，柱={_format_metric(factors.get('macd_hist'))}。"
+    if strategy == "ema_triple" and factors:
+        return f"EMA 趋势条件：EMA12={_format_metric(factors.get('ema_12'))}，EMA26={_format_metric(factors.get('ema_26'))}。"
+    if strategy == "atr_trend" and factors:
+        return f"波动趋势条件：ATR14={_format_metric(factors.get('atr_14'))}，结合趋势方向输出{signal_label}。"
+    if strategy == "ichimoku" and factors:
+        return f"一目均衡条件：结合趋势云层与当前 L5 因子快照，输出{signal_label}。"
+    return f"L5 策略 {signal.get('source_strategy') or 'unknown'} 基于当前因子快照输出{signal_label}。"
+
+
+def _build_signal_panel(signals: List[Dict[str, Any]], display_limit: int = 12) -> List[Dict[str, Any]]:
+    panel = []
+    for signal in signals[:display_limit]:
+        value = _safe_float(signal.get("signal_value"), 0.0) or 0.0
+        confidence = _safe_float(signal.get("confidence"), 0.0) or 0.0
+        signal_type = str(signal.get("signal_type") or "WAIT").upper()
+        direction_strength = min(abs(value), 1.0)
+        triggered = signal_type not in {"WAIT", "HOLD"} and direction_strength > 0
+        panel.append({
+            **signal,
+            "signal_type": signal_type,
+            "strength": direction_strength,
+            "direction_strength": direction_strength,
+            "direction_strength_label": f"{direction_strength:.0%}" if triggered else "未触发买卖方向",
+            "is_triggered": triggered,
+            "confidence": confidence,
+            "trigger_condition": _build_signal_condition(signal),
+            "timestamp": signal.get("event_time"),
+            "alignment_rule": "available_time <= as_of_time",
+        })
+    return panel
+
+
+def _role_bucket(role: Dict[str, Any]) -> str:
+    text = " ".join(
+        str(role.get(key) or "")
+        for key in ("role", "label", "phase")
+    ).lower()
+    if any(key in text for key in ("market", "technical", "技术")):
+        return "technical"
+    if any(key in text for key in ("sentiment", "news", "social", "新闻", "情绪")):
+        return "news"
+    if any(key in text for key in ("macro", "fundamental", "context", "situation", "宏观", "上下文")):
+        return "macro"
+    if any(key in text for key in ("risk", "judge", "风控", "风险")):
+        return "risk"
+    if any(key in text for key in ("portfolio", "manager", "trader", "组合", "建议")):
+        return "portfolio"
+    return "portfolio"
+
+
+def _summarize_role_reasoning(reasoning: Any, max_chars: int = 260) -> str:
+    text_value = str(reasoning or "").strip()
+    if not text_value:
+        return ""
+    first_lines = [line.strip(" #-\t") for line in text_value.splitlines() if line.strip()]
+    summary = " ".join(first_lines[:2]) or text_value
+    return summary[:max_chars] + ("..." if len(summary) > max_chars else "")
+
+
+def _normalize_role(role: Dict[str, Any], index: int) -> Dict[str, Any]:
+    reasoning = role.get("reasoning") or role.get("analysis") or role.get("summary") or ""
+    return {
+        "role": role.get("role") or f"role_{index}",
+        "index": role.get("index") or index,
+        "label": role.get("label") or role.get("agent_name") or role.get("role") or f"角色 {index}",
+        "phase": role.get("phase"),
+        "opinion": role.get("opinion") or role.get("signal"),
+        "confidence": _safe_float(role.get("confidence")),
+        "available": role.get("available", True),
+        "summary": role.get("summary") or _summarize_role_reasoning(reasoning),
+        "reasoning": reasoning,
+        "key_points": role.get("key_points") or [],
+        "data_source_chain": role.get("data_source_chain"),
+    }
+
+
+def _build_tradingagents_panel(decision: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not decision:
+        return None
+    raw_roles = _json_value(decision.get("role_opinions"), []) or _json_value(decision.get("agent_signals"), []) or []
+    if not isinstance(raw_roles, list):
+        raw_roles = []
+    normalized_roles = [
+        _normalize_role(role if isinstance(role, dict) else {"reasoning": role}, index + 1)
+        for index, role in enumerate(raw_roles)
+    ]
+    grouped: Dict[str, List[Dict[str, Any]]] = {
+        "technical": [],
+        "news": [],
+        "macro": [],
+        "risk": [],
+        "portfolio": [],
+    }
+    for role in normalized_roles:
+        grouped[_role_bucket(role)].append(role)
+
+    sections = [
+        {"key": "technical", "title": "技术分析", "items": grouped["technical"]},
+        {"key": "news", "title": "新闻分析", "items": grouped["news"]},
+        {"key": "macro", "title": "宏观分析", "items": grouped["macro"]},
+        {"key": "risk", "title": "风险评估", "items": grouped["risk"]},
+        {"key": "portfolio", "title": "组合建议", "items": grouped["portfolio"]},
+    ]
+    return {
+        "engine": "TradingAgentsGraph QuantAgent 适配版",
+        "source": "coordination_history",
+        "decision_id": decision.get("id"),
+        "decision_time": decision.get("timestamp"),
+        "final_signal": decision.get("final_signal"),
+        "confidence": decision.get("confidence"),
+        "risk_veto": decision.get("risk_veto"),
+        "summary": decision.get("summary"),
+        "role_count": len(normalized_roles),
+        "sections": sections,
+        "all_roles": normalized_roles,
+        "audit_url": f"/audit?decision_id={decision.get('id')}" if decision.get("id") else None,
+    }
+
+
+def _build_news_panel(
+    news_events: List[Dict[str, Any]],
+    symbol: str,
+    display_limit: int = 8,
+) -> List[Dict[str, Any]]:
+    base_asset = Instrument.from_raw(symbol).base_asset
+    panel = []
+    for event in news_events[:display_limit]:
+        symbols = event.get("symbols") or event.get("asset_mappings") or []
+        if isinstance(symbols, str):
+            symbols = [symbols]
+        if not symbols:
+            symbols = [base_asset]
+        panel.append({
+            "title": event.get("title"),
+            "source": event.get("source"),
+            "url": event.get("url"),
+            "summary": event.get("summary") or event.get("excerpt"),
+            "published_at": event.get("published_at") or event.get("event_time"),
+            "available_time": event.get("available_time"),
+            "sentiment_score": _safe_float(event.get("sentiment_score")),
+            "asset_mappings": symbols,
+            "topics": event.get("topics") or [],
+            "event_tags": event.get("event_tags") or [],
+            "provider": event.get("provider"),
+            "alignment_rule": "available_time <= as_of_time",
+        })
+    return panel
+
+
 @router.get("/klines/{symbol}", response_model=KlineResponse)
 async def get_klines(
     symbol: str,
@@ -1460,4 +1767,143 @@ async def get_l1_overview() -> Dict[str, Any]:
         "tickers": tickers,
         "headlines": headlines,
         "updated": datetime.utcnow().isoformat(),
+    }
+
+
+@router.get("/research-snapshot/{symbol}")
+async def get_research_snapshot(
+    symbol: str,
+    interval: str = Query("1h"),
+    as_of_time: Optional[datetime] = Query(None),
+) -> Dict[str, Any]:
+    """Return one point-in-time research snapshot for the dashboard.
+
+    This is a UI-friendly wrapper around AnalysisContext. It keeps every panel
+    aligned to the same cutoff time instead of letting charts, factors, news and
+    decisions drift across different timestamps.
+    """
+    from sqlalchemy import text
+    from app.services.analysis_context_builder import analysis_context_builder
+    from app.services.database import get_db
+
+    canonical_symbol = Instrument.from_raw(symbol).symbol
+    context = await analysis_context_builder.build(
+        symbol=canonical_symbol,
+        interval=interval,
+        as_of_time=as_of_time,
+        bar_limit=120,
+        factor_limit=40,
+        signal_limit=40,
+        news_limit=20,
+        macro_limit=30,
+    )
+    payload = context.to_agent_payload()
+    cutoff = context.as_of_time
+    cutoff_for_sql = cutoff.replace(tzinfo=timezone.utc) if cutoff.tzinfo is None else cutoff
+
+    latest_decision = None
+    async with get_db() as session:
+        row = (
+            await session.execute(
+                text(
+                    """
+                    SELECT id, symbol, timestamp, final_signal, confidence,
+                           risk_veto, summary, input_snapshot_ids, role_opinions,
+                           agent_signals, position_advice, risk_notes,
+                           bull_view, bear_view, vote_breakdown
+                    FROM coordination_history
+                    WHERE symbol = :symbol AND timestamp <= :cutoff
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                    """
+                ),
+                {"symbol": canonical_symbol, "cutoff": cutoff_for_sql},
+            )
+        ).fetchone()
+    if row:
+        latest_decision = {
+            "id": row[0],
+            "symbol": row[1],
+            "timestamp": row[2].isoformat() if row[2] else None,
+            "final_signal": row[3],
+            "confidence": float(row[4] or 0),
+            "risk_veto": bool(row[5]),
+            "summary": row[6] or "",
+            "input_snapshot_ids": _json_value(row[7], {}) or {},
+            "role_opinions": _json_value(row[8], []) or [],
+            "agent_signals": _json_value(row[9], []) or [],
+            "position_advice": _json_value(row[10], {}) or {},
+            "risk_notes": row[11] or "",
+            "bull_view": row[12] or "",
+            "bear_view": row[13] or "",
+            "vote_breakdown": _json_value(row[14], {}) or {},
+        }
+        latest_decision["role_count"] = len(
+            latest_decision.get("role_opinions") or latest_decision.get("agent_signals") or []
+        )
+
+    factors = payload.get("latest_factors") or {}
+    factor_items = [
+        {"name": name, "value": value}
+        for name, value in sorted(factors.items())[:16]
+    ]
+    bars = payload.get("bars") or []
+    signals = payload.get("recent_signals") or []
+    news_events = payload.get("news_events") or []
+    macro_events = payload.get("macro_events") or []
+    as_of_time_value = payload.get("as_of_time")
+    bar_panel = _build_bar_panel(bars)
+    factor_panel = _build_factor_panel(factors, macro_events, as_of_time_value)
+    signal_panel = _build_signal_panel(signals)
+    news_panel = _build_news_panel(news_events, canonical_symbol)
+    tradingagents_panel = _build_tradingagents_panel(latest_decision)
+
+    return {
+        "symbol": canonical_symbol,
+        "interval": interval,
+        "as_of_time": as_of_time_value,
+        "mode": "point_in_time" if as_of_time else "latest",
+        "global_time_axis": {
+            "as_of_time": as_of_time_value,
+            "mode": "point_in_time" if as_of_time else "latest",
+            "input_format": "ISO8601 datetime or yyyy-MM-dd HH:mm",
+            "alignment_rule": "available_time <= as_of_time",
+            "replay_note": "所有研究面板都用同一个 as_of_time 截止，便于回看任意历史时刻。",
+        },
+        "counts": {
+            "bars": len(bars),
+            "bars_displayed": bar_panel["displayed"],
+            "factors": len(factors),
+            "factors_displayed": len(factor_items),
+            "technical_factors": len(factor_panel["groups"]["technical"]),
+            "sentiment_factors": len(factor_panel["groups"]["sentiment"]),
+            "macro_factors": len(factor_panel["groups"]["macro"]),
+            "signals": len(signals),
+            "signals_displayed": len(signal_panel),
+            "news": len(news_events),
+            "news_displayed": len(news_panel),
+            "macro": len(macro_events),
+            "macro_displayed": len(macro_events[:6]),
+            "decisions": 1 if latest_decision else 0,
+            "tradingagents_roles": tradingagents_panel.get("role_count", 0) if tradingagents_panel else 0,
+        },
+        "latest_bar": bars[-1] if bars else None,
+        "bar_panel": bar_panel,
+        "factors": factor_items,
+        "factor_panel": factor_panel,
+        "signals": signals[:8],
+        "signal_panel": signal_panel,
+        "news_events": news_events[:6],
+        "news_panel": news_panel,
+        "macro_events": macro_events[:6],
+        "latest_decision": latest_decision,
+        "tradingagents_panel": tradingagents_panel,
+        "input_snapshot_ids": payload.get("input_snapshot_ids") or {},
+        "data_versions": payload.get("data_versions") or {},
+        "lineage": {
+            "rule": "available_time <= as_of_time",
+            "context_source": "AnalysisContextBuilder",
+            "market_data": "MarketDataGateway / ClickHouse cache / OpenBB / CCXT fallback",
+            "storage_note": "ClickHouse 和 DuckDB 是本地缓存/存储层，不是原始上游。",
+        },
     }

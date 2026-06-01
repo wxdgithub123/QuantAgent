@@ -8,6 +8,7 @@ import asyncio
 import itertools
 import logging
 import time
+import uuid
 from datetime import datetime, date, timezone
 from typing import List, Optional, Dict, Any
 
@@ -27,6 +28,9 @@ from app.services.reproducibility import enrich_pit_metadata, stable_params_hash
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+BACKTEST_TASKS: Dict[str, Dict[str, Any]] = {}
+BACKTEST_TASK_HISTORY_LIMIT = 50
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -535,7 +539,16 @@ async def get_backtest_history(
             ]
         
         # Ensure metrics has all required fields with default values
-        metrics = row.metrics or {}
+        raw_metrics = row.metrics or {}
+        pit_metadata = raw_metrics.get("pit") if isinstance(raw_metrics.get("pit"), dict) else {}
+        if not pit_metadata and isinstance(row.params_hash, str):
+            pit_metadata = {
+                "enabled": False,
+                "params_hash": row.params_hash,
+                "data_source": row.data_source,
+                "note": "This older backtest record does not include full PIT metadata.",
+            }
+        metrics = raw_metrics
         metrics = {
             "total_return": metrics.get("total_return", 0),
             "annual_return": metrics.get("annual_return", 0),
@@ -561,6 +574,7 @@ async def get_backtest_history(
             "markers":        markers,
             "trades":         trades_summary,
             "created_at":     row.created_at.isoformat() if row.created_at else None,
+            "pit":            pit_metadata,
         })
     return {"history": history, "total": len(history)}
 
@@ -1494,6 +1508,179 @@ class BatchBacktestResponse(BaseModel):
     results:       List[BatchBacktestItem]
     total_symbols: int
     success_count: int
+
+
+class ParameterBatchBacktestRequest(BacktestRequest):
+    param_grid: Dict[str, List[Any]]
+    max_parallel: int = 5
+
+
+class BacktestTaskSubmitResponse(BaseModel):
+    task_id: str
+    status: str
+    total_runs: int
+    max_parallel: int
+    note: str
+
+
+def _trim_backtest_tasks() -> None:
+    if len(BACKTEST_TASKS) <= BACKTEST_TASK_HISTORY_LIMIT:
+        return
+    ordered = sorted(
+        BACKTEST_TASKS.items(),
+        key=lambda item: item[1].get("created_at") or "",
+    )
+    for task_id, task in ordered[: max(0, len(BACKTEST_TASKS) - BACKTEST_TASK_HISTORY_LIMIT)]:
+        if task.get("status") in {"queued", "running"}:
+            continue
+        BACKTEST_TASKS.pop(task_id, None)
+
+
+def _parameter_combinations(param_grid: Dict[str, List[Any]], max_runs: int = 100) -> List[Dict[str, Any]]:
+    keys = [key for key, values in param_grid.items() if values]
+    if not keys:
+        raise HTTPException(status_code=400, detail="请至少配置一个参数组合")
+    combos = [
+        dict(zip(keys, values))
+        for values in itertools.product(*(param_grid[key] for key in keys))
+    ]
+    if len(combos) > max_runs:
+        raise HTTPException(status_code=400, detail=f"参数组合过多：当前 {len(combos)} 个，最多允许 {max_runs} 个")
+    return combos
+
+
+def _task_public_view(task: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: value
+        for key, value in task.items()
+        if key not in {"request"}
+    }
+
+
+async def _run_parameter_batch_task(task_id: str, req: ParameterBatchBacktestRequest, combos: List[Dict[str, Any]]) -> None:
+    task = BACKTEST_TASKS[task_id]
+    task["status"] = "running"
+    task["started_at"] = datetime.utcnow().isoformat()
+    semaphore = asyncio.Semaphore(max(1, min(req.max_parallel, 5)))
+
+    async def run_one(index: int, combo: Dict[str, Any]) -> Dict[str, Any]:
+        async with semaphore:
+            run_req = BacktestRequest(
+                strategy_type=req.strategy_type,
+                symbol=req.symbol,
+                interval=req.interval,
+                limit=req.limit,
+                initial_capital=req.initial_capital,
+                params={**(req.params or {}), **combo},
+                start_time=req.start_time,
+                end_time=req.end_time,
+                as_of_time=req.as_of_time,
+            )
+            try:
+                result = await run_backtest(run_req)
+                payload = result.model_dump()
+                return {
+                    "index": index,
+                    "status": "completed",
+                    "params": run_req.params,
+                    "backtest_id": payload.get("id"),
+                    "metrics": payload.get("metrics", {}),
+                    "pit": payload.get("pit", {}),
+                    "created_at": payload.get("created_at"),
+                }
+            except Exception as exc:
+                detail = getattr(exc, "detail", None)
+                return {
+                    "index": index,
+                    "status": "failed",
+                    "params": run_req.params,
+                    "error": str(detail or exc)[:500],
+                }
+
+    try:
+        results = await asyncio.gather(*(run_one(index, combo) for index, combo in enumerate(combos)))
+        completed = sum(1 for item in results if item.get("status") == "completed")
+        failed = len(results) - completed
+        task.update(
+            {
+                "status": "completed" if failed == 0 else "completed_with_errors",
+                "completed_at": datetime.utcnow().isoformat(),
+                "completed_runs": completed,
+                "failed_runs": failed,
+                "results": sorted(results, key=lambda item: item["index"]),
+            }
+        )
+    except Exception as exc:
+        task.update(
+            {
+                "status": "failed",
+                "completed_at": datetime.utcnow().isoformat(),
+                "error": str(exc)[:500],
+            }
+        )
+
+
+@router.post("/backtest/parameter-batch", response_model=BacktestTaskSubmitResponse)
+async def submit_parameter_batch_backtest(req: ParameterBatchBacktestRequest):
+    """
+    Submit a lightweight in-process background backtest task for parameter combinations.
+    Each completed run is persisted through the existing BacktestResult path.
+    """
+    combos = _parameter_combinations(req.param_grid)
+    max_parallel = max(1, min(req.max_parallel, 5))
+    task_id = f"bt-{uuid.uuid4().hex[:12]}"
+    BACKTEST_TASKS[task_id] = {
+        "task_id": task_id,
+        "status": "queued",
+        "kind": "parameter_batch",
+        "created_at": datetime.utcnow().isoformat(),
+        "started_at": None,
+        "completed_at": None,
+        "symbol": req.symbol.upper(),
+        "interval": req.interval,
+        "strategy_type": req.strategy_type,
+        "total_runs": len(combos),
+        "completed_runs": 0,
+        "failed_runs": 0,
+        "max_parallel": max_parallel,
+        "storage": "PostgreSQL backtest_results",
+        "queue_scope": "in_process_memory",
+        "pit": {
+            "requested_as_of_time": _iso(req.as_of_time),
+            "requested_start_time": _iso(req.start_time),
+            "requested_end_time": _iso(req.end_time),
+            "rule": "bar_time <= as_of_time",
+        },
+        "results": [],
+    }
+    _trim_backtest_tasks()
+    req.max_parallel = max_parallel
+    asyncio.create_task(_run_parameter_batch_task(task_id, req, combos))
+    return BacktestTaskSubmitResponse(
+        task_id=task_id,
+        status="queued",
+        total_runs=len(combos),
+        max_parallel=max_parallel,
+        note="任务在当前后端进程内异步执行；服务重启会丢失任务状态，但成功的单次回测结果会保存到 backtest_results。",
+    )
+
+
+@router.get("/backtest/tasks")
+async def list_backtest_tasks(limit: int = Query(20, ge=1, le=50)):
+    tasks = sorted(
+        (_task_public_view(task) for task in BACKTEST_TASKS.values()),
+        key=lambda task: task.get("created_at") or "",
+        reverse=True,
+    )
+    return {"tasks": tasks[:limit], "total": len(tasks)}
+
+
+@router.get("/backtest/tasks/{task_id}")
+async def get_backtest_task(task_id: str):
+    task = BACKTEST_TASKS.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="回测任务不存在或后端服务已重启")
+    return _task_public_view(task)
 
 
 @router.post("/backtest/batch", response_model=BatchBacktestResponse)

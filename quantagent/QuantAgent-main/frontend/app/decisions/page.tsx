@@ -3,21 +3,15 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  Activity,
   ArrowDown,
   ArrowUp,
-  BarChart,
-  BarChart3,
   Brain,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  History,
-  Layers,
   Minus,
   PieChart,
   RefreshCw,
-  Server,
   Shield,
   Sparkles,
   TrendingUp,
@@ -36,6 +30,7 @@ import {
   YAxis,
 } from "recharts";
 
+import { AppTopNav } from "@/components/navigation/AppTopNav";
 import { Prd104StatusPanel } from "@/components/prd/Prd104StatusPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -59,6 +54,17 @@ interface RoleOpinion {
   key_points?: string[];
 }
 
+interface TradingAgentsChainEntry {
+  index?: number;
+  phase?: string;
+  role?: string;
+  label?: string;
+  opinion?: string;
+  confidence?: number;
+  available?: boolean;
+  reasoning?: string;
+}
+
 interface DecisionRow {
   id: number;
   symbol: string;
@@ -73,7 +79,9 @@ interface DecisionRow {
   bear_view?: string;
   input_snapshot_ids?: Record<string, unknown>;
   role_opinions?: RoleOpinion[];
-  position_advice?: Record<string, unknown>;
+  position_advice?: Record<string, unknown> & {
+    tradingagents_internal_chain?: TradingAgentsChainEntry[];
+  };
   risk_notes?: string;
 }
 
@@ -112,6 +120,58 @@ interface BackfillStatusRow {
   status?: string;
 }
 
+interface OrderIntentResult {
+  status?: string;
+  message?: string;
+  data_lineage?: Record<string, string>;
+  intent?: {
+    intent_id?: string;
+    decision_id?: number;
+    symbol?: string;
+    direction?: string;
+    side?: string | null;
+    position_pct?: number;
+    confidence?: number;
+    valid_until?: string;
+    trigger_reason?: string;
+    exchange_id?: string;
+    order_type?: string;
+    status?: string;
+  };
+  price?: number;
+  sizing?: {
+    total_equity?: number;
+    target_notional?: number;
+    quantity?: number;
+    position_pct?: number;
+  };
+  risk_preview?: {
+    allowed?: boolean;
+    rule?: string;
+    reason?: string;
+    checked_at?: string;
+  };
+  execution?: {
+    order_id?: string;
+    trade_id?: string;
+    status?: string;
+    message?: string;
+  } | null;
+}
+
+interface OrderIntentAuditRow {
+  id: number;
+  action: string;
+  symbol: string;
+  created_at: string | null;
+  details?: {
+    intent?: OrderIntentResult["intent"];
+    price?: number;
+    sizing?: OrderIntentResult["sizing"];
+    risk_preview?: OrderIntentResult["risk_preview"];
+  };
+}
+
 const PIE_COLORS = ["#34d399", "#fb7185", "#94a3b8", "#38bdf8", "#fbbf24", "#a78bfa"];
 const FALLBACK_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT", "XRPUSDT"];
 const NATIVE_TRADINGAGENTS_ANALYSTS = ["market", "news", "social", "fundamentals"];
@@ -132,6 +192,11 @@ function formatPercent(value?: number) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+function formatMoney(value?: number) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "--";
+  return value.toLocaleString(undefined, { maximumFractionDigits: value >= 100 ? 2 : 6 });
+}
+
 function signalLabel(signal?: string) {
   const normalized = String(signal || "WAIT").toUpperCase();
   if (normalized === "BUY") return "买入";
@@ -147,6 +212,22 @@ function signalBadgeClass(signal?: string) {
   return "border-slate-400/20 bg-slate-500/15 text-slate-300";
 }
 
+function orderIntentStatusLabel(status?: string) {
+  if (status === "READY") return "可手动执行";
+  if (status === "BLOCKED") return "风控拦截";
+  if (status === "NO_ACTION") return "不下单";
+  if (status === "FILLED") return "已成交";
+  if (status === "EXECUTED") return "已执行";
+  return status || "--";
+}
+
+function orderIntentStatusClass(status?: string) {
+  if (status === "READY") return "border-emerald-400/30 bg-emerald-500/15 text-emerald-200";
+  if (status === "BLOCKED") return "border-rose-400/30 bg-rose-500/15 text-rose-200";
+  if (status === "FILLED" || status === "EXECUTED") return "border-cyan-400/30 bg-cyan-500/15 text-cyan-200";
+  return "border-slate-400/20 bg-slate-500/15 text-slate-300";
+}
+
 function roleLabel(role?: string) {
   if (!role) return "未标注角色";
   if (role === "tradingagents_openai_decision") return "TradingAgents + DMXAPI / gpt-4o-mini";
@@ -156,6 +237,13 @@ function roleLabel(role?: string) {
   if (role === "tradingagents_native_situation") return "原版 TradingAgents 情景摘要";
   if (role === "tradingagents_native_trader") return "原版 TradingAgents 交易员";
   if (role === "tradingagents_native_final_judge") return "原版 TradingAgents 最终裁决";
+  if (role === "tradingagents_quantagent_market") return "QuantAgent 市场结构分析";
+  if (role === "tradingagents_quantagent_sentiment") return "QuantAgent 新闻情绪分析";
+  if (role === "tradingagents_quantagent_news") return "QuantAgent 新闻/宏观分析";
+  if (role === "tradingagents_quantagent_context") return "QuantAgent 加密上下文分析";
+  if (role === "tradingagents_quantagent_situation") return "QuantAgent 情景摘要";
+  if (role === "tradingagents_quantagent_trader") return "QuantAgent 交易员";
+  if (role === "tradingagents_quantagent_final_judge") return "QuantAgent 最终裁决";
   if (role === "technical") return "技术面 Agent";
   if (role === "news") return "新闻 Agent";
   if (role === "macro") return "宏观 Agent";
@@ -166,6 +254,7 @@ function roleLabel(role?: string) {
 function roleDescription(role?: string) {
   if (role === "tradingagents_openai_decision") return "实际调用 OpenAI 兼容接口，由 DMXAPI 转发到 gpt-4o-mini 输出最终结构化判断。";
   if (role === "tradingagents_context_adapter") return "不调用大模型的本地基线判断，用来兜底和解释输入上下文。";
+  if (role?.startsWith("tradingagents_quantagent_")) return "来自已修改源码的 TradingAgentsGraph；原版工具名保留，但数据读取已改为 QuantAgent AnalysisContext。";
   if (role?.startsWith("tradingagents_native_")) return "来自原版 TradingAgentsGraph 沙盒，使用原版 yfinance / Google News RSS 工具链。";
   return "参与本次决策的结构化分析结果。";
 }
@@ -176,11 +265,33 @@ function roleScoreLabel(role?: string) {
   return "置信度";
 }
 
+function chainPhaseLabel(phase?: string) {
+  if (phase === "core_report") return "核心报告";
+  if (phase === "synthesis") return "情景压缩";
+  if (phase === "investment_debate") return "多空辩论";
+  if (phase === "execution_plan") return "交易计划";
+  if (phase === "risk_debate") return "风险辩论";
+  if (phase === "final_judge") return "最终裁决";
+  return phase || "完整链路";
+}
+
+function getTradingAgentsInternalChain(decision: DecisionRow) {
+  const chain = decision.position_advice?.tradingagents_internal_chain;
+  return Array.isArray(chain) ? chain : [];
+}
+
+function publicPositionAdvice(positionAdvice?: DecisionRow["position_advice"]) {
+  if (!positionAdvice) return {};
+  const { tradingagents_internal_chain: _internalChain, ...rest } = positionAdvice;
+  return rest;
+}
+
 function primaryEngine(decision?: DecisionRow) {
   const roles = decision?.agent_signals || decision?.role_opinions || [];
   const firstRole = roles[0]?.role;
   if (firstRole === "tradingagents_openai_decision") return "TradingAgents + DMXAPI / gpt-4o-mini";
   if (firstRole === "tradingagents_context_adapter") return "TradingAgents 基线";
+  if (firstRole?.startsWith("tradingagents_quantagent_")) return "TradingAgentsGraph QuantAgent 源码适配版";
   return firstRole ? roleLabel(firstRole) : "未记录";
 }
 
@@ -215,6 +326,12 @@ function buildSymbolOptions(rows: BackfillStatusRow[]) {
     if (leftRank !== rightRank) return leftRank - rightRank;
     return left.localeCompare(right);
   });
+}
+
+function researchSnapshotHref(symbol: string, interval = "1h", asOfTime?: string | null) {
+  const params = new URLSearchParams({ symbol, interval });
+  if (asOfTime) params.set("as_of_time", asOfTime);
+  return `/dashboard?${params.toString()}`;
 }
 
 function StatCard({
@@ -253,6 +370,10 @@ export default function DecisionsPage() {
   const [nativeTradeDate, setNativeTradeDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [nativeResult, setNativeResult] = useState<NativeTradingAgentsResult | null>(null);
   const [nativeError, setNativeError] = useState("");
+  const [intentResults, setIntentResults] = useState<Record<number, OrderIntentResult>>({});
+  const [intentLoading, setIntentLoading] = useState<Record<number, "preview" | "execute" | undefined>>({});
+  const [intentError, setIntentError] = useState<Record<number, string>>({});
+  const [intentAudits, setIntentAudits] = useState<OrderIntentAuditRow[]>([]);
 
   const fetchDecisions = useCallback(async () => {
     try {
@@ -278,6 +399,19 @@ export default function DecisionsPage() {
     }
   }, []);
 
+  const fetchIntentAudits = useCallback(async () => {
+    try {
+      const params = new URLSearchParams({ limit: "6" });
+      if (filterSymbol) params.set("symbol", filterSymbol);
+      const res = await fetch(`/api/v1/execution/order-intents/latest?${params}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      setIntentAudits(Array.isArray(data?.data) ? data.data : []);
+    } catch {
+      setIntentAudits([]);
+    }
+  }, [filterSymbol]);
+
   const fetchSymbolOptions = useCallback(async () => {
     try {
       const res = await fetch("/api/v1/market/backfill/status", { cache: "no-store" });
@@ -291,8 +425,8 @@ export default function DecisionsPage() {
   }, []);
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([fetchDecisions(), fetchStats(), fetchSymbolOptions()]);
-  }, [fetchDecisions, fetchStats, fetchSymbolOptions]);
+    await Promise.all([fetchDecisions(), fetchStats(), fetchSymbolOptions(), fetchIntentAudits()]);
+  }, [fetchDecisions, fetchStats, fetchSymbolOptions, fetchIntentAudits]);
 
   const runFullDecision = useCallback(async () => {
     const symbol = (filterSymbol || "BTCUSDT").toUpperCase();
@@ -342,6 +476,28 @@ export default function DecisionsPage() {
     }
   }, [filterSymbol, nativeTradeDate]);
 
+  const runOrderIntent = useCallback(async (decisionId: number, mode: "preview" | "execute") => {
+    setIntentLoading((prev) => ({ ...prev, [decisionId]: mode }));
+    setIntentError((prev) => ({ ...prev, [decisionId]: "" }));
+    try {
+      const res = await fetch(`/api/v1/execution/order-intents/${mode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision_id: decisionId, exchange_id: "okx" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.detail || data?.error || `OrderIntent ${mode === "preview" ? "预览" : "执行"}失败: ${res.status}`);
+      }
+      setIntentResults((prev) => ({ ...prev, [decisionId]: data }));
+      await Promise.all([fetchIntentAudits(), fetchStats()]);
+    } catch (e: unknown) {
+      setIntentError((prev) => ({ ...prev, [decisionId]: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setIntentLoading((prev) => ({ ...prev, [decisionId]: undefined }));
+    }
+  }, [fetchIntentAudits, fetchStats]);
+
   useEffect(() => {
     refreshAll().finally(() => setLoading(false));
   }, [refreshAll]);
@@ -367,34 +523,16 @@ export default function DecisionsPage() {
 
   return (
     <div className="min-h-screen bg-[#071026] text-slate-100">
-      <header className="sticky top-0 z-40 border-b border-white/10 bg-[#101a37]/95 backdrop-blur">
-        <div className="container mx-auto px-4 py-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-400 to-fuchsia-500 shadow-lg shadow-fuchsia-500/20">
-                <BarChart3 className="h-5 w-5 text-white" />
-              </div>
-              <div>
-                <h1 className="text-lg font-bold text-white">QuantAgent OS</h1>
-                <p className="text-[10px] text-slate-400">加密资产优先的量化研究与决策平台</p>
-              </div>
-            </div>
-            <nav className="hidden items-center gap-1 md:flex">
-              <Link href="/dashboard" className="rounded-lg px-3 py-1.5 text-sm text-slate-300 transition hover:bg-white/10 hover:text-white">仪表盘</Link>
-              <Link href="/trades" className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-slate-300 transition hover:bg-white/10 hover:text-white"><Activity className="h-4 w-4" />交易流水</Link>
-              <Link href="/analytics" className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-slate-300 transition hover:bg-white/10 hover:text-white"><BarChart className="h-4 w-4" />性能分析</Link>
-              <Link href="/replay" className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-slate-300 transition hover:bg-white/10 hover:text-white"><History className="h-4 w-4" />历史回放</Link>
-              <Link href="/terminal" className="rounded-lg px-3 py-1.5 text-sm text-slate-300 transition hover:bg-white/10 hover:text-white">终端</Link>
-              <Link href="/hummingbot" className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-slate-300 transition hover:bg-white/10 hover:text-white"><Server className="h-4 w-4" />Hummingbot</Link>
-              <Link href="/signals" className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-slate-300 transition hover:bg-white/10 hover:text-white"><Layers className="h-4 w-4" />因子/信号</Link>
-              <Link href="/decisions" className="flex items-center gap-1.5 rounded-lg border border-fuchsia-400/30 bg-fuchsia-500/15 px-3 py-1.5 text-sm font-medium text-fuchsia-200"><Brain className="h-4 w-4" />决策中心</Link>
-            </nav>
+      <AppTopNav
+        activeSection="decisions"
+        title="决策中心"
+        subtitle="查看交易建议、模型判断依据与 TradingAgents 结果"
+        rightSlot={
             <Button size="icon" variant="ghost" className="h-8 w-8 text-slate-300 hover:text-white" onClick={refreshAll}>
               <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
             </Button>
-          </div>
-        </div>
-      </header>
+        }
+      />
 
       <main className="container mx-auto px-4 py-6">
         {error && (
@@ -666,13 +804,14 @@ export default function DecisionsPage() {
                       <TableHead className="text-xs text-slate-400">决策引擎</TableHead>
                       <TableHead className="text-xs text-slate-400">风险</TableHead>
                       <TableHead className="text-xs text-slate-400">时间</TableHead>
+                      <TableHead className="text-xs text-slate-400">联动</TableHead>
                       <TableHead className="w-10" />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {decisions.length === 0 ? (
                       <TableRow className="border-white/10">
-                        <TableCell colSpan={7} className="py-12 text-center text-sm text-slate-400">
+                        <TableCell colSpan={8} className="py-12 text-center text-sm text-slate-400">
                           暂无建议记录。点击上方“生成交易建议”后，这里会出现结果。
                         </TableCell>
                       </TableRow>
@@ -680,6 +819,11 @@ export default function DecisionsPage() {
                       decisions.map((decision) => {
                         const expanded = expandedId === decision.id;
                         const roles = decision.role_opinions?.length ? decision.role_opinions : decision.agent_signals;
+                        const internalChain = getTradingAgentsInternalChain(decision);
+                        const intentResult = intentResults[decision.id];
+                        const intentBusy = intentLoading[decision.id];
+                        const intentErrorMessage = intentError[decision.id];
+                        const canExecuteIntent = intentResult?.status === "READY";
                         return (
                           <Fragment key={decision.id}>
                             <TableRow
@@ -712,16 +856,148 @@ export default function DecisionsPage() {
                                 {decision.timestamp ? new Date(decision.timestamp).toLocaleString() : "-"}
                               </TableCell>
                               <TableCell>
+                                <div className="flex flex-col gap-1 text-[11px]">
+                                  <Link
+                                    href={`/audit?decision_id=${decision.id}`}
+                                    onClick={(event) => event.stopPropagation()}
+                                    className="text-cyan-200 hover:text-cyan-100"
+                                  >
+                                    审计详情
+                                  </Link>
+                                  <Link
+                                    href={researchSnapshotHref(decision.symbol, "1h", decision.timestamp)}
+                                    onClick={(event) => event.stopPropagation()}
+                                    className="text-slate-300 hover:text-white"
+                                  >
+                                    回看研究台
+                                  </Link>
+                                </div>
+                              </TableCell>
+                              <TableCell>
                                 {expanded ? <ChevronUp className="h-4 w-4 text-slate-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}
                               </TableCell>
                             </TableRow>
                             {expanded && (
                               <TableRow className="border-white/10 bg-slate-950/35">
-                                <TableCell colSpan={7} className="p-4">
+                                <TableCell colSpan={8} className="p-4">
                                   <div className="grid gap-4 lg:grid-cols-2">
                                     <div className="rounded-2xl border border-fuchsia-400/20 bg-fuchsia-500/5 p-4 lg:col-span-2">
                                       <h4 className="text-sm font-semibold text-fuchsia-100">最终说明</h4>
                                       <p className="mt-2 text-sm leading-6 text-slate-200">{decision.summary || "本次决策没有返回说明。"}</p>
+                                    </div>
+
+                                    <div className="rounded-2xl border border-cyan-400/20 bg-cyan-500/5 p-4 lg:col-span-2">
+                                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                        <div>
+                                          <h4 className="flex items-center gap-2 text-sm font-semibold text-cyan-100">
+                                            <Shield className="h-4 w-4" />
+                                            二阶段执行闭环：OrderIntent / RiskGuard / 模拟盘
+                                          </h4>
+                                          <p className="mt-2 text-xs leading-5 text-slate-400">
+                                            这里会把当前 TradingAgents 建议转换成标准 OrderIntent，再交给 RiskGuard 做风控检查。
+                                            只有你手动点击执行，且风控允许时，才会写入模拟盘订单；不会触发真实交易。
+                                          </p>
+                                        </div>
+                                          <div className="flex shrink-0 flex-wrap gap-2">
+                                          <Link href={`/audit?decision_id=${decision.id}`}>
+                                            <Button
+                                              size="sm"
+                                              variant="outline"
+                                              className="h-8 border-white/10 bg-white/5 text-xs text-slate-100 hover:bg-white/10"
+                                            >
+                                              打开审计详情
+                                            </Button>
+                                          </Link>
+                                          <Link href={researchSnapshotHref(decision.symbol, "1h", decision.timestamp)}>
+                                            <Button
+                                              size="sm"
+                                              variant="ghost"
+                                              className="h-8 text-xs text-slate-200 hover:bg-white/10"
+                                            >
+                                              回看研究台
+                                            </Button>
+                                          </Link>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-8 border-cyan-300/25 bg-cyan-400/10 text-xs text-cyan-100 hover:bg-cyan-400/20"
+                                            disabled={!!intentBusy}
+                                            onClick={() => runOrderIntent(decision.id, "preview")}
+                                          >
+                                            {intentBusy === "preview" ? <RefreshCw className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                                            生成 OrderIntent
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            className="h-8 bg-emerald-500 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:bg-slate-700 disabled:text-slate-400"
+                                            disabled={!!intentBusy || !canExecuteIntent}
+                                            onClick={() => runOrderIntent(decision.id, "execute")}
+                                          >
+                                            {intentBusy === "execute" ? <RefreshCw className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                                            手动执行模拟盘
+                                          </Button>
+                                        </div>
+                                      </div>
+
+                                      {intentErrorMessage && (
+                                        <div className="mt-3 rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
+                                          {intentErrorMessage}
+                                        </div>
+                                      )}
+
+                                      {intentResult ? (
+                                        <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                                          <div className="rounded-xl border border-white/10 bg-slate-950/45 p-3">
+                                            <div className="flex items-center justify-between gap-2">
+                                              <p className="text-xs text-slate-400">OrderIntent 状态</p>
+                                              <Badge className={cn("border text-[11px]", orderIntentStatusClass(intentResult.status))}>
+                                                {orderIntentStatusLabel(intentResult.status)}
+                                              </Badge>
+                                            </div>
+                                            <div className="mt-3 space-y-1 text-xs leading-5 text-slate-300">
+                                              <p>方向：<span className="font-mono text-white">{intentResult.intent?.side || "NO_ACTION"}</span></p>
+                                              <p>交易对：<span className="font-mono text-white">{intentResult.intent?.symbol || decision.symbol}</span></p>
+                                              <p>仓位比例：<span className="font-mono text-white">{formatPercent(intentResult.intent?.position_pct)}</span></p>
+                                              <p>有效期：{intentResult.intent?.valid_until ? new Date(intentResult.intent.valid_until).toLocaleString() : "--"}</p>
+                                            </div>
+                                          </div>
+                                          <div className="rounded-xl border border-white/10 bg-slate-950/45 p-3">
+                                            <p className="text-xs text-slate-400">价格与数量</p>
+                                            <div className="mt-3 space-y-1 text-xs leading-5 text-slate-300">
+                                              <p>参考价格：<span className="font-mono text-white">{formatMoney(intentResult.price)}</span></p>
+                                              <p>目标名义金额：<span className="font-mono text-white">{formatMoney(intentResult.sizing?.target_notional)}</span></p>
+                                              <p>下单数量：<span className="font-mono text-white">{formatMoney(intentResult.sizing?.quantity)}</span></p>
+                                              <p>模拟盘权益：<span className="font-mono text-white">{formatMoney(intentResult.sizing?.total_equity)}</span></p>
+                                            </div>
+                                          </div>
+                                          <div className="rounded-xl border border-white/10 bg-slate-950/45 p-3">
+                                            <p className="text-xs text-slate-400">风控与审计</p>
+                                            <div className="mt-3 space-y-1 text-xs leading-5 text-slate-300">
+                                              <p>RiskGuard：<span className={intentResult.risk_preview?.allowed ? "text-emerald-300" : "text-rose-300"}>{intentResult.risk_preview ? (intentResult.risk_preview.allowed ? "通过" : "拦截") : "--"}</span></p>
+                                              <p>规则：<span className="font-mono text-white">{intentResult.risk_preview?.rule || "--"}</span></p>
+                                              <p>执行：<span className="font-mono text-white">{intentResult.execution?.status || "--"}</span></p>
+                                              <p>审计：ORDER_INTENT_* 已写入 audit_logs</p>
+                                            </div>
+                                          </div>
+                                          <div className="rounded-xl border border-white/10 bg-slate-950/45 p-3 lg:col-span-3">
+                                            <p className="text-xs text-slate-400">结果说明</p>
+                                            <p className="mt-2 text-xs leading-5 text-slate-300">{intentResult.message || "暂无说明。"}</p>
+                                            {intentResult.data_lineage && (
+                                              <div className="mt-3 grid gap-2 text-[11px] text-slate-400 md:grid-cols-2">
+                                                {Object.entries(intentResult.data_lineage).map(([key, value]) => (
+                                                  <p key={key}>
+                                                    <span className="font-mono text-slate-500">{key}</span>：{value}
+                                                  </p>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <div className="mt-4 rounded-xl border border-white/10 bg-slate-950/35 px-3 py-3 text-xs leading-5 text-slate-400">
+                                          还没有为这条建议生成 OrderIntent。先点“生成 OrderIntent”查看方向、仓位、价格来源和风控结果；观望/WAIT 会明确显示为不下单。
+                                        </div>
+                                      )}
                                     </div>
 
                                     <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
@@ -807,9 +1083,49 @@ export default function DecisionsPage() {
                                     <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                                       <h4 className="text-sm font-semibold text-white">仓位建议</h4>
                                       <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap rounded-xl bg-slate-950/60 p-3 text-[11px] leading-5 text-slate-400">
-                                        {JSON.stringify(decision.position_advice || {}, null, 2)}
+                                        {JSON.stringify(publicPositionAdvice(decision.position_advice), null, 2)}
                                       </pre>
                                     </div>
+                                    {internalChain.length > 0 && (
+                                      <details className="rounded-2xl border border-amber-300/20 bg-amber-400/[0.04] p-4 lg:col-span-2">
+                                        <summary className="cursor-pointer select-none text-sm font-semibold text-amber-100">
+                                          完整智能体链路：{internalChain.length} 个内部角色 / 节点
+                                        </summary>
+                                        <p className="mt-2 text-xs leading-5 text-slate-400">
+                                          默认只展示 7 个核心结果块。这里展开的是 TradingAgentsGraph 的完整内部过程，包括多头、空头、研究经理和三类风险辩论角色。
+                                        </p>
+                                        <div className="mt-4 grid gap-3 md:grid-cols-2">
+                                          {internalChain.map((entry, index) => (
+                                            <div
+                                              key={`${entry.role || "chain"}-${entry.index || index}`}
+                                              className={cn(
+                                                "rounded-xl border p-3",
+                                                entry.available
+                                                  ? "border-white/10 bg-slate-950/45"
+                                                  : "border-slate-500/10 bg-slate-950/25 opacity-75"
+                                              )}
+                                            >
+                                              <div className="flex items-start justify-between gap-3">
+                                                <div>
+                                                  <p className="text-sm font-semibold text-slate-100">
+                                                    {entry.index ? `${entry.index}. ` : ""}{entry.label || roleLabel(entry.role)}
+                                                  </p>
+                                                  <p className="mt-1 text-[11px] text-slate-500">
+                                                    {chainPhaseLabel(entry.phase)} · {entry.role}
+                                                  </p>
+                                                </div>
+                                                <Badge className="border border-amber-300/20 bg-amber-400/10 text-[11px] text-amber-100">
+                                                  {entry.available ? "有独立输出" : "已折叠"}
+                                                </Badge>
+                                              </div>
+                                              <p className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap text-xs leading-5 text-slate-300">
+                                                {entry.reasoning || "本节点没有返回独立文本。"}
+                                              </p>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </details>
+                                    )}
                                     <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                                       <h4 className="text-sm font-semibold text-white">风险备注</h4>
                                       <p className="mt-2 rounded-xl bg-slate-950/60 p-3 text-xs leading-5 text-slate-300">
@@ -880,6 +1196,46 @@ export default function DecisionsPage() {
                       <Line type="monotone" dataKey="confidence" stroke="#22d3ee" strokeWidth={2.5} dot={false} />
                     </LineChart>
                   </ResponsiveContainer>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="border-cyan-400/15 bg-slate-900/60">
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-sm text-white">
+                  <Shield className="h-4 w-4 text-cyan-300" />
+                  最近执行审计
+                </CardTitle>
+                <p className="text-xs text-slate-500">只展示 OrderIntent、风控和模拟盘执行相关记录。</p>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {intentAudits.length === 0 ? (
+                  <div className="rounded-xl border border-white/10 bg-slate-950/35 p-4 text-xs leading-5 text-slate-500">
+                    暂无执行审计。展开一条决策并生成 OrderIntent 后，这里会显示最近记录。
+                  </div>
+                ) : (
+                  intentAudits.map((row) => (
+                    <div key={row.id} className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-mono text-xs text-cyan-100">{row.action}</p>
+                          <p className="mt-1 font-mono text-[11px] text-slate-500">{row.symbol}</p>
+                        </div>
+                        <Badge className={cn("border text-[10px]", orderIntentStatusClass(row.details?.intent?.status))}>
+                          {orderIntentStatusLabel(row.details?.intent?.status)}
+                        </Badge>
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-400">
+                        <p>方向：<span className="font-mono text-slate-200">{row.details?.intent?.side || "NO_ACTION"}</span></p>
+                        <p>仓位：<span className="font-mono text-slate-200">{formatPercent(row.details?.intent?.position_pct)}</span></p>
+                        <p>价格：<span className="font-mono text-slate-200">{formatMoney(row.details?.price)}</span></p>
+                        <p>数量：<span className="font-mono text-slate-200">{formatMoney(row.details?.sizing?.quantity)}</span></p>
+                      </div>
+                      <p className="mt-2 text-[10px] text-slate-500">
+                        {row.created_at ? new Date(row.created_at).toLocaleString() : "--"}
+                      </p>
+                    </div>
+                  ))
                 )}
               </CardContent>
             </Card>

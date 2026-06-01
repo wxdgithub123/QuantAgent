@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -21,6 +22,10 @@ from pydantic import BaseModel, Field
 
 
 app = FastAPI(title="QuantAgent TradingAgents Service")
+
+_VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
+if _VENDOR_DIR.exists() and str(_VENDOR_DIR) not in sys.path:
+    sys.path.insert(0, str(_VENDOR_DIR))
 
 
 class AnalyzeRequest(BaseModel):
@@ -85,6 +90,30 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     the service boundary and response contract. It can be replaced internally
     with a native TradingAgentsGraph call without changing the main backend.
     """
+    mode = os.getenv("TRADINGAGENTS_MODE", "context_adapter").strip().lower()
+    if mode in {"quantagent_patched_graph", "quantagent_graph", "patched_graph"}:
+        if not _TA_GRAPH_AVAILABLE or TradingAgentsGraph is None or TradingAgentsConfig is None:
+            return AnalyzeResponse(
+                status="error",
+                symbol=req.symbol,
+                error=f"Patched TradingAgentsGraph is unavailable: {_TA_IMPORT_ERROR}",
+                raw={"mode": mode, "tradingagents_available": _TA_GRAPH_AVAILABLE},
+            )
+        try:
+            return await asyncio.to_thread(_run_quantagent_patched_graph, req, mode)
+        except Exception as exc:  # pragma: no cover - depends on LLM/runtime
+            return AnalyzeResponse(
+                status="error",
+                symbol=req.symbol,
+                error=str(exc)[:500],
+                raw={
+                    "mode": mode,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "tradingagents_available": _TA_GRAPH_AVAILABLE,
+                    "input_snapshot_ids": (req.analysis_context or {}).get("input_snapshot_ids") or {},
+                },
+            )
+
     ctx = req.analysis_context or {}
     signals = ctx.get("recent_signals") or []
     macro = ctx.get("macro_events") or []
@@ -377,6 +406,82 @@ def _run_native_graph(req: AnalyzeRequest) -> AnalyzeResponse:
     )
 
 
+def _run_quantagent_patched_graph(req: AnalyzeRequest, mode: str) -> AnalyzeResponse:
+    """Run the vendored TradingAgentsGraph with QuantAgent-patched data tools."""
+    _prepare_native_llm_environment()
+
+    provider = _native_llm_provider()
+    if provider == "openai" and not os.getenv("OPENAI_API_KEY"):
+        return AnalyzeResponse(
+            status="error",
+            symbol=req.symbol,
+            error="OPENAI_API_KEY is required for patched TradingAgentsGraph with provider=openai",
+            raw={"mode": mode, "openai_configured": False},
+        )
+
+    trade_date = _default_trade_date(req.trade_date)
+    selected_analysts = _patched_selected_analysts(req.selected_analysts)
+    config = TradingAgentsConfig(  # type: ignore[misc]
+        results_dir=Path(os.getenv("TRADINGAGENTS_PATCHED_RESULTS_DIR", "/tmp/tradingagents-patched-results")),
+        llm_provider=provider,
+        deep_think_llm=_native_model("TRADINGAGENTS_PATCHED_DEEP_MODEL"),
+        quick_think_llm=_native_model("TRADINGAGENTS_PATCHED_QUICK_MODEL"),
+        reasoning_effort=os.getenv("TRADINGAGENTS_PATCHED_REASONING_EFFORT", "low"),
+        response_language=os.getenv("TRADINGAGENTS_PATCHED_RESPONSE_LANGUAGE", "zh-CN"),
+        max_debate_rounds=_safe_int(os.getenv("TRADINGAGENTS_PATCHED_MAX_DEBATE_ROUNDS"), 1),
+        max_risk_discuss_rounds=_safe_int(os.getenv("TRADINGAGENTS_PATCHED_MAX_RISK_ROUNDS"), 1),
+        max_recur_limit=max(30, _safe_int(os.getenv("TRADINGAGENTS_PATCHED_MAX_RECUR_LIMIT"), 60)),
+    )
+    graph = TradingAgentsGraph(  # type: ignore[operator]
+        selected_analysts=selected_analysts,
+        debug=os.getenv("TRADINGAGENTS_PATCHED_DEBUG", "false").lower() in {"1", "true", "yes", "on"},
+        config=config,
+    )
+    state, recommendation = graph.propagate(
+        req.symbol,
+        trade_date,
+        analysis_context=req.analysis_context or {},
+    )
+    rec = recommendation.model_dump(mode="json") if hasattr(recommendation, "model_dump") else {}
+    signal = str(rec.get("signal") or "HOLD").upper()
+    decision = "WAIT" if signal == "HOLD" else _normalize_decision(signal, "WAIT")
+    confidence = _clamp(_safe_float(rec.get("confidence"), 0.5), 0.0, 0.95)
+    reports = _patched_reports_from_state(state, decision, confidence)
+    reasoning = str(rec.get("rationale") or getattr(state, "final_trade_decision", "") or "").strip()
+    if not reasoning:
+        reasoning = "QuantAgent patched TradingAgentsGraph completed without a detailed rationale."
+
+    input_snapshot_ids = (req.analysis_context or {}).get("input_snapshot_ids") or {}
+    return AnalyzeResponse(
+        status="ok",
+        symbol=req.symbol,
+        decision=decision,
+        confidence=round(confidence, 3),
+        reasoning=_trim_text(reasoning, 1200),
+        analyst_reports=reports,
+        vote_breakdown=_vote_from_decision(decision),
+        risk_flagged=bool(rec.get("warning_message")) or decision == "WAIT",
+        raw={
+            "mode": mode,
+            "source": "vendored_tradingagents_0.7.0_quantagent_patch",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "symbol": req.symbol,
+            "trade_date": trade_date,
+            "selected_analysts": selected_analysts,
+            "recommendation": rec,
+            "input_snapshot_ids": input_snapshot_ids,
+            "internal_chain": _patched_internal_chain_from_state(state, decision, confidence),
+            "data_source_note": (
+                "Patched TradingAgentsGraph ran the original LangGraph topology, "
+                "but market/news/fundamentals/indicator tools were redirected to "
+                "QuantAgent AnalysisContext instead of yfinance/Google News RSS."
+            ),
+            "quick_model": _native_model("TRADINGAGENTS_PATCHED_QUICK_MODEL"),
+            "deep_model": _native_model("TRADINGAGENTS_PATCHED_DEEP_MODEL"),
+        },
+    )
+
+
 def _native_selected_analysts(value: Optional[List[str]]) -> List[str]:
     raw = value or [
         part.strip()
@@ -386,6 +491,20 @@ def _native_selected_analysts(value: Optional[List[str]]) -> List[str]:
     allowed = {"market", "social", "news", "fundamentals"}
     analysts = [item for item in raw if item in allowed]
     return analysts or ["market", "news"]
+
+
+def _patched_selected_analysts(value: Optional[List[str]]) -> List[str]:
+    raw = value or [
+        part.strip()
+        for part in os.getenv(
+            "TRADINGAGENTS_PATCHED_ANALYSTS",
+            os.getenv("TRADINGAGENTS_NATIVE_ANALYSTS", "market,news,social,fundamentals"),
+        ).split(",")
+        if part.strip()
+    ]
+    allowed = {"market", "social", "news", "fundamentals"}
+    analysts = [item for item in raw if item in allowed]
+    return analysts or ["market", "news", "social", "fundamentals"]
 
 
 def _native_llm_provider() -> str:
@@ -486,6 +605,38 @@ def _native_reports_from_state(state: Any, decision: str, confidence: float) -> 
                     label,
                     "来源：原版 TradingAgentsGraph",
                     "工具链：yfinance / Google News RSS",
+                ],
+            }
+        )
+    return reports
+
+
+def _patched_reports_from_state(state: Any, decision: str, confidence: float) -> List[Dict[str, Any]]:
+    fields = [
+        ("tradingagents_quantagent_market", "QuantAgent 市场结构分析", getattr(state, "market_report", "")),
+        ("tradingagents_quantagent_sentiment", "QuantAgent 新闻情绪分析", getattr(state, "sentiment_report", "")),
+        ("tradingagents_quantagent_news", "QuantAgent 新闻/宏观分析", getattr(state, "news_report", "")),
+        ("tradingagents_quantagent_context", "QuantAgent 加密上下文分析", getattr(state, "fundamentals_report", "")),
+        ("tradingagents_quantagent_situation", "QuantAgent 情景摘要", getattr(state, "situation_summary", "")),
+        ("tradingagents_quantagent_trader", "QuantAgent 交易员计划", getattr(state, "trader_investment_plan", "")),
+        ("tradingagents_quantagent_final_judge", "QuantAgent 最终裁决", getattr(state, "final_trade_decision", "")),
+    ]
+    reports: List[Dict[str, Any]] = []
+    for role, label, content in fields:
+        text = _trim_text(str(content or "").strip(), 900)
+        if not text:
+            continue
+        reports.append(
+            {
+                "role": role,
+                "opinion": decision.lower(),
+                "confidence": round(confidence, 3),
+                "risk_flag": role == "tradingagents_quantagent_final_judge" and decision == "WAIT",
+                "reasoning": text,
+                "key_points": [
+                    label,
+                    "来源：QuantAgent patched TradingAgentsGraph",
+                    "工具链：AnalysisContext / OpenBB / CCXT / ClickHouse / L5 因子信号",
                 ],
             }
         )
@@ -714,3 +865,175 @@ def _risk_flag(factors: Dict[str, Any], news_bias: float, macro_bias: float) -> 
     close = _safe_float(factors.get("close") or factors.get("last_close"))
     atr_ratio = atr / close if close > 0 else 0.0
     return atr_ratio > 0.08 or news_bias < -0.4 or macro_bias < -0.6
+
+
+def _native_reports_from_state(state: Any, decision: str, confidence: float) -> List[Dict[str, Any]]:
+    """Stable report mapping for the isolated upstream TradingAgentsGraph path."""
+    fields = [
+        ("tradingagents_native_market", "原版市场分析", getattr(state, "market_report", "")),
+        ("tradingagents_native_sentiment", "原版新闻情绪分析", getattr(state, "sentiment_report", "")),
+        ("tradingagents_native_news", "原版新闻分析", getattr(state, "news_report", "")),
+        ("tradingagents_native_fundamentals", "原版基本面分析", getattr(state, "fundamentals_report", "")),
+        ("tradingagents_native_situation", "原版情景摘要", getattr(state, "situation_summary", "")),
+        ("tradingagents_native_trader", "原版交易员计划", getattr(state, "trader_investment_plan", "")),
+        ("tradingagents_native_final_judge", "原版最终裁决", getattr(state, "final_trade_decision", "")),
+    ]
+    return _reports_from_fields(
+        fields=fields,
+        decision=decision,
+        confidence=confidence,
+        final_role="tradingagents_native_final_judge",
+        source_label="来源：原版 TradingAgentsGraph",
+        toolchain_label="工具链：原版 yfinance / Google News RSS",
+    )
+
+
+def _patched_reports_from_state(state: Any, decision: str, confidence: float) -> List[Dict[str, Any]]:
+    """Stable report mapping for the QuantAgent-patched TradingAgentsGraph path."""
+    fields = [
+        ("tradingagents_quantagent_market", "QuantAgent 市场结构分析", getattr(state, "market_report", "")),
+        ("tradingagents_quantagent_sentiment", "QuantAgent 新闻情绪分析", getattr(state, "sentiment_report", "")),
+        ("tradingagents_quantagent_news", "QuantAgent 新闻与宏观分析", getattr(state, "news_report", "")),
+        ("tradingagents_quantagent_context", "QuantAgent 加密资产上下文", getattr(state, "fundamentals_report", "")),
+        ("tradingagents_quantagent_situation", "QuantAgent 情景摘要", getattr(state, "situation_summary", "")),
+        ("tradingagents_quantagent_trader", "QuantAgent 交易员计划", getattr(state, "trader_investment_plan", "")),
+        ("tradingagents_quantagent_final_judge", "QuantAgent 最终裁决", getattr(state, "final_trade_decision", "")),
+    ]
+    return _reports_from_fields(
+        fields=fields,
+        decision=decision,
+        confidence=confidence,
+        final_role="tradingagents_quantagent_final_judge",
+        source_label="来源：QuantAgent 源码适配版 TradingAgentsGraph",
+        toolchain_label="工具链：AnalysisContext / OpenBB / CCXT / ClickHouse / L5 因子信号",
+    )
+
+
+def _reports_from_fields(
+    fields: List[tuple[str, str, Any]],
+    decision: str,
+    confidence: float,
+    final_role: str,
+    source_label: str,
+    toolchain_label: str,
+) -> List[Dict[str, Any]]:
+    reports: List[Dict[str, Any]] = []
+    for role, label, content in fields:
+        text = _trim_text(str(content or "").strip(), 900)
+        if not text:
+            continue
+        reports.append(
+            {
+                "role": role,
+                "label": label,
+                "opinion": decision.lower(),
+                "confidence": round(confidence, 3),
+                "risk_flag": role == final_role and decision == "WAIT",
+                "reasoning": text,
+                "key_points": [label, source_label, toolchain_label],
+                "data_source_chain": toolchain_label.replace("工具链：", ""),
+            }
+        )
+    return reports
+
+
+def _patched_internal_chain_from_state(state: Any, decision: str, confidence: float) -> List[Dict[str, Any]]:
+    """Return the full QuantAgent TradingAgentsGraph chain for advanced UI views."""
+    invest = getattr(state, "investment_debate_state", None)
+    risk = getattr(state, "risk_debate_state", None)
+    entries = [
+        (
+            "core_report",
+            "tradingagents_quantagent_market",
+            "市场结构分析",
+            getattr(state, "market_report", ""),
+        ),
+        (
+            "core_report",
+            "tradingagents_quantagent_sentiment",
+            "新闻情绪分析",
+            getattr(state, "sentiment_report", ""),
+        ),
+        (
+            "core_report",
+            "tradingagents_quantagent_news",
+            "新闻与宏观分析",
+            getattr(state, "news_report", ""),
+        ),
+        (
+            "core_report",
+            "tradingagents_quantagent_context",
+            "加密资产上下文",
+            getattr(state, "fundamentals_report", ""),
+        ),
+        (
+            "synthesis",
+            "tradingagents_quantagent_situation",
+            "情景摘要",
+            getattr(state, "situation_summary", ""),
+        ),
+        (
+            "investment_debate",
+            "tradingagents_quantagent_bull_researcher",
+            "多头研究员",
+            getattr(invest, "bull_history", ""),
+        ),
+        (
+            "investment_debate",
+            "tradingagents_quantagent_bear_researcher",
+            "空头研究员",
+            getattr(invest, "bear_history", ""),
+        ),
+        (
+            "investment_debate",
+            "tradingagents_quantagent_research_manager",
+            "研究经理",
+            getattr(invest, "judge_decision", "") or getattr(state, "investment_plan", ""),
+        ),
+        (
+            "execution_plan",
+            "tradingagents_quantagent_trader",
+            "交易员计划",
+            getattr(state, "trader_investment_plan", ""),
+        ),
+        (
+            "risk_debate",
+            "tradingagents_quantagent_aggressive_risk",
+            "进攻型风险分析员",
+            getattr(risk, "aggressive_history", ""),
+        ),
+        (
+            "risk_debate",
+            "tradingagents_quantagent_conservative_risk",
+            "保守型风险分析员",
+            getattr(risk, "conservative_history", ""),
+        ),
+        (
+            "risk_debate",
+            "tradingagents_quantagent_neutral_risk",
+            "中性风险分析员",
+            getattr(risk, "neutral_history", ""),
+        ),
+        (
+            "final_judge",
+            "tradingagents_quantagent_final_judge",
+            "最终风险裁决",
+            getattr(risk, "judge_decision", "") or getattr(state, "final_trade_decision", ""),
+        ),
+    ]
+    chain: List[Dict[str, Any]] = []
+    for index, (phase, role, label, content) in enumerate(entries, start=1):
+        text = _trim_text(str(content or "").strip(), 1200)
+        chain.append(
+            {
+                "index": index,
+                "phase": phase,
+                "role": role,
+                "label": label,
+                "opinion": decision.lower(),
+                "confidence": round(confidence, 3),
+                "available": bool(text),
+                "reasoning": text or "本轮没有输出独立文本，可能已折叠进后续经理/裁决节点。",
+            }
+        )
+    return chain

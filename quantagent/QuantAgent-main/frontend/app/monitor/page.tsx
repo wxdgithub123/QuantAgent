@@ -227,7 +227,7 @@ export default function MonitorPage() {
                 把“页面在哪里、接口是什么、数据从哪来”放到一个地方
               </h2>
               <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">
-                这个页面不是交易建议，也不是验收报告。它是日常使用入口：看数据源是否可用、因子有没有生成、回测和审计是否有记录、TradingAgents 与基础设施是否在线。
+                这个页面不是交易建议，也不是项目总结报告。它是日常使用入口：看数据源是否可用、因子有没有生成、回测和审计是否有记录、TradingAgents 与基础设施是否在线。
               </p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">

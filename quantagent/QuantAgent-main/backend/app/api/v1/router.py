@@ -4,7 +4,7 @@ API V1 Router
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import market, trading, auth, strategy, analytics, risk, replay, profiles, composition, skill, dynamic_selection, walk_forward, hummingbot, paper_bot_equity, testnet_bot, system_health, signals, coordination, audit
+from app.api.v1.endpoints import market, trading, auth, strategy, analytics, risk, replay, profiles, composition, skill, dynamic_selection, walk_forward, hummingbot, paper_bot_equity, testnet_bot, system_health, signals, coordination, audit, execution
 
 api_router = APIRouter()
 
@@ -25,6 +25,7 @@ api_router.include_router(system_health.router, prefix="/system", tags=["System 
 api_router.include_router(signals.router, prefix="/signals", tags=["Factors & Signals"])
 api_router.include_router(coordination.router, prefix="/coordination", tags=["Coordination"])
 api_router.include_router(audit.router, prefix="/audit", tags=["Backtest Audit"])
+api_router.include_router(execution.router, prefix="/execution", tags=["Execution"])
 # Paper Bot Equity endpoints — 挂载在 hummingbot 路径下
 api_router.include_router(paper_bot_equity.router, prefix="/hummingbot", tags=["Hummingbot"])
 # Testnet Perpetual Bot endpoints — 挂载在 hummingbot/testnet-bots 路径下

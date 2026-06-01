@@ -277,7 +277,7 @@ function requirementLabel(status: string) {
   return status === "ok" ? "可用" : "检查";
 }
 
-function shortEvidence(value: unknown) {
+function shortEvidence(value: unknown): string {
   if (value === null || value === undefined) return "暂无";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
   if (Array.isArray(value)) return value.join("、") || "暂无";
@@ -493,7 +493,7 @@ export default function DataSourcesPage() {
             </Link>
             <h1 className="text-xl font-bold text-foreground">数据源工作台</h1>
             <p className="text-xs text-muted-foreground">
-              按 PRD 数据入口拆清楚：加密行情、股票行情、新闻快讯、宏观数据分别在哪里看、由谁提供、是否可用。
+              按数据入口拆清楚：加密行情、股票行情、新闻快讯、宏观数据分别在哪里看、由谁提供、当前是否可用。
             </p>
           </div>
           <Button size="sm" variant="outline" className="border-border" onClick={refresh} disabled={loading}>
@@ -508,13 +508,13 @@ export default function DataSourcesPage() {
           <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
               <div className="mb-3 flex flex-wrap items-center gap-2">
-                <Badge className="border border-cyan-500/20 bg-cyan-500/15 text-cyan-200">PRD 数据入口</Badge>
+                <Badge className="border border-cyan-500/20 bg-cyan-500/15 text-cyan-200">数据入口</Badge>
                 <Badge variant="outline" className="border-emerald-500/25 bg-emerald-500/10 text-emerald-300">OpenBB 主入口</Badge>
                 <Badge variant="outline" className="border-border bg-background/40 text-muted-foreground">CCXT 交易所补充</Badge>
               </div>
               <h2 className="text-2xl font-bold tracking-tight text-foreground">数据应该在哪里看？</h2>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-                这个页面负责验收“接没接上”；真正看行情和新闻时，优先去仪表盘对应分区。下面四张卡把入口、来源和状态放在一起，减少来回猜。
+                这个页面负责管理和检查数据源；真正看行情和新闻时，优先去仪表盘对应分区。下面四张卡把入口、来源和状态放在一起，减少来回猜。
               </p>
             </div>
             <div className="rounded-2xl border border-border/70 bg-background/35 p-3 text-xs text-muted-foreground">
@@ -526,10 +526,10 @@ export default function DataSourcesPage() {
 
         <Card className="border-cyan-500/20 bg-gradient-to-r from-cyan-500/10 via-card to-emerald-500/10">
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm text-foreground">10.1 数据接入状态</CardTitle>
+            <CardTitle className="text-sm text-foreground">数据接入状态</CardTitle>
             <p className="text-xs leading-5 text-muted-foreground">
-              这里对应 PRD 10.1：crypto 行情、股票行情、新闻、宏观数据、OpenBB provider 切换和备用数据源降级。
-              绿色表示当前接口或缓存里有真实返回；降级链只用于补救，不会把模拟数据写成真实行情。
+              这里集中查看 crypto 行情、股票行情、新闻、宏观数据、OpenBB provider 切换和备用数据源降级。
+              绿色表示当前接口或缓存里有真实返回；降级链只用于补救，不会把演示或空数据写成真实行情。
             </p>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -788,7 +788,7 @@ export default function DataSourcesPage() {
           <CardHeader>
             <CardTitle className="text-sm text-foreground">数据链路测试（手动）</CardTitle>
             <p className="text-xs text-muted-foreground">
-              这些按钮只用于验收和排障：测试补齐样例 K 线、测试归档文件，不会下单，也不会启动自动交易策略。
+              这些按钮只用于连通性检查和排障：测试同步样例 K 线、测试归档文件，不会下单，也不会启动自动交易策略。
             </p>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -805,7 +805,7 @@ export default function DataSourcesPage() {
             {action.message && <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">{action.message}</div>}
             {action.error && <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-300">{action.error}</div>}
             <p className="text-[11px] text-muted-foreground">
-              当前只针对 BTCUSDT/1小时，适合冒烟验证。正式数据更新应由后端数据管道或定时任务自动完成。
+              当前只针对 BTCUSDT/1小时，适合快速确认链路。正式数据更新应由后端数据管道或定时任务自动完成。
             </p>
           </CardContent>
         </Card>

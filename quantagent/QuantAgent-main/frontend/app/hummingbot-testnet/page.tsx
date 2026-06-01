@@ -731,12 +731,12 @@ export default function HummingbotTestnetPage() {
                 </Card>
               )}
 
-              {/* 验收说明 */}
+              {/* 启动前检查 */}
               {!startResult && !preview && (
                 <Card className="bg-card/80 border-border">
                   <CardContent className="p-4">
                     <div className="text-sm text-muted-foreground space-y-2">
-                      <p className="text-foreground/80 font-medium">验收标准</p>
+                      <p className="text-foreground/80 font-medium">启动前检查</p>
                       <div className="space-y-1 text-xs">
                         <div className="flex items-start gap-2">
                           <div className="w-4 h-4 rounded border border-slate-600 shrink-0 mt-0.5" />

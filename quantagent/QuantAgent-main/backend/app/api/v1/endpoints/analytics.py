@@ -20,6 +20,7 @@ from app.services.market_data_gateway import market_data_gateway
 from app.services.database import get_db, get_db_session, redis_get, redis_set
 from app.models.db_models import AuditLog, BacktestResult, EquitySnapshot, PaperTrade, ReplaySession
 from app.services.reproducibility import enrich_pit_metadata, stable_params_hash
+from app.services.performance_service import performance_service
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -340,6 +341,9 @@ async def get_equity_curve(
         )
         if session_id:
             query = query.where(EquitySnapshot.session_id == session_id)
+        else:
+            query = query.where(EquitySnapshot.session_id.is_(None))
+            query = query.where(EquitySnapshot.data_source == 'PAPER')
         if not include_mock:
             query = query.where(EquitySnapshot.data_source != 'MOCK')
         query = query.order_by(EquitySnapshot.timestamp.asc())
@@ -358,6 +362,37 @@ async def get_equity_curve(
             "daily_return": float(s.daily_return) if s.daily_return else 0,
             "drawdown": float(s.drawdown) if s.drawdown else 0,
         })
+
+    if session_id is None and curve:
+        live_equity = await performance_service._get_live_paper_equity()
+        if live_equity:
+            snapshot_final = curve[-1]["total_equity"] if curve else None
+            mismatch_pct = (
+                abs(snapshot_final - live_equity["total_equity"]) / live_equity["total_equity"] * 100
+                if snapshot_final and live_equity["total_equity"] > 0
+                else 0
+            )
+            if mismatch_pct > 5:
+                # Keep only plausible paper snapshots near the current account equity.
+                # Old test snapshots can contain inflated position_value and should not
+                # drive the user-facing paper-trading chart.
+                cleaned_curve = [
+                    point for point in curve
+                    if abs(point["total_equity"] - live_equity["total_equity"]) / live_equity["total_equity"] * 100 <= 5
+                ]
+                curve = cleaned_curve or curve[:1]
+                now_point = {
+                    "timestamp": now.isoformat(),
+                    "total_equity": live_equity["total_equity"],
+                    "cash_balance": live_equity["cash_balance"],
+                    "position_value": live_equity["position_value"],
+                    "daily_pnl": 0,
+                    "daily_return": 0,
+                    "drawdown": 0,
+                    "equity_source": "live_paper_account",
+                    "cleaned_snapshot_mismatch_pct": round(mismatch_pct, 2),
+                }
+                curve.append(now_point)
 
     # Apply interval downsampling if needed
     if interval == "4h" and len(curve) > 0:

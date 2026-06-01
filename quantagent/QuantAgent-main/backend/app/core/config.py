@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "openai"  # openai, ollama, anthropic
     USE_TRADINGAGENTS: bool = True
     TRADINGAGENTS_SERVICE_URL: str = "http://tradingagents-service:8010"
-    TRADINGAGENTS_TIMEOUT_SECONDS: float = 120.0
+    TRADINGAGENTS_TIMEOUT_SECONDS: float = 300.0
     
     # Embedding Settings
     EMBEDDING_PROVIDER: str = "openai" # openai, ollama
