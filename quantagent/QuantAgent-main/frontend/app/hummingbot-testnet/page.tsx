@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { AppTopNav } from "@/components/navigation/AppTopNav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -280,26 +281,12 @@ export default function HummingbotTestnetPage() {
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground p-6">
-      <div className="max-w-6xl mx-auto space-y-6">
-
-        {/* ── Header ─────────────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Link href="/hummingbot">
-              <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
-                <ArrowLeft className="w-4 h-4" />
-              </Button>
-            </Link>
-            <div>
-              <h1 className="text-2xl font-bold text-foreground">
-                Hummingbot — Testnet Perpetual Bot
-              </h1>
-              <p className="text-sm text-muted-foreground mt-1">
-                永续合约测试网 Bot · Binance Futures Testnet · 不动真钱
-              </p>
-            </div>
-          </div>
+    <div className="min-h-screen bg-background text-foreground">
+      <AppTopNav
+        activeSection="hummingbot"
+        title="测试网机器人"
+        subtitle="Testnet Perpetual Bot 管理"
+        rightSlot={
           <div className="flex items-center gap-3">
             <div className={`flex items-center gap-2 ${statusColor} text-sm`}>
               <StatusIcon className="w-4 h-4" />
@@ -312,7 +299,9 @@ export default function HummingbotTestnetPage() {
               <RefreshCw className="w-3 h-3 mr-1" /> 刷新
             </Button>
           </div>
-        </div>
+        }
+      />
+      <div className="max-w-6xl mx-auto space-y-6 p-6">
 
         {/* ── 风险提示 Banner ───────────────────────────────────────────── */}
         <Card className="border-orange-600 bg-orange-950/40">
@@ -320,9 +309,12 @@ export default function HummingbotTestnetPage() {
             <div className="flex gap-3">
               <AlertTriangle className="w-5 h-5 text-orange-400 shrink-0 mt-0.5" />
               <div className="space-y-1">
-                <p className="text-orange-300 text-sm font-semibold">测试网风险提示</p>
+                <p className="text-orange-300 text-sm font-semibold">PRD 演示风险提示</p>
                 <div className="text-orange-200/70 text-xs space-y-0.5">
-                  <p>• 当前为测试网永续合约 Bot，走 Binance Futures Testnet，不动真钱</p>
+                  <p>• 本阶段主流程只允许本地模拟交易，不会产生真实交易所订单。</p>
+                  <p>• 当前页面是隔离的 Testnet 实验入口，不参与“决策 → 风控 → 模拟盘 → 审计”的默认执行闭环。</p>
+                  <p>• 如需演示执行闭环，请使用「模拟盘」页面；这里不应作为主流程验收入口。</p>
+                  <p>• 当前为测试网永续合约 Bot，走 Binance Futures Testnet，不动真钱。</p>
                   <p>• <strong>必须填写 Binance Futures Testnet API Key</strong>，禁止填写主网 API Key</p>
                   <p>• API Key 格式示例：<code className="bg-orange-950/60 px-1 rounded">testnet_binance_api_key_here</code></p>
                   <p>• 请在 Hummingbot 中导入 Testnet API Key，凭证名称需匹配表单中的 credentials_profile</p>

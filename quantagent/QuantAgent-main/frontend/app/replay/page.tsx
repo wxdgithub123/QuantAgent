@@ -22,6 +22,7 @@ import { format } from "date-fns";
 import { useSearchParams, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { ReplayProvider, useReplayStore } from "@/lib/replay-store";
+import { AppTopNav } from "@/components/navigation/AppTopNav";
 import { EquityCurveChart, TradeMarker } from "@/components/charts/EquityCurveChart";
 import KlineChart from "@/components/charts/KlineChart";
 import TradeList from "@/components/charts/TradeList";
@@ -71,6 +72,57 @@ interface EstimateTimeResponse {estimated_seconds: number;bar_count: number;note
 
 interface ReplayTradeStats {replay_session_id: string;total_trades: number;winning_trades: number;losing_trades: number;win_rate: number;total_pnl: number;avg_win: number;avg_loss: number;max_profit: number;max_loss: number;total_fees: number;final_equity: number;
   returns_pct: number;
+}
+
+interface ReplayEvent {
+  id: string;
+  eventType: string;
+  eventTime?: string | null;
+  asOfTime?: string | null;
+  symbol?: string | null;
+  summary?: string | null;
+  relatedDecisionId?: number | string | null;
+  relatedOrderIntentId?: string | null;
+  relatedOrderId?: string | null;
+  relatedAuditId?: number | string | null;
+  payload?: Record<string, any>;
+  sourceEvents?: Array<Record<string, any>>;
+  rawPayloads?: Array<Record<string, any>>;
+  mergedFromCount?: number;
+  links?: Record<string, string | null>;
+}
+
+interface ReplayEventStats {
+  signalTriggeredCount?: number;
+  agentDecisionCount?: number;
+  skippedAgentCallCount?: number;
+  riskPassedCount?: number;
+  riskBlockedCount?: number;
+  paperOrderFilledCount?: number;
+  auditRecordCount?: number;
+  executionMode?: "rule_only" | "agent_audited" | string | null;
+  byEventType?: Record<string, number>;
+}
+
+interface ReplayCurrentState {
+  currentPrice?: number;
+  currentBar?: Record<string, any> | null;
+  currentFactors?: Record<string, any>[];
+  currentSignals?: Record<string, any>[];
+  accountEquity?: number;
+  cash?: number;
+  currentPosition?: Record<string, any>;
+  unrealizedPnl?: number;
+  realizedPnl?: number;
+}
+
+interface ReplayEventsResponse {
+  currentAsOfTime?: string | null;
+  progress?: number;
+  currentState?: ReplayCurrentState;
+  events?: ReplayEvent[];
+  eventStats?: ReplayEventStats;
+  total?: number;
 }
 
 // Dynamic Selection History Record (shared between EliminationHistory and WeightEvolutionChart)
@@ -169,6 +221,50 @@ function formatElapsedTime(seconds: number): string {
   return `${hours}小时${mins > 0 ? `${mins}分` : ""}`;
 }
 
+function friendlyReplayError(error: unknown, fallback = "数据暂不可用，已展示缓存数据 / 暂无数据。") {
+  const raw = error instanceof Error ? error.message : String(error || "");
+  if (!raw || /failed to fetch|ECONNREFUSED|HTTP 500|Internal Server Error|abort|timeout/i.test(raw)) return fallback;
+  return raw.length > 120 ? fallback : raw;
+}
+
+function formatReplayDate(value?: string | null) {
+  if (!value) return "暂无数据";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN");
+}
+
+function formatReplayMoney(value?: number | null) {
+  const n = Number(value ?? 0);
+  return `$${n.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}`;
+}
+
+function replayEventLabel(type: string) {
+  const map: Record<string, string> = {
+    BAR_UPDATED: "K线更新",
+    FACTOR_UPDATED: "因子更新",
+    SIGNAL_TRIGGERED: "信号触发",
+    AGENT_DECISION: "Agent 决策",
+    ORDER_INTENT_CREATED: "交易意图创建",
+    RISK_CHECK_PASSED: "风控通过",
+    RISK_BLOCKED: "风控拦截",
+    PAPER_ORDER_FILLED: "模拟成交",
+    PAPER_ORDER_REJECTED: "模拟订单拒绝",
+    POSITION_UPDATED: "持仓更新",
+    PNL_UPDATED: "盈亏更新",
+    AUDIT_RECORDED: "审计记录",
+  };
+  return map[type] || type || "未知事件";
+}
+
+function replayEventBadge(type: string) {
+  if (type === "RISK_BLOCKED" || type === "PAPER_ORDER_REJECTED") return "border-rose-500/30 bg-rose-500/10 text-rose-300";
+  if (type === "PAPER_ORDER_FILLED" || type === "RISK_CHECK_PASSED") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-300";
+  if (type === "AGENT_DECISION" || type === "ORDER_INTENT_CREATED") return "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-200";
+  if (type === "SIGNAL_TRIGGERED" || type === "FACTOR_UPDATED") return "border-cyan-500/30 bg-cyan-500/10 text-cyan-200";
+  return "border-slate-500/30 bg-slate-500/10 text-slate-300";
+}
+
 // 基于日期范围估算数据量（基于实际有效数据范围）
 function estimateDataPoints(days: number, interval: string): number {
   const intervalSeconds: Record<string, number> = {
@@ -243,7 +339,7 @@ const INTERVAL_MINUTES: Record<string, number> = {
 };
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
-export default function ReplayPage() {
+function ReplayPageContent() {
   return (
     <ReplayProvider>
       <ReplayContent />
@@ -251,10 +347,19 @@ export default function ReplayPage() {
   );
 }
 
+export default function ReplayPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><p className="text-muted-foreground">Loading...</p></div>}>
+      <ReplayPageContent />
+    </Suspense>
+  );
+}
+
 function ReplayContentWithHydrationFix() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const urlSessionId = searchParams.get("session_id");
+  const urlAsOfTime = searchParams.get("as_of_time") || searchParams.get("event_time");
   
   // ─── Global Store ────────────────────────────────────────────────────────────
   const { state: storeState,setSession: setStoreSession,setStatus: setStoreStatus,clearSession: clearStoreSession,startPolling: startStorePolling,stopPolling: stopStorePolling,restoreSession: restoreStoreSession
@@ -318,6 +423,19 @@ function ReplayContentWithHydrationFix() {
   // 历史列表快速回测 loading
   const [historyQuickBacktestId, setHistoryQuickBacktestId] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!historyLoading && !loadingStatsId && !estimateLoading && !quickBacktestLoading && !historyQuickBacktestId) return;
+    const timer = setTimeout(() => {
+      if (historyLoading) setHistoryLoading(false);
+      if (loadingStatsId) setLoadingStatsId(null);
+      if (estimateLoading) setEstimateLoading(false);
+      if (quickBacktestLoading) setQuickBacktestLoading(false);
+      if (historyQuickBacktestId) setHistoryQuickBacktestId(null);
+      setError((current) => current || "数据暂不可用，已展示缓存数据 / 暂无数据。");
+    }, 45000);
+    return () => clearTimeout(timer);
+  }, [estimateLoading, historyLoading, historyQuickBacktestId, loadingStatsId, quickBacktestLoading]);
+
   // Equity Curve State
   const [equityCurveData, setEquityCurveData] = useState<{ t: string; v: number }[]>([]);
   const [baselineCurveData, setBaselineCurveData] = useState<{ t: string; v: number }[]>([]);
@@ -328,6 +446,15 @@ function ReplayContentWithHydrationFix() {
   const [indicatorData, setIndicatorData] = useState<Record<string, any[]>>({});
   const [tradeList, setTradeList] = useState<any[]>([]);
   const [positionInfo, setPositionInfo] = useState<any>(null);
+  const [replayEvents, setReplayEvents] = useState<ReplayEvent[]>([]);
+  const [replayCurrentState, setReplayCurrentState] = useState<ReplayCurrentState | null>(null);
+  const [replayEventStats, setReplayEventStats] = useState<ReplayEventStats | null>(null);
+  const [replayEventsLoading, setReplayEventsLoading] = useState(false);
+  const [replayEventsError, setReplayEventsError] = useState("");
+  const [selectedReplayEvent, setSelectedReplayEvent] = useState<ReplayEvent | null>(null);
+  const [playerAsOfTime, setPlayerAsOfTime] = useState<string | null>(urlAsOfTime);
+  const [playerSpeed, setPlayerSpeed] = useState(1);
+  const [playerPlaying, setPlayerPlaying] = useState(false);
 
   // Preset Panel
   const [showPresets, setShowPresets] = useState(false);
@@ -913,7 +1040,7 @@ function ReplayContentWithHydrationFix() {
         autoSaveParams(selectedType, paramValues);
       }
     } catch (e: any) {
-      setError(e.message || "网络错误");
+      setError("数据暂不可用，已展示缓存数据 / 暂无数据。");
     }
   };
 
@@ -937,7 +1064,7 @@ function ReplayContentWithHydrationFix() {
         setToast({ message: safeMsg(data.detail, "暂停失败"), type: "error" });
       }
     } catch (e) {
-      setToast({ message: "网络错误，暂停失败", type: "error" });
+      setToast({ message: "数据暂不可用，已展示缓存数据 / 暂无数据。", type: "error" });
     }
   };
 
@@ -963,7 +1090,7 @@ function ReplayContentWithHydrationFix() {
         setToast({ message: safeMsg(data.detail, "继续失败"), type: "error" });
       }
     } catch (e) {
-      setToast({ message: "网络错误，继续失败", type: "error" });
+      setToast({ message: "数据暂不可用，已展示缓存数据 / 暂无数据。", type: "error" });
     }
   };
 
@@ -1000,7 +1127,7 @@ function ReplayContentWithHydrationFix() {
         setToast({ message: safeMsg(data.detail, "跳转失败：该时间点可能无行情数据"), type: "error" });
       }
     } catch (e) {
-      setToast({ message: "网络错误，跳转失败", type: "error" });
+      setToast({ message: "数据暂不可用，已展示缓存数据 / 暂无数据。", type: "error" });
     }
   };
 
@@ -1043,7 +1170,7 @@ function ReplayContentWithHydrationFix() {
       }
     } catch (e) {
       console.error("Failed to fetch history:", e);
-      setToast({ message: "网络错误，无法加载历史记录", type: "error" });
+      setToast({ message: "数据暂不可用，已展示缓存数据 / 暂无数据。", type: "error" });
     } finally {
       setHistoryLoading(false);
     }
@@ -1198,6 +1325,95 @@ function ReplayContentWithHydrationFix() {
     }
   }, [status?.status, session?.replay_session_id, fetchReplayData]);
 
+  useEffect(() => {
+    if (urlAsOfTime && urlAsOfTime !== playerAsOfTime) {
+      setPlayerAsOfTime(urlAsOfTime);
+    }
+  }, [playerAsOfTime, urlAsOfTime]);
+
+  const fetchReplayEvents = useCallback(async (sessionId: string, asOf?: string | null) => {
+    if (!sessionId) return;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 18000);
+    setReplayEventsLoading(true);
+    setReplayEventsError("");
+    try {
+      const params = new URLSearchParams({ limit: "300" });
+      if (asOf) params.set("asOfTime", asOf);
+      const res = await fetch(`/api/v1/replay/${sessionId}/events?${params.toString()}`, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const data = (await res.json()) as ReplayEventsResponse & { detail?: string };
+      if (!res.ok) throw new Error(data.detail || "历史回放事件读取失败");
+      const events = Array.isArray(data.events) ? data.events : [];
+      setReplayEvents(events);
+      setReplayCurrentState(data.currentState || null);
+      setReplayEventStats(data.eventStats || null);
+      setPlayerAsOfTime(data.currentAsOfTime || asOf || null);
+      setSelectedReplayEvent((current) => {
+        if (!events.length) return null;
+        if (current) {
+          const matched = events.find((item) => item.id === current.id);
+          if (matched) return matched;
+        }
+        return events[events.length - 1];
+      });
+    } catch (err) {
+      setReplayEventsError(friendlyReplayError(err, "数据暂不可用，暂无回放事件。"));
+      setReplayEventStats(null);
+    } finally {
+      window.clearTimeout(timeout);
+      setReplayEventsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const sessionId = session?.replay_session_id || urlSessionId;
+    if (!sessionId) {
+      setReplayEvents([]);
+      setReplayCurrentState(null);
+      setReplayEventStats(null);
+      setSelectedReplayEvent(null);
+      return;
+    }
+    const asOf = playerAsOfTime || urlAsOfTime || status?.current_simulated_time || session?.current_timestamp || session?.end_time || null;
+    void fetchReplayEvents(sessionId, asOf);
+  }, [fetchReplayEvents, playerAsOfTime, session?.current_timestamp, session?.end_time, session?.replay_session_id, status?.current_simulated_time, urlAsOfTime, urlSessionId]);
+
+  const updateReplayAsOf = useCallback((event: ReplayEvent | null) => {
+    if (!event) return;
+    const nextAsOf = event.asOfTime || event.eventTime || null;
+    setSelectedReplayEvent(event);
+    if (nextAsOf) {
+      setPlayerAsOfTime(nextAsOf);
+      const params = new URLSearchParams(searchParams.toString());
+      if (session?.replay_session_id || urlSessionId) params.set("session_id", session?.replay_session_id || urlSessionId || "");
+      params.set("as_of_time", nextAsOf);
+      params.set("event_id", event.id);
+      router.replace(`/replay?${params.toString()}`, { scroll: false });
+    }
+  }, [router, searchParams, session?.replay_session_id, urlSessionId]);
+
+  const stepReplayEvent = useCallback((direction: -1 | 1) => {
+    if (!replayEvents.length) return;
+    const currentIndex = selectedReplayEvent
+      ? replayEvents.findIndex((item) => item.id === selectedReplayEvent.id)
+      : -1;
+    const fallbackIndex = direction > 0 ? 0 : replayEvents.length - 1;
+    const nextIndex = currentIndex >= 0
+      ? Math.max(0, Math.min(replayEvents.length - 1, currentIndex + direction))
+      : fallbackIndex;
+    updateReplayAsOf(replayEvents[nextIndex]);
+  }, [replayEvents, selectedReplayEvent, updateReplayAsOf]);
+
+  useEffect(() => {
+    if (!playerPlaying || replayEvents.length === 0) return;
+    const intervalMs = Math.max(250, 1600 / Math.max(1, playerSpeed));
+    const timer = window.setInterval(() => stepReplayEvent(1), intervalMs);
+    return () => window.clearInterval(timer);
+  }, [playerPlaying, playerSpeed, replayEvents.length, stepReplayEvent]);
+
   // Toggle history panel
   const toggleHistoryPanel = useCallback(() => {
     if (!showHistoryPanel) {
@@ -1310,7 +1526,7 @@ function ReplayContentWithHydrationFix() {
         setToast({ message: safeMsg(data.detail, "保存失败"), type: "error" });
       }
     } catch (e) {
-      setToast({ message: "网络错误", type: "error" });
+      setToast({ message: "数据暂不可用，已展示缓存数据 / 暂无数据。", type: "error" });
     }
   };
 
@@ -1336,7 +1552,7 @@ function ReplayContentWithHydrationFix() {
         setToast({ message: safeMsg(data.detail, "删除失败"), type: "error" });
       }
     } catch (e) {
-      setToast({ message: "网络错误", type: "error" });
+      setToast({ message: "数据暂不可用，已展示缓存数据 / 暂无数据。", type: "error" });
     }
   };
 
@@ -1373,7 +1589,7 @@ function ReplayContentWithHydrationFix() {
         router.push(`/analytics?tab=comparison&rb_session=${sessionId}&backtest_id=${data.backtest_id}`);
       }, 500);
     } catch (e: any) {
-      setToast({ message: String(e?.message || e || "网络错误，无法运行回测"), type: "error" });
+      setToast({ message: "数据暂不可用，已展示缓存数据 / 暂无数据。", type: "error" });
     } finally {
       if (targetSessionId) {
         setHistoryQuickBacktestId(null);
@@ -1386,48 +1602,7 @@ function ReplayContentWithHydrationFix() {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
-        <div className="container mx-auto px-4 py-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center">
-                <History className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <h1 className="text-lg font-bold text-foreground">QuantAgent OS</h1>
-                <p className="text-[10px] text-muted-foreground">历史回放模拟</p>
-              </div>
-            </div>
-            <nav className="hidden md:flex items-center gap-1">
-              <Link href="/dashboard" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-                <LayoutDashboard className="w-4 h-4" /> 仪表盘
-              </Link>
-              <Link href="/backtest" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-                <BarChart2 className="w-4 h-4" /> 回测
-              </Link>
-              <span className="px-3 py-1.5 text-sm text-indigo-400 bg-indigo-500/10 rounded-lg border border-indigo-500/20 font-medium flex items-center gap-1.5">
-                <History className="w-4 h-4" /> 历史回放
-              </span>
-              <Link href="/terminal" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-                <Terminal className="w-4 h-4" /> 终端
-              </Link>
-              <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
-                <Server className="w-4 h-4" /> Hummingbot
-              </Link>
-              <button onClick={toggleHistoryPanel}
-                className={`px-3 py-1.5 text-sm rounded-lg transition-all flex items-center gap-1.5 ${showHistoryPanel
-                    ? 'text-amber-400 bg-amber-500/10 border border-amber-500/20' 
-                    : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
-                }`}
-              >
-                <List className="w-4 h-4" /> 历史记录
-              </button>
-              <Link href="/signals" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Layers className="w-4 h-4" /> 因子/信号</Link>
-              <Link href="/decisions" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Brain className="w-4 h-4" /> 决策中心</Link>
-            </nav>
-          </div>
-        </div>
-      </header>
+      <AppTopNav activeSection="replay" title="历史回放" subtitle="K线回放、决策复盘与审计追踪" />
 
       <main className="container mx-auto px-4 py-6">
         {/* ── History Panel ── */}
@@ -2308,6 +2483,303 @@ function ReplayContentWithHydrationFix() {
                         </p>
                       </div>
                     )}
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-card border-indigo-500/20 shadow-lg">
+                  <CardHeader className="pb-3">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <div>
+                        <CardTitle className="text-foreground text-sm flex items-center gap-2">
+                          <History className="h-4 w-4 text-indigo-400" />
+                          播放器式历史回放
+                        </CardTitle>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          按 as_of_time 还原这一刻的 K 线、因子、信号、账户状态和审计事件；这里只做本地回放查看，不会产生真实订单。
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => stepReplayEvent(-1)}
+                          disabled={!replayEvents.length}
+                          className="h-8 border-white/10 text-xs"
+                        >
+                          <ChevronLeft className="mr-1 h-3.5 w-3.5" />
+                          上一步
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setPlayerPlaying((current) => !current)}
+                          disabled={!replayEvents.length}
+                          className="h-8 border-indigo-500/30 text-xs text-indigo-300 hover:bg-indigo-500/10"
+                        >
+                          {playerPlaying ? <Pause className="mr-1 h-3.5 w-3.5" /> : <Play className="mr-1 h-3.5 w-3.5" />}
+                          {playerPlaying ? "暂停事件流" : "播放事件流"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => stepReplayEvent(1)}
+                          disabled={!replayEvents.length}
+                          className="h-8 border-white/10 text-xs"
+                        >
+                          下一步
+                          <ChevronRight className="ml-1 h-3.5 w-3.5" />
+                        </Button>
+                        {[1, 5, 10, 60].map((item) => (
+                          <button
+                            key={item}
+                            onClick={() => setPlayerSpeed(item)}
+                            className={cn(
+                              "rounded-lg border px-2 py-1 text-[11px] transition",
+                              playerSpeed === item
+                                ? "border-indigo-400/40 bg-indigo-500/15 text-indigo-200"
+                                : "border-white/10 bg-secondary/40 text-muted-foreground hover:text-foreground"
+                            )}
+                          >
+                            {item}x
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className={cn(
+                      "rounded-2xl border p-4",
+                      replayEventStats?.executionMode === "agent_audited"
+                        ? "border-fuchsia-500/25 bg-fuchsia-500/10"
+                        : "border-slate-500/20 bg-secondary/30"
+                    )}>
+                      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                        <div>
+                          <p className="text-sm font-semibold text-foreground">
+                            {replayEventStats?.executionMode === "agent_audited" ? "Agent 审计回测回放" : "普通规则回测回放"}
+                          </p>
+                          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                            {replayEventStats?.executionMode === "agent_audited"
+                              ? "当前为 Agent 审计回测回放，每笔交易可追溯至 AgentDecision、OrderIntent、RiskGuard 和 AuditRecord。"
+                              : "当前为普通规则回测回放，交易由规则策略生成，不保证每笔交易都有完整 Agent 审计链。"}
+                          </p>
+                        </div>
+                        <Badge className={replayEventStats?.executionMode === "agent_audited" ? "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-200" : "border-slate-500/30 bg-slate-500/10 text-slate-200"}>
+                          {replayEventStats?.executionMode || "rule_only"}
+                        </Badge>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
+                      {[
+                        { label: "信号触发次数", value: replayEventStats?.signalTriggeredCount ?? 0 },
+                        { label: "Agent 调用次数", value: replayEventStats?.agentDecisionCount ?? 0 },
+                        { label: "跳过 Agent 次数", value: replayEventStats?.skippedAgentCallCount ?? 0 },
+                        { label: "风控通过次数", value: replayEventStats?.riskPassedCount ?? 0 },
+                        { label: "风控拦截次数", value: replayEventStats?.riskBlockedCount ?? 0 },
+                        { label: "模拟成交次数", value: replayEventStats?.paperOrderFilledCount ?? 0 },
+                        { label: "审计记录数", value: replayEventStats?.auditRecordCount ?? 0 },
+                      ].map((item) => (
+                        <div key={item.label} className="rounded-xl border border-white/10 bg-secondary/35 p-3">
+                          <p className="text-[10px] text-muted-foreground">{item.label}</p>
+                          <p className="mt-1 font-mono text-lg text-foreground">{item.value}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-4">
+                      <div className="rounded-xl border border-white/10 bg-secondary/35 p-3">
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">currentAsOfTime</p>
+                        <p className="mt-1 font-mono text-xs text-foreground">{formatReplayDate(playerAsOfTime || status?.current_simulated_time)}</p>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-secondary/35 p-3">
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">currentPrice</p>
+                        <p className="mt-1 font-mono text-lg text-foreground">{formatReplayMoney(replayCurrentState?.currentPrice)}</p>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-secondary/35 p-3">
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">accountEquity / cash</p>
+                        <p className="mt-1 font-mono text-xs text-foreground">
+                          {formatReplayMoney(replayCurrentState?.accountEquity)} / {formatReplayMoney(replayCurrentState?.cash)}
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-secondary/35 p-3">
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">PNL</p>
+                        <p className="mt-1 font-mono text-xs text-foreground">
+                          浮盈亏 {formatReplayMoney(replayCurrentState?.unrealizedPnl)} · 已实现 {formatReplayMoney(replayCurrentState?.realizedPnl)}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+                      <div className="space-y-3">
+                        <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                          <p className="text-sm font-semibold text-foreground">当前状态</p>
+                          <div className="mt-3 grid gap-3 text-xs text-muted-foreground sm:grid-cols-2">
+                            <div className="rounded-xl border border-white/10 bg-secondary/30 p-3">
+                              <p className="text-muted-foreground">currentBar</p>
+                              <p className="mt-1 font-mono text-foreground">O {replayCurrentState?.currentBar?.open ?? "暂无数据"}</p>
+                              <p className="font-mono text-foreground">H {replayCurrentState?.currentBar?.high ?? "暂无数据"}</p>
+                              <p className="font-mono text-foreground">L {replayCurrentState?.currentBar?.low ?? "暂无数据"}</p>
+                              <p className="font-mono text-foreground">C {replayCurrentState?.currentBar?.close ?? "暂无数据"}</p>
+                            </div>
+                            <div className="rounded-xl border border-white/10 bg-secondary/30 p-3">
+                              <p className="text-muted-foreground">currentPosition</p>
+                              <p className="mt-1 font-mono text-foreground">方向 {replayCurrentState?.currentPosition?.side || "暂无持仓"}</p>
+                              <p className="font-mono text-foreground">数量 {replayCurrentState?.currentPosition?.quantity ?? 0}</p>
+                              <p className="font-mono text-foreground">均价 {replayCurrentState?.currentPosition?.avgPrice ?? 0}</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
+                          <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                            <p className="text-sm font-semibold text-foreground">当前因子</p>
+                            <div className="mt-3 max-h-36 space-y-2 overflow-auto text-xs">
+                              {(replayCurrentState?.currentFactors || []).length ? replayCurrentState!.currentFactors!.map((item, index) => (
+                                <div key={`${item.factor_name || index}`} className="flex items-center justify-between gap-3 rounded-lg bg-secondary/30 px-3 py-2">
+                                  <span className="truncate text-muted-foreground">{item.factor_name || item.factorName || "factor"}</span>
+                                  <span className="font-mono text-foreground">{item.factor_value ?? item.value ?? "暂无数据"}</span>
+                                </div>
+                              )) : (
+                                <p className="rounded-lg bg-secondary/30 px-3 py-3 text-center text-muted-foreground">暂无因子快照</p>
+                              )}
+                            </div>
+                          </div>
+                          <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                            <p className="text-sm font-semibold text-foreground">当前信号</p>
+                            <div className="mt-3 max-h-36 space-y-2 overflow-auto text-xs">
+                              {(replayCurrentState?.currentSignals || []).length ? replayCurrentState!.currentSignals!.map((item, index) => (
+                                <div key={`${item.signal_type || index}`} className="rounded-lg bg-secondary/30 px-3 py-2">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span className="truncate text-muted-foreground">{item.signal_type || item.signalType || "signal"}</span>
+                                    <span className="font-mono text-foreground">{item.signal_value ?? item.value ?? "暂无数据"}</span>
+                                  </div>
+                                  <p className="mt-1 text-[11px] text-muted-foreground">confidence: {item.confidence ?? "暂无数据"}</p>
+                                </div>
+                              )) : (
+                                <p className="rounded-lg bg-secondary/30 px-3 py-3 text-center text-muted-foreground">暂无触发信号</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
+                        <div className="rounded-2xl border border-white/10 bg-black/20">
+                          <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+                            <p className="text-sm font-semibold text-foreground">事件流</p>
+                            <Badge className="border-indigo-500/30 bg-indigo-500/10 text-indigo-200">{replayEvents.length} 条</Badge>
+                          </div>
+                          {replayEventsLoading ? (
+                            <div className="py-10 text-center text-sm text-muted-foreground">
+                              <RefreshCw className="mr-2 inline h-4 w-4 animate-spin" />
+                              正在读取回放事件...
+                            </div>
+                          ) : replayEventsError ? (
+                            <div className="m-4 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">{replayEventsError}</div>
+                          ) : replayEvents.length ? (
+                            <div className="max-h-[520px] overflow-auto p-3">
+                              {replayEvents.map((event) => (
+                                <button
+                                  key={event.id}
+                                  onClick={() => updateReplayAsOf(event)}
+                                  className={cn(
+                                    "mb-2 block w-full rounded-xl border p-3 text-left transition last:mb-0",
+                                    selectedReplayEvent?.id === event.id
+                                      ? "border-indigo-400/40 bg-indigo-500/15"
+                                      : "border-white/10 bg-secondary/25 hover:bg-secondary/45"
+                                  )}
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <Badge className={replayEventBadge(event.eventType)}>{replayEventLabel(event.eventType)}</Badge>
+                                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{formatReplayDate(event.asOfTime || event.eventTime)}</span>
+                                  </div>
+                                  <p className="mt-2 text-xs leading-5 text-foreground/85">{event.summary || "暂无摘要"}</p>
+                                  {(event.mergedFromCount || 1) > 1 ? (
+                                    <p className="mt-2 text-[11px] text-indigo-200">
+                                      已合并 {event.mergedFromCount} 条底层记录
+                                    </p>
+                                  ) : null}
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="py-10 text-center text-sm text-muted-foreground">暂无回放事件。</div>
+                          )}
+                        </div>
+
+                        <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-foreground">事件详情</p>
+                              <p className="mt-1 text-xs text-muted-foreground">点击左侧事件查看关联 ID、摘要和 rawPayload。</p>
+                            </div>
+                          </div>
+                          {selectedReplayEvent ? (
+                            <div className="mt-4 space-y-3 text-xs text-muted-foreground">
+                              <div className="rounded-xl border border-white/10 bg-secondary/30 p-3 leading-6">
+                                <p>eventType：<span className="text-foreground">{replayEventLabel(selectedReplayEvent.eventType)}</span></p>
+                                <p>eventTime：<span className="font-mono text-foreground">{formatReplayDate(selectedReplayEvent.eventTime)}</span></p>
+                                <p>asOfTime：<span className="font-mono text-foreground">{formatReplayDate(selectedReplayEvent.asOfTime)}</span></p>
+                                <p>decisionId：<span className="font-mono text-foreground">{selectedReplayEvent.relatedDecisionId || "暂无关联记录"}</span></p>
+                                <p>orderIntentId：<span className="font-mono text-foreground">{selectedReplayEvent.relatedOrderIntentId || "暂无关联记录"}</span></p>
+                                <p>orderId：<span className="font-mono text-foreground">{selectedReplayEvent.relatedOrderId || "暂无关联记录"}</span></p>
+                                <p>auditId：<span className="font-mono text-foreground">{selectedReplayEvent.relatedAuditId || "暂无关联记录"}</span></p>
+                                <p>合并说明：<span className="text-foreground">该事件由 {selectedReplayEvent.mergedFromCount || 1} 条底层记录合并而来</span></p>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {selectedReplayEvent.relatedDecisionId ? (
+                                  <Link href={`/audit?decision_id=${selectedReplayEvent.relatedDecisionId}`}>
+                                    <Button size="sm" variant="outline" className="h-7 border-cyan-500/30 text-xs text-cyan-200">决策详情</Button>
+                                  </Link>
+                                ) : <span className="text-[11px] text-muted-foreground">暂无关联决策</span>}
+                                {selectedReplayEvent.relatedOrderIntentId ? (
+                                  <Link href={`/audit?order_intent_id=${selectedReplayEvent.relatedOrderIntentId}`}>
+                                    <Button size="sm" variant="outline" className="h-7 border-fuchsia-500/30 text-xs text-fuchsia-200">OrderIntent</Button>
+                                  </Link>
+                                ) : <span className="text-[11px] text-muted-foreground">暂无关联 OrderIntent</span>}
+                                {selectedReplayEvent.relatedOrderId ? (
+                                  <Link href={`/audit?order_id=${selectedReplayEvent.relatedOrderId}`}>
+                                    <Button size="sm" variant="outline" className="h-7 border-emerald-500/30 text-xs text-emerald-200">PaperOrder</Button>
+                                  </Link>
+                                ) : <span className="text-[11px] text-muted-foreground">暂无关联订单</span>}
+                                {selectedReplayEvent.relatedAuditId ? (
+                                  <Link href={`/audit?audit_id=${selectedReplayEvent.relatedAuditId}`}>
+                                    <Button size="sm" variant="outline" className="h-7 border-indigo-500/30 text-xs text-indigo-200">AuditRecord</Button>
+                                  </Link>
+                                ) : <span className="text-[11px] text-muted-foreground">暂无关联审计</span>}
+                              </div>
+                              <details className="rounded-xl border border-white/10 bg-secondary/30 p-3">
+                                <summary className="cursor-pointer text-sm font-semibold text-foreground">rawPayload</summary>
+                                <pre className="mt-3 max-h-64 overflow-auto rounded-lg bg-black/40 p-3 text-[11px] leading-5 text-muted-foreground">
+                                  {JSON.stringify(selectedReplayEvent.payload || {}, null, 2)}
+                                </pre>
+                              </details>
+                              {(selectedReplayEvent.rawPayloads || []).length ? (
+                                <details className="rounded-xl border border-white/10 bg-secondary/30 p-3">
+                                  <summary className="cursor-pointer text-sm font-semibold text-foreground">合并前 rawPayloads</summary>
+                                  <pre className="mt-3 max-h-64 overflow-auto rounded-lg bg-black/40 p-3 text-[11px] leading-5 text-muted-foreground">
+                                    {JSON.stringify(selectedReplayEvent.rawPayloads || [], null, 2)}
+                                  </pre>
+                                </details>
+                              ) : null}
+                              {(selectedReplayEvent.sourceEvents || []).length ? (
+                                <details className="rounded-xl border border-white/10 bg-secondary/30 p-3">
+                                  <summary className="cursor-pointer text-sm font-semibold text-foreground">底层 sourceEvents</summary>
+                                  <pre className="mt-3 max-h-64 overflow-auto rounded-lg bg-black/40 p-3 text-[11px] leading-5 text-muted-foreground">
+                                    {JSON.stringify(selectedReplayEvent.sourceEvents || [], null, 2)}
+                                  </pre>
+                                </details>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <div className="mt-4 rounded-xl border border-white/10 bg-secondary/30 p-6 text-center text-sm text-muted-foreground">
+                              暂无事件详情。
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </CardContent>
                 </Card>
 

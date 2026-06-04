@@ -107,6 +107,86 @@ def _format_metric(value: Any) -> str:
     return f"{number:.4f}"
 
 
+def _nested_first(payload: Any, *keys: str) -> Optional[Any]:
+    """Find a linkage value in mixed old/new JSON payloads."""
+    if isinstance(payload, dict):
+        for key in keys:
+            value = payload.get(key)
+            if value not in (None, ""):
+                return value
+        for value in payload.values():
+            found = _nested_first(value, *keys)
+            if found not in (None, ""):
+                return found
+    if isinstance(payload, list):
+        for item in payload:
+            found = _nested_first(item, *keys)
+            if found not in (None, ""):
+                return found
+    return None
+
+
+def _signal_extra(signal: Dict[str, Any]) -> Dict[str, Any]:
+    extra = _json_value(signal.get("extra_data"), {}) or {}
+    return extra if isinstance(extra, dict) else {}
+
+
+def _normalize_signal_strategy(signal: Dict[str, Any]) -> str:
+    raw = str(signal.get("source_strategy") or signal.get("strategy_id") or "").strip()
+    if ":" in raw:
+        prefix, value = raw.split(":", 1)
+        if prefix.lower() in {"backtest", "replay", "agent", "manual", "paper", "strategy"}:
+            raw = value
+    raw = re.sub(r"^strategy[:/_-]?", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"^backtest[-_]", "", raw, flags=re.IGNORECASE)
+    return raw.lower() or "unknown"
+
+
+def _signal_backtest_id(signal: Dict[str, Any]) -> Optional[int]:
+    extra = _signal_extra(signal)
+    value = _nested_first(extra, "backtestId", "backtest_id", "relatedBacktestId")
+    if value in (None, ""):
+        for candidate in (signal.get("strategy_id"), signal.get("source_strategy")):
+            match = re.search(r"backtest[-_:](\d+)", str(candidate or ""), flags=re.IGNORECASE)
+            if match:
+                value = match.group(1)
+                break
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _signal_related_ids(signal: Dict[str, Any]) -> Dict[str, Any]:
+    extra = _signal_extra(signal)
+    audit_ids = _nested_first(extra, "relatedAuditIds", "related_audit_ids", "auditIds", "audit_ids")
+    if audit_ids is None:
+        audit_ids = []
+    if not isinstance(audit_ids, list):
+        audit_ids = [audit_ids]
+    return {
+        "relatedBacktestId": _signal_backtest_id(signal),
+        "relatedDecisionId": _nested_first(extra, "relatedDecisionId", "related_decision_id", "decisionId", "decision_id"),
+        "relatedOrderIntentId": _nested_first(extra, "relatedOrderIntentId", "related_order_intent_id", "orderIntentId", "order_intent_id"),
+        "relatedAuditIds": [item for item in audit_ids if item not in (None, "")],
+        "replaySessionId": _nested_first(extra, "replaySessionId", "replay_session_id"),
+        "tradeId": _nested_first(extra, "tradeId", "trade_id"),
+    }
+
+
+def _signal_dedupe_key(signal: Dict[str, Any]) -> tuple:
+    extra = _signal_extra(signal)
+    source = signal.get("data_source") or signal.get("provider") or extra.get("source") or ""
+    return (
+        str(signal.get("symbol") or "").upper(),
+        _normalize_signal_strategy(signal),
+        str(signal.get("signal_type") or "").upper(),
+        str(signal.get("event_time") or signal.get("timestamp") or ""),
+        str(source).upper(),
+        _signal_backtest_id(signal) or "",
+    )
+
+
 def _bar_typical_price(bar: Dict[str, Any]) -> Optional[float]:
     high = _safe_float(bar.get("high"))
     low = _safe_float(bar.get("low"))
@@ -218,14 +298,20 @@ def _build_factor_panel(
 
 def _build_signal_condition(signal: Dict[str, Any]) -> str:
     factors = signal.get("factors") if isinstance(signal.get("factors"), dict) else {}
-    strategy = str(signal.get("source_strategy") or "").lower()
+    strategy = _normalize_signal_strategy(signal)
     signal_type = signal.get("signal_type") or "WAIT"
     signal_label = {"BUY": "买入", "SELL": "卖出", "WAIT": "观望", "HOLD": "持有"}.get(
         str(signal_type).upper(),
         str(signal_type),
     )
     if strategy in {"ma", "ma_cross"} and factors:
-        return f"均线条件：SMA5={_format_metric(factors.get('sma_5'))}，SMA20={_format_metric(factors.get('sma_20'))}，输出{signal_label}。"
+        if factors.get("sma_5") is not None and factors.get("sma_20") is not None:
+            return f"均线条件：短期均线={_format_metric(factors.get('sma_5'))}，长期均线={_format_metric(factors.get('sma_20'))}，输出{signal_label}。"
+        if str(signal_type).upper() == "BUY":
+            return "均线策略满足买入条件：短期均线相对长期均线形成上行动能。"
+        if str(signal_type).upper() == "SELL":
+            return "均线策略满足卖出条件：短期均线相对长期均线转弱。"
+        return "均线策略未形成明确买卖交叉，保持观望。"
     if strategy == "rsi" and factors:
         return f"RSI 条件：RSI14={_format_metric(factors.get('rsi_14'))}，低于 30 偏超卖，高于 70 偏超买。"
     if strategy == "boll" and factors:
@@ -237,31 +323,98 @@ def _build_signal_condition(signal: Dict[str, Any]) -> str:
     if strategy == "atr_trend" and factors:
         return f"波动趋势条件：ATR14={_format_metric(factors.get('atr_14'))}，结合趋势方向输出{signal_label}。"
     if strategy == "ichimoku" and factors:
-        return f"一目均衡条件：结合趋势云层与当前 L5 因子快照，输出{signal_label}。"
-    return f"L5 策略 {signal.get('source_strategy') or 'unknown'} 基于当前因子快照输出{signal_label}。"
+        return f"一目均衡条件：结合趋势云层与当前因子快照，输出{signal_label}。"
+    if str(signal_type).upper() in {"BUY", "SELL"}:
+        return f"当前因子组合满足该策略的{signal_label}条件。"
+    return "当前因子组合没有达到明确买入或卖出条件。"
 
 
-def _build_signal_panel(signals: List[Dict[str, Any]], display_limit: int = 12) -> List[Dict[str, Any]]:
+def _signal_completeness_score(signal: Dict[str, Any]) -> int:
+    return sum(
+        1
+        for key in (
+            "relatedBacktestId",
+            "relatedDecisionId",
+            "relatedOrderIntentId",
+            "relatedAuditIds",
+            "trigger_condition",
+            "factors",
+        )
+        if signal.get(key)
+    )
+
+
+def _build_signal_panel_item(signal: Dict[str, Any], symbol: str = "") -> Dict[str, Any]:
+    value = _safe_float(signal.get("signal_value"), 0.0) or 0.0
+    confidence = _safe_float(signal.get("confidence"), 0.0) or 0.0
+    signal_type = str(signal.get("signal_type") or "WAIT").upper()
+    direction_strength = min(abs(value), 1.0)
+    triggered = signal_type not in {"WAIT", "HOLD"} and direction_strength > 0
+    event_time = signal.get("event_time") or signal.get("timestamp")
+    strategy_type = _normalize_signal_strategy(signal)
+    related = _signal_related_ids(signal)
+    item = {
+        **signal,
+        **related,
+        "signalId": signal.get("id"),
+        "symbol": signal.get("symbol") or symbol,
+        "strategyType": strategy_type,
+        "strategyName": signal.get("source_strategy") or strategy_type,
+        "action": signal_type,
+        "asOfTime": event_time,
+        "signal_type": signal_type,
+        "strength": direction_strength,
+        "triggerStrength": direction_strength,
+        "direction_strength": direction_strength,
+        "direction_strength_label": f"{direction_strength:.0%}" if triggered else "未触发买卖方向",
+        "is_triggered": triggered,
+        "confidence": confidence,
+        "trigger_condition": _build_signal_condition(signal),
+        "triggerReason": _build_signal_condition(signal),
+        "timestamp": event_time,
+        "alignment_rule": "available_time <= as_of_time",
+        "mergedCount": 1,
+        "mergedSignalIds": [signal.get("id")] if signal.get("id") is not None else [],
+        "sourceEvents": [
+            {
+                "signalId": signal.get("id"),
+                "strategyId": signal.get("strategy_id"),
+                "sourceStrategy": signal.get("source_strategy"),
+                "asOfTime": event_time,
+                "relatedBacktestId": related.get("relatedBacktestId"),
+            }
+        ],
+    }
+    return item
+
+
+def _merge_signal_panel_items(current: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+    keep = incoming if _signal_completeness_score(incoming) > _signal_completeness_score(current) else current
+    other = current if keep is incoming else incoming
+    merged_ids = list(dict.fromkeys((keep.get("mergedSignalIds") or []) + (other.get("mergedSignalIds") or [])))
+    source_events = (keep.get("sourceEvents") or []) + (other.get("sourceEvents") or [])
+    keep["mergedCount"] = int(current.get("mergedCount") or 1) + int(incoming.get("mergedCount") or 1)
+    keep["mergedSignalIds"] = merged_ids
+    keep["sourceEvents"] = source_events
+    return keep
+
+
+def _build_signal_panel(signals: List[Dict[str, Any]], display_limit: int = 12, symbol: str = "") -> List[Dict[str, Any]]:
+    merged: Dict[tuple, Dict[str, Any]] = {}
+    for signal in signals:
+        signal_with_symbol = {**signal, "symbol": signal.get("symbol") or symbol}
+        item = _build_signal_panel_item(signal_with_symbol, symbol=symbol)
+        key = _signal_dedupe_key(signal_with_symbol)
+        if key in merged:
+            merged[key] = _merge_signal_panel_items(merged[key], item)
+        else:
+            merged[key] = item
     panel = []
-    for signal in signals[:display_limit]:
-        value = _safe_float(signal.get("signal_value"), 0.0) or 0.0
-        confidence = _safe_float(signal.get("confidence"), 0.0) or 0.0
-        signal_type = str(signal.get("signal_type") or "WAIT").upper()
-        direction_strength = min(abs(value), 1.0)
-        triggered = signal_type not in {"WAIT", "HOLD"} and direction_strength > 0
-        panel.append({
-            **signal,
-            "signal_type": signal_type,
-            "strength": direction_strength,
-            "direction_strength": direction_strength,
-            "direction_strength_label": f"{direction_strength:.0%}" if triggered else "未触发买卖方向",
-            "is_triggered": triggered,
-            "confidence": confidence,
-            "trigger_condition": _build_signal_condition(signal),
-            "timestamp": signal.get("event_time"),
-            "alignment_rule": "available_time <= as_of_time",
-        })
-    return panel
+    for item in merged.values():
+        if item.get("mergedCount", 1) > 1:
+            item["mergeNote"] = f"已合并 {item['mergedCount']} 条相同信号"
+        panel.append(item)
+    return panel[:display_limit]
 
 
 def _role_bucket(role: Dict[str, Any]) -> str:
@@ -1731,23 +1884,40 @@ async def get_market_news(
     return {"symbol": symbol.upper(), "articles": remapped, "total": len(remapped), "source": "duckdb"}
 
 
+_overview_cache: dict | None = None
+_overview_cache_time: float = 0.0
+_OVERVIEW_CACHE_TTL = 120.0  # seconds
+
+
 @router.get("/overview")
 async def get_l1_overview() -> Dict[str, Any]:
     """Aggregate L1 data: top tickers, macro indicators, recent news."""
-    tickers = []
-    for sym in ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"]:
+    import asyncio
+    import time
+
+    global _overview_cache, _overview_cache_time
+    now = time.monotonic()
+    if _overview_cache is not None and (now - _overview_cache_time) < _OVERVIEW_CACHE_TTL:
+        return _overview_cache
+
+    symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"]
+
+    async def _fetch_one(sym: str):
         try:
             tk = await market_data_gateway.get_ticker(sym)
             if tk is None:
-                continue
-            tickers.append({
+                return None
+            return {
                 "symbol": sym,
                 "price": tk.price,
                 "change_24h_pct": round(tk.change_percent, 2),
                 "volume": tk.volume,
-            })
+            }
         except Exception:
-            pass
+            return None
+
+    results = await asyncio.gather(*[_fetch_one(s) for s in symbols])
+    tickers = [r for r in results if r is not None]
 
     from app.pipeline.storage.duckdb_store import pipeline_store
     raw_headlines = pipeline_store.query_news(limit=12)
@@ -1763,11 +1933,14 @@ async def get_l1_overview() -> Dict[str, Any]:
             "symbol": _first_symbol(a.get("symbols"), "BTC"),
         })
 
-    return {
+    result = {
         "tickers": tickers,
         "headlines": headlines,
         "updated": datetime.utcnow().isoformat(),
     }
+    _overview_cache = result
+    _overview_cache_time = time.monotonic()
+    return result
 
 
 @router.get("/research-snapshot/{symbol}")
@@ -1854,7 +2027,7 @@ async def get_research_snapshot(
     as_of_time_value = payload.get("as_of_time")
     bar_panel = _build_bar_panel(bars)
     factor_panel = _build_factor_panel(factors, macro_events, as_of_time_value)
-    signal_panel = _build_signal_panel(signals)
+    signal_panel = _build_signal_panel(signals, symbol=canonical_symbol)
     news_panel = _build_news_panel(news_events, canonical_symbol)
     tradingagents_panel = _build_tradingagents_panel(latest_decision)
 

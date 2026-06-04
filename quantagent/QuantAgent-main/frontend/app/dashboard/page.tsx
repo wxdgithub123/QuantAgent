@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { Suspense, useEffect, useState, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
@@ -40,24 +40,55 @@ interface Ticker {
 
 interface Position {
   symbol: string;
+  side?: "long" | "short" | "LONG" | "SHORT" | string;
   quantity: number;
   avg_price: number;
+  avgEntryPrice?: number;
   mark_price: number;
+  markPrice?: number;
   pnl: number;
+  unrealizedPnl?: number;
   pnl_pct: number;
+  unrealizedPnlPct?: number;
+  source?: "manual" | "agent" | "backtest" | string;
+  relatedDecisionId?: number | null;
+  relatedOrderIntentId?: string | null;
+  riskStatus?: string;
+  updatedAt?: string | null;
+  updated_at?: string | null;
 }
 
 interface PaperOrder {
   order_id: string;
+  orderId?: string;
+  source?: "manual" | "agent" | "backtest" | string;
   symbol: string;
   side: "BUY" | "SELL" | string;
   order_type: string;
   quantity: number;
   price: number;
+  fillPrice?: number;
   fee: number;
   pnl: number | null;
+  realizedPnl?: number | null;
+  slippage?: number | null;
   status: string;
   created_at: string;
+  createdAt?: string | null;
+  filledAt?: string | null;
+  relatedDecisionId?: number | null;
+  relatedOrderIntentId?: string | null;
+}
+
+interface RiskRuleRow {
+  ruleName?: string;
+  rule_name?: string;
+  currentValue?: string | number | null;
+  current_value?: string | number | null;
+  limitValue?: string | number | null;
+  limit_value?: string | number | null;
+  passed?: boolean;
+  message?: string;
 }
 
 interface RiskStatus {
@@ -69,6 +100,18 @@ interface RiskStatus {
   daily_pnl: number;
   daily_loss_limit_pct: number;
   max_leverage: number;
+  checked_rules?: RiskRuleRow[];
+  metadata?: DataPanelMeta;
+}
+
+interface DataPanelMeta {
+  data_source?: string;
+  price_source?: string;
+  last_updated?: string | null;
+  is_cached?: boolean;
+  fallback_source?: string | null;
+  degraded?: boolean;
+  message?: string;
 }
 
 interface ComparisonData {
@@ -164,20 +207,40 @@ interface FactorDefinition {
 
 interface ResearchSnapshotSignal {
   id?: number;
+  signalId?: number;
+  symbol?: string;
   event_time?: string;
   available_time?: string;
+  asOfTime?: string;
   timestamp?: string;
   signal_type?: string;
+  action?: string;
   signal_value?: number;
   strength?: number;
+  triggerStrength?: number;
   direction_strength?: number;
   direction_strength_label?: string;
   is_triggered?: boolean;
   confidence?: number;
   trigger_condition?: string;
+  triggerReason?: string;
   source_strategy?: string;
+  strategyType?: string;
+  strategyName?: string;
+  strategy_id?: string;
   provider?: string;
   data_source?: string;
+  relatedBacktestId?: number | null;
+  relatedDecisionId?: number | null;
+  relatedOrderIntentId?: string | null;
+  relatedAuditIds?: Array<number | string>;
+  replaySessionId?: string | null;
+  mergedCount?: number;
+  mergedSignalIds?: Array<number | string>;
+  mergeNote?: string;
+  sourceEvents?: Array<Record<string, unknown>>;
+  similarSignalCount?: number;
+  similarBacktestIds?: Array<number | string>;
 }
 
 interface ResearchSnapshotFactorPanel {
@@ -329,6 +392,61 @@ const normalizeResearchAsOfInput = (value: string) => {
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const FRIENDLY_DATA_UNAVAILABLE = "数据暂不可用，已展示缓存数据 / 暂无数据。";
+const FRIENDLY_EXCHANGE_QUOTE_UNAVAILABLE = "交易所直接报价暂不可用，已保留平台统一报价。";
+
+const sanitizeFetchError = (error: unknown, fallback = FRIENDLY_DATA_UNAVAILABLE) => {
+  const raw = error instanceof Error ? error.message : String(error || "");
+  if (!raw) return fallback;
+  const lower = raw.toLowerCase();
+  if (
+    lower.includes("failed to fetch") ||
+    lower.includes("network") ||
+    lower.includes("timeout") ||
+    lower.includes("abort") ||
+    lower.includes("econnrefused") ||
+    lower.includes("http 5")
+  ) {
+    return fallback;
+  }
+  return raw.length > 120 ? fallback : raw;
+};
+
+const sanitizeExchangeQuoteError = (error?: string | null) => {
+  if (!error) return "等待交易所直接报价";
+  const lower = error.toLowerCase();
+  if (
+    lower.includes("timeout") ||
+    lower.includes("超时") ||
+    lower.includes("clash") ||
+    lower.includes("failed") ||
+    lower.includes("fetch") ||
+    lower.includes("http") ||
+    lower.includes("451") ||
+    lower.includes("restricted") ||
+    lower.includes("econnrefused")
+  ) {
+    return FRIENDLY_EXCHANGE_QUOTE_UNAVAILABLE;
+  }
+  return error.length > 80 ? FRIENDLY_EXCHANGE_QUOTE_UNAVAILABLE : error;
+};
+
+async function fetchJsonWithTimeout<T>(url: string, options: RequestInit = {}, timeoutMs = 12000): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: options.signal ?? controller.signal });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = typeof data?.detail === "string" ? data.detail : `HTTP ${response.status}`;
+      throw new Error(detail);
+    }
+    return data as T;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 const formatResearchAsOfInput = (value?: string | null) => {
   if (!value) return "";
   const normalized = normalizeResearchAsOfInput(value);
@@ -390,6 +508,24 @@ const FALLBACK_STRATEGY_LABELS: Record<string, string> = {
   risk: "风险管理策略",
 };
 
+const STRATEGY_SOURCE_LABELS: Record<string, string> = {
+  backtest: "回测",
+  replay: "历史回放",
+  agent: "Agent",
+  manual: "手动",
+  paper: "模拟盘",
+  strategy: "策略",
+};
+
+const ROLE_HELP_TEXT: Record<string, string> = {
+  technical: "看 K 线、成交量、VWAP 和技术因子，判断价格结构。",
+  news: "看新闻、情绪和资产映射，判断外部事件影响。",
+  macro: "看 CPI、利率、通胀预期等宏观标签，判断市场背景。",
+  risk: "看波动、回撤、仓位和风控约束，判断是否应该谨慎。",
+  portfolio: "把前面角色意见汇总成仓位和组合建议。",
+  final: "汇总多角色意见，形成最终买入、卖出或观望建议。",
+};
+
 function formatFactorDisplayName(name?: string, definitionMap?: Record<string, string>) {
   const raw = (name || "").trim();
   if (!raw) return "未知因子";
@@ -416,8 +552,197 @@ function formatFactorDisplayName(name?: string, definitionMap?: Record<string, s
 function formatStrategyDisplayName(strategy?: string) {
   const raw = (strategy || "").trim();
   if (!raw) return "未知策略";
+  const sourceMatch = raw.match(/^(backtest|replay|agent|manual|paper|strategy)[:/_-](.+)$/i);
+  if (sourceMatch) {
+    const sourceLabel = STRATEGY_SOURCE_LABELS[sourceMatch[1].toLowerCase()] || sourceMatch[1];
+    const strategyKey = sourceMatch[2].toLowerCase().replace(/^strategy[:/_-]?/, "");
+    return `${sourceLabel} · ${FALLBACK_STRATEGY_LABELS[strategyKey] || sourceMatch[2]}`;
+  }
   const normalized = raw.toLowerCase().replace(/^strategy[:/_-]?/, "");
   return FALLBACK_STRATEGY_LABELS[normalized] || raw;
+}
+
+function formatDataSourceChain(chain?: string | null) {
+  const raw = chain || "AnalysisContext / OpenBB / CCXT / ClickHouse / 策略信号管道";
+  return raw
+    .replace(/AnalysisContext/g, "决策上下文（给 Agent 的标准材料）")
+    .replace(/OpenBB\/yfinance/g, "OpenBB/yfinance（行情/新闻接口）")
+    .replace(/CCXT\/OKX/g, "CCXT/OKX（交易所行情备源）")
+    .replace(/ClickHouse/g, "ClickHouse 缓存（本地历史数据）")
+    .replace(/DuckDB/g, "DuckDB 研究库")
+    .replace(/FRED\/OECD/g, "FRED/OECD（宏观数据）")
+    .replace(/L5 因子信号/g, "因子与信号数据")
+    .replace(/L5/g, "因子与信号")
+    .replace(/factor_snapshots/g, "因子快照表")
+    .replace(/signal_events/g, "信号事件表")
+    .replace(/策略信号管道/g, "策略信号管道");
+}
+
+function formatAlignmentRule(rule?: string | null) {
+  const raw = rule || "available_time <= as_of_time";
+  return raw
+    .replace(/available_time\s*<=\s*as_of_time/g, "只使用该时间点之前已经可用的数据")
+    .replace(/available_time/g, "数据可用时间")
+    .replace(/as_of_time/g, "回看时间");
+}
+
+function normalizeSignalStrategyKey(signal: ResearchSnapshotSignal) {
+  const raw = String(signal.strategyType || signal.source_strategy || signal.strategy_id || "").trim();
+  if (!raw) return "unknown";
+  const sourceMatch = raw.match(/^(backtest|replay|agent|manual|paper|strategy)[:/_-](.+)$/i);
+  if (sourceMatch) return sourceMatch[2].toLowerCase().replace(/^strategy[:/_-]?/, "");
+  return raw.toLowerCase().replace(/^strategy[:/_-]?/, "").replace(/^backtest[-_]/, "");
+}
+
+function signalBacktestId(signal: ResearchSnapshotSignal) {
+  if (signal.relatedBacktestId !== null && signal.relatedBacktestId !== undefined) return signal.relatedBacktestId;
+  const raw = `${signal.strategy_id || ""} ${signal.source_strategy || ""}`;
+  const match = raw.match(/backtest[-_:](\d+)/i);
+  return match ? Number(match[1]) : null;
+}
+
+function signalAction(signal: ResearchSnapshotSignal) {
+  return String(signal.action || signal.signal_type || "WAIT").toUpperCase();
+}
+
+function signalAsOfTime(signal: ResearchSnapshotSignal) {
+  return signal.asOfTime || signal.timestamp || signal.event_time || "";
+}
+
+function signalDedupeKey(signal: ResearchSnapshotSignal, fallbackSymbol: string) {
+  return [
+    String(signal.symbol || fallbackSymbol || "").toUpperCase(),
+    normalizeSignalStrategyKey(signal),
+    signalAction(signal),
+    signalAsOfTime(signal),
+    String(signal.data_source || signal.provider || "").toUpperCase(),
+    signalBacktestId(signal) ?? "",
+  ].join("::");
+}
+
+function signalCompletenessScore(signal: ResearchSnapshotSignal) {
+  return [
+    signal.relatedBacktestId,
+    signal.relatedDecisionId,
+    signal.relatedOrderIntentId,
+    signal.relatedAuditIds?.length,
+    signal.triggerReason || signal.trigger_condition,
+    signal.sourceEvents?.length,
+  ].filter(Boolean).length;
+}
+
+function dedupeResearchSignals(signals: ResearchSnapshotSignal[], fallbackSymbol: string) {
+  const merged = new Map<string, ResearchSnapshotSignal>();
+  for (const signal of signals) {
+    const key = signalDedupeKey(signal, fallbackSymbol);
+    const existing = merged.get(key);
+    const normalizedSignal: ResearchSnapshotSignal = {
+      ...signal,
+      signalId: signal.signalId ?? signal.id,
+      symbol: signal.symbol || fallbackSymbol,
+      action: signalAction(signal),
+      asOfTime: signalAsOfTime(signal),
+      strategyType: normalizeSignalStrategyKey(signal),
+      relatedBacktestId: signalBacktestId(signal),
+      mergedCount: signal.mergedCount || 1,
+      mergedSignalIds: signal.mergedSignalIds || (signal.id ? [signal.id] : []),
+      sourceEvents: signal.sourceEvents || [],
+    };
+    if (!existing) {
+      merged.set(key, normalizedSignal);
+      continue;
+    }
+    const keep = signalCompletenessScore(normalizedSignal) > signalCompletenessScore(existing)
+      ? normalizedSignal
+      : existing;
+    const other = keep === normalizedSignal ? existing : normalizedSignal;
+    const mergedCount = (existing.mergedCount || 1) + (normalizedSignal.mergedCount || 1);
+    const mergedSignalIds = Array.from(new Set([...(keep.mergedSignalIds || []), ...(other.mergedSignalIds || [])]));
+    merged.set(key, {
+      ...keep,
+      mergedCount,
+      mergedSignalIds,
+      sourceEvents: [...(keep.sourceEvents || []), ...(other.sourceEvents || [])],
+      mergeNote: `已合并 ${mergedCount} 条相同信号`,
+    });
+  }
+  return Array.from(merged.values());
+}
+
+function signalTimeValue(signal: ResearchSnapshotSignal) {
+  const time = new Date(signalAsOfTime(signal)).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function isStrongResearchSignal(signal: ResearchSnapshotSignal) {
+  const action = signalAction(signal);
+  return action === "BUY" || action === "SELL";
+}
+
+function representativeStrongSignals(signals: ResearchSnapshotSignal[]) {
+  const grouped = new Map<string, ResearchSnapshotSignal>();
+  for (const signal of signals.filter(isStrongResearchSignal)) {
+    const key = [
+      String(signal.symbol || "").toUpperCase(),
+      normalizeSignalStrategyKey(signal),
+      signalAction(signal),
+      String(signal.data_source || signal.provider || "").toUpperCase(),
+    ].join("::");
+    const existing = grouped.get(key);
+    const currentBacktestId = signalBacktestId(signal);
+    const currentCount = signal.mergedCount || signal.similarSignalCount || 1;
+    if (!existing) {
+      grouped.set(key, {
+        ...signal,
+        similarSignalCount: currentCount,
+        similarBacktestIds: currentBacktestId ? [currentBacktestId] : [],
+      });
+      continue;
+    }
+    const backtestIds = Array.from(new Set([...(existing.similarBacktestIds || []), ...(currentBacktestId ? [currentBacktestId] : [])]));
+    const keep = signalTimeValue(signal) > signalTimeValue(existing) ? signal : existing;
+    const other = keep === signal ? existing : signal;
+    grouped.set(key, {
+      ...keep,
+      similarSignalCount: (existing.similarSignalCount || 1) + currentCount,
+      similarBacktestIds: backtestIds,
+      mergedSignalIds: Array.from(new Set([...(keep.mergedSignalIds || []), ...(other.mergedSignalIds || [])])),
+    });
+  }
+  return Array.from(grouped.values()).sort((a, b) => signalTimeValue(b) - signalTimeValue(a));
+}
+
+function strategyCoverageSignals(signals: ResearchSnapshotSignal[]) {
+  const grouped = new Map<string, ResearchSnapshotSignal>();
+  for (const signal of signals) {
+    const key = normalizeSignalStrategyKey(signal);
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, signal);
+      continue;
+    }
+    const existingStrong = isStrongResearchSignal(existing);
+    const nextStrong = isStrongResearchSignal(signal);
+    if ((nextStrong && !existingStrong) || (nextStrong === existingStrong && signalTimeValue(signal) > signalTimeValue(existing))) {
+      grouped.set(key, signal);
+    }
+  }
+  return Array.from(grouped.values()).sort((a, b) => {
+    if (isStrongResearchSignal(a) !== isStrongResearchSignal(b)) return isStrongResearchSignal(a) ? -1 : 1;
+    return normalizeSignalStrategyKey(a).localeCompare(normalizeSignalStrategyKey(b));
+  });
+}
+
+function roleHelpText(sectionKey?: string, title?: string) {
+  const key = String(sectionKey || "").toLowerCase();
+  if (ROLE_HELP_TEXT[key]) return ROLE_HELP_TEXT[key];
+  const titleText = title || "";
+  if (titleText.includes("技术")) return ROLE_HELP_TEXT.technical;
+  if (titleText.includes("新闻")) return ROLE_HELP_TEXT.news;
+  if (titleText.includes("宏观")) return ROLE_HELP_TEXT.macro;
+  if (titleText.includes("风险")) return ROLE_HELP_TEXT.risk;
+  if (titleText.includes("组合")) return ROLE_HELP_TEXT.portfolio;
+  return "该角色负责从自己的角度解释当前市场材料。";
 }
 
 const DASHBOARD_TAB_VALUES = ["overview", "diagnostics", "positions", "agents"] as const;
@@ -453,11 +778,11 @@ function OrderPanel({ symbol, exchangeId, currentPrice, onClose, onOrderPlaced }
         body: JSON.stringify({ symbol, side, order_type: "MARKET", quantity: qty, exchange_id: exchangeId }),
       });
       const data = await res.json();
-      if (!res.ok) { setError(data.detail || "下单失败"); return; }
+      if (!res.ok) { setError(sanitizeFetchError(data.detail || "下单失败", "数据暂不可用，无法完成模拟下单，请稍后重试。")); return; }
       setSuccess(`${side} ${qty} ${symbol} @ $${toFiniteNumber(data.price, currentPrice ?? 0).toFixed(2)} ✓`);
       onOrderPlaced();
-    } catch {
-      setError("网络错误，请检查后端连接");
+    } catch (error) {
+      setError(sanitizeFetchError(error, "数据暂不可用，无法完成模拟下单，请稍后重试。"));
     } finally {
       setLoading(false);
     }
@@ -577,7 +902,7 @@ function OrderPanel({ symbol, exchangeId, currentPrice, onClose, onOrderPlaced }
 }
 
 // ─── Main Dashboard ─────────────────────────────────────────────────────────
-export default function DashboardPage() {
+function DashboardPageContent() {
   const searchParams = useSearchParams();
   const requestedTab = searchParams.get("tab") || "overview";
   const requestedSymbol = normalizeSymbolParam(searchParams.get("symbol"));
@@ -617,7 +942,13 @@ export default function DashboardPage() {
   const [paperOrders, setPaperOrders] = useState<PaperOrder[]>([]);
   const [showOrderPanel, setShowOrderPanel] = useState(false);
   const [positionsLoading, setPositionsLoading] = useState(true);
+  const [positionsError, setPositionsError] = useState("");
+  const [positionsMeta, setPositionsMeta] = useState<DataPanelMeta | null>(null);
   const [ordersLoading, setOrdersLoading] = useState(true);
+  const [ordersError, setOrdersError] = useState("");
+  const [ordersMeta, setOrdersMeta] = useState<DataPanelMeta | null>(null);
+  const [riskLoading, setRiskLoading] = useState(true);
+  const [riskError, setRiskError] = useState("");
 
   // Ollama status
   const [ollamaStatus, setOllamaStatus] = useState<{ online: boolean; checked: boolean; model_available?: boolean }>({ online: false, checked: false });
@@ -713,7 +1044,7 @@ export default function DashboardPage() {
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       setResearchSnapshot(null);
-      const message = error instanceof Error ? error.message : "研究快照暂不可用";
+      const message = sanitizeFetchError(error, "研究快照暂不可用，已展示缓存数据 / 暂无数据。");
       setResearchError(
         message.startsWith("HTTP 5")
           ? "后端服务刚启动或正在重启，请稍等几秒刷新；系统不会用假数据补位。"
@@ -771,13 +1102,11 @@ export default function DashboardPage() {
           const data = await res.json();
           return { price: hasFiniteNumber(data.price) ? toFiniteNumber(data.price) : null, error: undefined };
         }
-        const data = await res.json().catch(() => null);
-        const detail = typeof data?.detail === "string" ? data.detail : `${selectedExchangeLabel} 实时报价暂不可用`;
-        return { price: null, error: detail };
+        return { price: null, error: FRIENDLY_EXCHANGE_QUOTE_UNAVAILABLE };
       } catch (error) {
         const message = error instanceof DOMException && error.name === "AbortError"
-          ? `${selectedExchangeLabel} 实时报价请求超时，请确认 Clash 仍在运行`
-          : `${selectedExchangeLabel} 实时报价暂不可用`;
+          ? FRIENDLY_EXCHANGE_QUOTE_UNAVAILABLE
+          : `${selectedExchangeLabel} 交易所直接报价暂不可用`;
         return { price: null, error: message };
       }
     };
@@ -877,35 +1206,88 @@ export default function DashboardPage() {
   }, []);
 
   const fetchPositions = useCallback(async () => {
-    setPositionsLoading(true);
+    const isInitialLoad = positions.length === 0 && !positionsMeta;
+    if (isInitialLoad) setPositionsLoading(true);
+    setPositionsError("");
     try {
-      const res = await fetch(`/api/v1/trading/positions?exchange_id=${currentExchange}`);
-      if (res.ok) {
-        const data = await res.json();
-        setPositions(data.positions || []);
+      const data = await fetchJsonWithTimeout<{ positions?: Position[]; metadata?: DataPanelMeta; status?: string }>(
+        `/api/v1/trading/positions?exchange_id=${currentExchange}`,
+        {},
+        30000
+      );
+      const nextPositions = Array.isArray(data.positions) ? data.positions : [];
+      setPositions(nextPositions);
+      setPositionsMeta(data.metadata || {
+        data_source: "paper_positions",
+        last_updated: new Date().toISOString(),
+        is_cached: false,
+        fallback_source: null,
+        degraded: data.status === "degraded" || data.status === "error",
+      });
+      if (data.status === "error" || data.metadata?.degraded) {
+        setPositionsError(data.metadata?.message || FRIENDLY_DATA_UNAVAILABLE);
       }
-    } catch { /* ignore */ }
+    } catch (error) {
+      setPositionsError(sanitizeFetchError(error));
+      setPositionsMeta((current) => current || {
+        data_source: "paper_positions",
+        last_updated: new Date().toISOString(),
+        is_cached: false,
+        fallback_source: null,
+        degraded: true,
+        message: FRIENDLY_DATA_UNAVAILABLE,
+      });
+    }
     finally { setPositionsLoading(false); }
-  }, [currentExchange]);
+  }, [currentExchange, positions.length, positionsMeta]);
 
   const fetchRiskStatus = useCallback(async () => {
+    const isInitialLoad = !riskStatus && !riskError;
+    if (isInitialLoad) setRiskLoading(true);
+    setRiskError("");
     try {
-      const res = await fetch(`/api/v1/trading/risk-status?exchange_id=${currentExchange}`);
-      if (res.ok) setRiskStatus(await res.json());
-    } catch { /* ignore */ }
-  }, [currentExchange]);
+      const data = await fetchJsonWithTimeout<RiskStatus>(`/api/v1/trading/risk-status?exchange_id=${currentExchange}`, {}, 30000);
+      setRiskStatus(data);
+      if (data.metadata?.degraded) {
+        setRiskError(data.metadata.message || FRIENDLY_DATA_UNAVAILABLE);
+      }
+    } catch (error) {
+      setRiskError(sanitizeFetchError(error, "数据暂不可用，暂无风控状态。"));
+    } finally {
+      setRiskLoading(false);
+    }
+  }, [currentExchange, riskError, riskStatus]);
 
   const fetchPaperOrders = useCallback(async () => {
-    setOrdersLoading(true);
+    const isInitialLoad = paperOrders.length === 0 && !ordersMeta;
+    if (isInitialLoad) setOrdersLoading(true);
+    setOrdersError("");
     try {
-      const res = await fetch(`/api/v1/trading/orders?limit=8`);
-      if (res.ok) {
-        const data = await res.json();
-        setPaperOrders(data.orders || []);
+      const data = await fetchJsonWithTimeout<{ orders?: PaperOrder[]; metadata?: DataPanelMeta; status?: string }>(`/api/v1/trading/orders?limit=8`, {}, 30000);
+      setPaperOrders(Array.isArray(data.orders) ? data.orders : []);
+      setOrdersMeta(data.metadata || {
+        data_source: "paper_trades",
+        last_updated: new Date().toISOString(),
+        is_cached: false,
+        fallback_source: null,
+        degraded: data.status === "error",
+      });
+      if (data.status === "error" || data.metadata?.degraded) {
+        setOrdersError(data.metadata?.message || FRIENDLY_DATA_UNAVAILABLE);
       }
-    } catch { /* ignore */ }
+    } catch (error) {
+      setOrdersError(sanitizeFetchError(error));
+      setOrdersMeta((current) => current || {
+        data_source: "paper_trades",
+        last_updated: new Date().toISOString(),
+        is_cached: false,
+        fallback_source: null,
+        degraded: true,
+        message: FRIENDLY_DATA_UNAVAILABLE,
+      });
+    }
     finally { setOrdersLoading(false); }
-  }, []);
+  }, [ordersMeta, paperOrders.length]);
 
   // ── Fetch Hummingbot Status ────────────────────────────────────────────
   const fetchHummingbotStatus = useCallback(async () => {
@@ -1021,10 +1403,9 @@ export default function DashboardPage() {
     fetchPositions();
     fetchRiskStatus();
     fetchPaperOrders();
-    fetchHummingbotStatus();
-    const t = setInterval(() => { fetchBalance(); fetchPositions(); fetchRiskStatus(); fetchPaperOrders(); fetchHummingbotStatus(); }, 30000);
+    const t = setInterval(() => { fetchBalance(); fetchPositions(); fetchRiskStatus(); fetchPaperOrders(); }, 120000);
     return () => clearInterval(t);
-  }, [fetchBalance, fetchPositions, fetchRiskStatus, fetchPaperOrders, fetchHummingbotStatus]);
+  }, [fetchBalance, fetchPositions, fetchRiskStatus, fetchPaperOrders]);
 
   // ── WebSocket ──────────────────────────────────────────────────────────────
   const connectWS = useCallback(() => {
@@ -1302,7 +1683,7 @@ export default function DashboardPage() {
           }
         }
       } catch {
-        setAgents(p => p.map(a => a.id === agent.id ? { ...a, analyzing: false, isStreaming: false, logs: "分析失败: 网络错误" } : a));
+        setAgents(p => p.map(a => a.id === agent.id ? { ...a, analyzing: false, isStreaming: false, logs: `分析失败: ${FRIENDLY_DATA_UNAVAILABLE}` } : a));
         // 失败时清除冷却，允许立即重试
         delete cooldownTracker.current[agent.id];
       }
@@ -1324,7 +1705,7 @@ export default function DashboardPage() {
         delete cooldownTracker.current[agent.id];
       }
     } catch {
-      setAgents(p => p.map(a => a.id === agent.id ? { ...a, logs: "分析失败: 网络错误", analyzing: false } : a));
+      setAgents(p => p.map(a => a.id === agent.id ? { ...a, logs: `分析失败: ${FRIENDLY_DATA_UNAVAILABLE}`, analyzing: false } : a));
       // 失败时清除冷却，允许立即重试
       delete cooldownTracker.current[agent.id];
     }
@@ -1343,10 +1724,11 @@ export default function DashboardPage() {
 
   const handleClosePosition = async (pos: Position) => {
     try {
+      const closeSide = toFiniteNumber(pos.quantity) >= 0 ? "SELL" : "BUY";
       await fetch("/api/v1/trading/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: pos.symbol, side: "SELL", order_type: "MARKET", quantity: pos.quantity, exchange_id: currentExchange }),
+        body: JSON.stringify({ symbol: pos.symbol, side: closeSide, order_type: "MARKET", quantity: Math.abs(toFiniteNumber(pos.quantity)), exchange_id: currentExchange }),
       });
       fetchPositions();
       fetchBalance();
@@ -1396,16 +1778,20 @@ export default function DashboardPage() {
     return `${numeric > 0 ? "+" : ""}${numeric.toFixed(2)}`;
   };
   const formatVwapMethod = (method?: string) => {
-    if (method === "quote_volume_exact") return "精确 VWAP（quote_volume / volume）";
-    if (method === "typical_price_proxy") return "估算 VWAP（OHLCV 代理）";
+    if (method === "quote_volume_exact") return "精确 VWAP（按成交额 ÷ 成交量计算）";
+    if (method === "typical_price_proxy") return "估算 VWAP（用开高低收和成交量近似计算）";
     return method || "未标注";
   };
   const formatDirectionStrength = (signal: ResearchSnapshotSignal) => {
-    const normalized = signal.signal_type?.toUpperCase();
+    const normalized = signalAction(signal);
     if (normalized === "WAIT" || normalized === "HOLD" || signal.is_triggered === false) {
       return "未触发买卖";
     }
-    const value = hasFiniteNumber(signal.direction_strength) ? signal.direction_strength : signal.strength;
+    const value = hasFiniteNumber(signal.triggerStrength)
+      ? signal.triggerStrength
+      : hasFiniteNumber(signal.direction_strength)
+        ? signal.direction_strength
+        : signal.strength;
     return hasFiniteNumber(value) ? formatPercent(value) : "—";
   };
   const formatRoleOpinion = (opinion?: string) => {
@@ -1430,16 +1816,111 @@ export default function DashboardPage() {
     };
     return statusMap[status] || status || "—";
   };
+  const formatPositionSide = (pos: Position) => {
+    const side = String(pos.side || "").toLowerCase();
+    if (side === "long" || toFiniteNumber(pos.quantity) > 0) return "多头";
+    if (side === "short" || toFiniteNumber(pos.quantity) < 0) return "空头";
+    return "未知";
+  };
+  const formatSourceLabel = (source?: string | null) => {
+    if (source === "agent") return "智能体";
+    if (source === "backtest") return "回测";
+    if (source === "manual") return "手动";
+    return "未记录";
+  };
+  const formatRiskLabel = (status?: string | null) => {
+    if (status === "blocked") return "阻断";
+    if (status === "warning") return "关注";
+    if (status === "normal") return "正常";
+    return "未评估";
+  };
+  const formatMetaTime = (value?: string | null) => {
+    if (!value) return "暂无";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  };
+  const formatRuleValue = (value: unknown) => {
+    if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(4);
+    if (value === null || value === undefined || value === "") return "—";
+    return String(value);
+  };
   const researchBarSummary = researchSnapshot?.bar_panel?.summary;
   const researchBarRows = researchSnapshot?.bar_panel?.rows || [];
   const researchFactorGroups = [
-    { key: "technical", label: "技术因子", items: researchSnapshot?.factor_panel?.groups?.technical || [], hint: "由 L5 因子管道基于标准化 K 线计算" },
+    { key: "technical", label: "技术因子", items: researchSnapshot?.factor_panel?.groups?.technical || [], hint: "由因子计算管道基于标准化 K 线生成" },
     { key: "sentiment", label: "情绪因子", items: researchSnapshot?.factor_panel?.groups?.sentiment || [], hint: "由新闻情绪和资产映射加工" },
-    { key: "macro", label: "宏观因子", items: researchSnapshot?.factor_panel?.groups?.macro || [], hint: "由 OpenBB/FRED/OECD 宏观事件进入 L5" },
+    { key: "macro", label: "宏观因子", items: researchSnapshot?.factor_panel?.groups?.macro || [], hint: "由 FRED/OECD 等宏观数据加工生成" },
   ];
-  const researchSignals = researchSnapshot?.signal_panel || researchSnapshot?.signals || [];
+  const researchSignals = dedupeResearchSignals(
+    researchSnapshot?.signal_panel || researchSnapshot?.signals || [],
+    researchSnapshot?.symbol || currentSymbol,
+  );
+  const latestStrongResearchSignals = representativeStrongSignals(researchSignals).slice(0, 4);
+  const strategyCoverageResearchSignals = strategyCoverageSignals(researchSignals).slice(0, 8);
   const researchNews = researchSnapshot?.news_panel || [];
   const researchAgentSections = researchSnapshot?.tradingagents_panel?.sections || [];
+  const renderResearchSignalCard = (signal: ResearchSnapshotSignal, compact = false) => {
+    const relatedBacktestId = signal.relatedBacktestId ?? signalBacktestId(signal);
+    const relatedAuditIds = signal.relatedAuditIds || [];
+    const signalId = signal.signalId ?? signal.id;
+    return (
+      <div key={signalId ?? `${signal.source_strategy}-${signalAsOfTime(signal)}-${relatedBacktestId ?? "none"}`} className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="truncate text-xs font-semibold text-slate-200" title={signal.source_strategy || signal.strategyName || undefined}>
+              {formatStrategyDisplayName(signal.strategyName || signal.source_strategy || signal.strategyType)}
+            </p>
+            <p className="mt-1 text-[10px] text-slate-500">
+              信号 #{signalId ?? "暂无"} · {signal.symbol || researchSnapshot?.symbol || currentSymbol} · {formatDateTime(signalAsOfTime(signal))} · {signal.provider || signal.data_source || "策略管道"}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Badge variant="outline" className={signalBadgeClass(signalAction(signal))}>
+              {formatSignalLabel(signalAction(signal))}
+            </Badge>
+            <span className="text-[11px] text-slate-400">
+              信号强度 {formatDirectionStrength(signal)}
+            </span>
+            {(signal.mergedCount || 1) > 1 && (
+              <Badge variant="outline" className="border-amber-400/25 bg-amber-400/10 text-amber-100">
+                已合并 {signal.mergedCount} 条相同信号
+              </Badge>
+            )}
+            {(signal.similarSignalCount || 1) > 1 && (
+              <Badge variant="outline" className="border-cyan-400/25 bg-cyan-400/10 text-cyan-100">
+                已折叠 {signal.similarSignalCount} 条同类强信号
+              </Badge>
+            )}
+          </div>
+        </div>
+        <p className="mt-2 text-xs leading-5 text-slate-400">
+          {signal.triggerReason || signal.trigger_condition || "当前因子组合满足该策略条件，但暂无更具体的触发说明。"}
+        </p>
+        {!compact && (
+          <>
+            <div className="mt-2 grid grid-cols-2 gap-2 text-[10px] text-slate-500 md:grid-cols-4">
+              <span>置信度：{hasFiniteNumber(signal.confidence) ? formatPercent(signal.confidence) : "—"}</span>
+              <span>
+                回测：{relatedBacktestId ? (
+                  <Link href={`/backtest?backtest_id=${relatedBacktestId}`} className="text-cyan-300 hover:text-cyan-200">#{relatedBacktestId}</Link>
+                ) : "暂无关联记录"}
+              </span>
+              <span>
+                决策：{signal.relatedDecisionId ? (
+                  <Link href={`/audit?decision_id=${signal.relatedDecisionId}`} className="text-cyan-300 hover:text-cyan-200">#{signal.relatedDecisionId}</Link>
+                ) : "暂无关联记录"}
+              </span>
+              <span>OrderIntent：{signal.relatedOrderIntentId || "暂无关联记录"}</span>
+            </div>
+            <p className="mt-1 text-[10px] text-slate-500">
+              审计：{relatedAuditIds.length > 0 ? relatedAuditIds.join(", ") : "暂无关联记录"}；置信度是策略对当前判断的把握，不等于买卖强度。
+            </p>
+          </>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className={`min-h-screen ${
@@ -1519,7 +2000,7 @@ export default function DashboardPage() {
               <div className="rounded-2xl border border-border/70 bg-background/35 p-3">
                 <p className="text-[11px] uppercase tracking-wider text-muted-foreground">K 线口径</p>
                 <p className="mt-1 font-semibold text-foreground">行情网关</p>
-                <p className="mt-1 text-[10px] text-muted-foreground">图表标签显示实际来源；ClickHouse 只是缓存</p>
+                <p className="mt-1 text-[10px] text-muted-foreground">图表标签显示真实上游；ClickHouse 只是本地缓存，不是行情源</p>
               </div>
               <div className="rounded-2xl border border-border/70 bg-background/35 p-3">
                 <p className="text-[11px] uppercase tracking-wider text-muted-foreground">模拟盘口径</p>
@@ -1617,7 +2098,7 @@ export default function DashboardPage() {
                 {loadingComparison && <RefreshCw className="w-3 h-3 animate-spin text-muted-foreground" />}
                 </div>
                 <p className="text-[11px] text-muted-foreground">
-                  K 线来源看图表右上角标签；模拟盘标记价格只影响模拟下单、持仓盈亏、风控和交易所实时报价对照。
+                  行情网关是平台统一报价；CCXT/OKX 是交易所直接报价。两者刷新时点和口径不同，出现小价差是正常现象，不代表下单或实盘交易。
                 </p>
               </div>
 
@@ -1641,12 +2122,14 @@ export default function DashboardPage() {
                       {hasFiniteNumber(comparisonData.price_diff) ? formatNumber(comparisonData.price_diff) : "—"}
                     </span>
                     <span className="text-xs text-muted-foreground">
-                      {hasFiniteNumber(comparisonData.price_diff_percent) ? `(${toFiniteNumber(comparisonData.price_diff_percent).toFixed(4)}%)` : comparisonData.error || "等待真实报价"}
+                      {hasFiniteNumber(comparisonData.price_diff_percent) ? `(${toFiniteNumber(comparisonData.price_diff_percent).toFixed(4)}%)` : sanitizeExchangeQuoteError(comparisonData.error)}
                     </span>
                   </div>
                 </div>
               ) : (
-                <div className="text-muted-foreground text-xs">暂无数据</div>
+                <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                  报价对照暂不可用，已保留图表和缓存数据。
+                </div>
               )}
             </CardContent>
           </Card>
@@ -1684,9 +2167,9 @@ export default function DashboardPage() {
                     </Badge>
                   )}
                 </div>
-                <CardTitle className="text-lg text-white">TradingAgents 使用的同一时间点材料</CardTitle>
+                <CardTitle className="text-lg text-white">研究台：TradingAgents 的统一研究材料</CardTitle>
                 <p className="mt-2 max-w-3xl text-xs leading-5 text-slate-400">
-                  这里不是诊断页，而是研究工作台：系统把 K 线、因子、L5 信号、新闻、宏观和最近一次决策按同一个 as_of_time 对齐，避免回看时偷看到未来数据。
+                  “同一时间点材料”就是把 K 线、因子、策略信号、新闻、宏观和最近一次决策都截止到同一个回看时间；TradingAgents 只能看这个时间点以前已经出现的数据。
                 </p>
               </div>
               <div className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-white/[0.04] p-3 sm:flex-row sm:items-end">
@@ -1751,12 +2234,12 @@ export default function DashboardPage() {
               <>
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
                   {[
-                    { label: "行情 Bar", value: researchSnapshot?.counts?.bars, hint: `展示 ${researchSnapshot?.counts?.bars_displayed ?? "—"} 根` },
+                    { label: "K线数据", value: researchSnapshot?.counts?.bars, hint: `展示 ${researchSnapshot?.counts?.bars_displayed ?? "—"} 根` },
                     { label: "因子", value: researchSnapshot?.counts?.factors, hint: `技术 ${researchSnapshot?.counts?.technical_factors ?? 0} / 情绪 ${researchSnapshot?.counts?.sentiment_factors ?? 0} / 宏观 ${researchSnapshot?.counts?.macro_factors ?? 0}` },
                     { label: "信号", value: researchSnapshot?.counts?.signals, hint: `展示 ${researchSnapshot?.counts?.signals_displayed ?? "—"} 条触发记录` },
-                    { label: "新闻", value: researchSnapshot?.counts?.news, hint: "标准化 NewsEvent" },
-                    { label: "宏观事件", value: researchSnapshot?.counts?.macro, hint: "FRED/OECD 标签" },
-                    { label: "Agent 角色", value: researchSnapshot?.counts?.tradingagents_roles, hint: "TradingAgentsGraph" },
+                    { label: "新闻", value: researchSnapshot?.counts?.news, hint: "已标准化新闻" },
+                    { label: "宏观事件", value: researchSnapshot?.counts?.macro, hint: "宏观数据标签" },
+                    { label: "Agent 角色", value: researchSnapshot?.counts?.tradingagents_roles, hint: "多角色分析" },
                   ].map((item) => (
                     <div key={item.label} className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                       <p className="text-[11px] text-slate-400">{item.label}</p>
@@ -1771,15 +2254,15 @@ export default function DashboardPage() {
                     <div>
                       <p className="text-sm font-bold text-cyan-100">全局时间轴 / 回看模式</p>
                       <p className="mt-1 text-xs leading-5 text-cyan-100/75">
-                        当前页面所有面板都按同一个 as_of_time 截止：行情、因子、信号、新闻和 Agent 决策不会各看各的时间。
+                        当前页面所有面板都按同一个“回看时间”截止：行情、因子、信号、新闻和 Agent 决策不会各看各的时间。
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2 text-[11px]">
                       <Badge variant="outline" className="border-cyan-400/30 bg-slate-950/40 text-cyan-100">
-                        as_of_time：{formatDateTime(researchSnapshot?.global_time_axis?.as_of_time || researchSnapshot?.as_of_time)}
+                        回看时间：{formatDateTime(researchSnapshot?.global_time_axis?.as_of_time || researchSnapshot?.as_of_time)}
                       </Badge>
                       <Badge variant="outline" className="border-cyan-400/30 bg-slate-950/40 text-cyan-100">
-                        {researchSnapshot?.global_time_axis?.alignment_rule || researchSnapshot?.lineage?.rule || "available_time <= as_of_time"}
+                        {formatAlignmentRule(researchSnapshot?.global_time_axis?.alignment_rule || researchSnapshot?.lineage?.rule)}
                       </Badge>
                     </div>
                   </div>
@@ -1791,11 +2274,11 @@ export default function DashboardPage() {
                       <div>
                         <p className="text-sm font-bold text-white">行情面板</p>
                         <p className="mt-1 text-[11px] text-slate-400">
-                          标的 {researchSnapshot?.symbol || currentSymbol} · 周期 {researchSnapshot?.interval || currentInterval} · 标准化 Bar 数据
+                          标的 {researchSnapshot?.symbol || currentSymbol} · 周期 {researchSnapshot?.interval || currentInterval} · 标准化 K 线数据
                         </p>
                       </div>
                       <Badge variant="outline" className="border-cyan-400/25 bg-cyan-400/10 text-cyan-200">
-                        volume + VWAP
+                        成交量 + VWAP
                       </Badge>
                     </div>
 
@@ -1803,8 +2286,8 @@ export default function DashboardPage() {
                       {[
                         { label: "收盘价", value: hasFiniteNumber(researchBarSummary?.close) ? formatCurrency(researchBarSummary?.close) : "—" },
                         { label: "成交量", value: hasFiniteNumber(researchBarSummary?.volume) ? formatCompactNumber(researchBarSummary?.volume) : "—" },
-                        { label: "当前 Bar VWAP", value: hasFiniteNumber(researchBarSummary?.vwap) ? formatCurrency(researchBarSummary?.vwap) : "—" },
-                        { label: "48根窗口 VWAP", value: hasFiniteNumber(researchBarSummary?.window_vwap) ? formatCurrency(researchBarSummary?.window_vwap) : "—" },
+                        { label: "当前K线 VWAP（成交量加权）", value: hasFiniteNumber(researchBarSummary?.vwap) ? formatCurrency(researchBarSummary?.vwap) : "—" },
+                        { label: "48根窗口 VWAP（成交量加权）", value: hasFiniteNumber(researchBarSummary?.window_vwap) ? formatCurrency(researchBarSummary?.window_vwap) : "—" },
                       ].map((item) => (
                         <div key={item.label} className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
                           <p className="text-[10px] text-slate-500">{item.label}</p>
@@ -1814,7 +2297,7 @@ export default function DashboardPage() {
                     </div>
 
                     <p className="mt-3 text-[11px] leading-5 text-slate-500">
-                      VWAP 计算方式：{formatVwapMethod(researchBarSummary?.vwap_method)}。{researchSnapshot?.bar_panel?.note}
+                      VWAP（成交量加权平均价）计算方式：{formatVwapMethod(researchBarSummary?.vwap_method)}。{researchSnapshot?.bar_panel?.note}
                     </p>
 
                     <div className="mt-4 overflow-hidden rounded-xl border border-white/10">
@@ -1822,7 +2305,7 @@ export default function DashboardPage() {
                         <span>时间</span>
                         <span className="text-right">收盘价</span>
                         <span className="text-right">成交量</span>
-                        <span className="text-right">Bar VWAP</span>
+                        <span className="text-right">单根K线 VWAP（成交量加权）</span>
                       </div>
                       {researchBarRows.slice(-6).map((bar) => (
                         <div key={bar.event_time} className="grid grid-cols-4 border-t border-white/10 px-3 py-2 text-[11px] text-slate-300">
@@ -1833,7 +2316,7 @@ export default function DashboardPage() {
                         </div>
                       ))}
                       {researchBarRows.length === 0 && (
-                        <div className="px-3 py-4 text-xs text-slate-500">这个时间点没有可见的标准化 Bar。</div>
+                        <div className="px-3 py-4 text-xs text-slate-500">这个时间点没有可见的标准化 K 线。</div>
                       )}
                     </div>
                   </div>
@@ -1843,45 +2326,45 @@ export default function DashboardPage() {
                       <div>
                         <p className="text-sm font-bold text-white">信号面板</p>
                         <p className="mt-1 text-[11px] text-slate-400">
-                          L5 策略输出。观望代表没有明确买入/卖出触发，所以方向强度显示为“未触发买卖”。
+                          系统根据行情、因子、新闻和宏观背景生成策略判断。这里的“观望 / 未触发买卖”不是报错，而是表示当前材料没有达到买入或卖出条件；只有 BUY/SELL 等强信号才会进入交易意图和风控链路。
                         </p>
                       </div>
                       <Badge variant="outline" className="border-slate-500/35 bg-slate-800/60 text-slate-300">
-                        signal_events
+                        信号事件表
                       </Badge>
                     </div>
-                    <div className="space-y-2">
-                      {researchSignals.slice(0, 6).map((signal) => (
-                        <div key={signal.id ?? `${signal.source_strategy}-${signal.event_time}`} className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="min-w-0">
-                              <p className="truncate text-xs font-semibold text-slate-200" title={signal.source_strategy || undefined}>
-                                {formatStrategyDisplayName(signal.source_strategy)}
-                              </p>
-                              <p className="mt-1 text-[10px] text-slate-500">
-                                {formatDateTime(signal.timestamp || signal.event_time)} · {signal.provider || signal.data_source || "L5"}
-                              </p>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Badge variant="outline" className={signalBadgeClass(signal.signal_type)}>
-                                {formatSignalLabel(signal.signal_type)}
-                              </Badge>
-                              <span className="text-[11px] text-slate-400">
-                                方向强度 {formatDirectionStrength(signal)}
-                              </span>
-                            </div>
-                          </div>
-                          <p className="mt-2 text-xs leading-5 text-slate-400">{signal.trigger_condition || "暂无触发条件说明。"}</p>
-                          <p className="mt-1 text-[10px] text-slate-500">
-                            策略置信度 {hasFiniteNumber(signal.confidence) ? formatPercent(signal.confidence) : "—"}；置信度是策略对当前判断的把握，不等于买卖强度。
-                          </p>
+                    <div className="space-y-4">
+                      <div>
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <p className="text-xs font-semibold text-slate-200">最新强信号</p>
+                          <span className="text-[10px] text-slate-500">只看 BUY / SELL，同策略同方向只保留最新一条</span>
                         </div>
-                      ))}
-                      {researchSignals.length === 0 && (
-                        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-xs text-slate-500">
-                          这个时间点之前没有可见的 L5 信号。
+                        <div className="space-y-2">
+                          {latestStrongResearchSignals.length > 0 ? (
+                            latestStrongResearchSignals.map((signal) => renderResearchSignalCard(signal))
+                          ) : (
+                            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-xs text-slate-500">
+                              当前没有买入或卖出强信号。
+                            </div>
+                          )}
                         </div>
-                      )}
+                      </div>
+
+                      <div>
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <p className="text-xs font-semibold text-slate-200">策略覆盖状态</p>
+                          <span className="text-[10px] text-slate-500">每个策略保留一条最新状态，观望也展示</span>
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                          {strategyCoverageResearchSignals.length > 0 ? (
+                            strategyCoverageResearchSignals.map((signal) => renderResearchSignalCard(signal, true))
+                          ) : (
+                            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-xs text-slate-500 md:col-span-2">
+                              这个时间点之前没有可见的策略决策信号。
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1891,7 +2374,7 @@ export default function DashboardPage() {
                     <div className="mb-3">
                       <p className="text-sm font-bold text-white">因子面板</p>
                       <p className="mt-1 text-[11px] text-slate-400">
-                        技术因子、情绪因子和宏观事件标签都按同一 as_of_time 对齐。
+                        因子就是系统把 K 线、新闻和宏观数据加工后的指标特征。这里展示的是 TradingAgents 做判断前看到的材料，不是直接买卖建议。
                       </p>
                     </div>
                     <div className="space-y-3">
@@ -1928,7 +2411,7 @@ export default function DashboardPage() {
                       ))}
                       {(researchSnapshot?.factor_panel?.macro_event_tags || []).length > 0 && (
                         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                          <p className="mb-2 text-xs font-semibold text-slate-200">宏观事件标签</p>
+                          <p className="mb-2 text-xs font-semibold text-slate-200">宏观指标标签</p>
                           <div className="flex flex-wrap gap-2">
                             {(researchSnapshot?.factor_panel?.macro_event_tags || []).slice(0, 8).map((tag) => (
                               <Badge key={`${tag.label}-${tag.event_time}`} variant="outline" className="border-amber-400/25 bg-amber-400/10 text-amber-100">
@@ -1946,7 +2429,7 @@ export default function DashboardPage() {
                       <div>
                         <p className="text-sm font-bold text-white">TradingAgents 分析面板</p>
                         <p className="mt-1 text-[11px] text-slate-400">
-                          展示最新一轮多角色分析输入输出，默认决策引擎为 TradingAgentsGraph QuantAgent 适配版。
+                          多个角色读取左侧同一批材料后，分别给出技术、新闻、宏观、风险和组合意见；顶部是最终综合建议，不代表已经真实下单。
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-2">
@@ -1969,9 +2452,9 @@ export default function DashboardPage() {
                             </Badge>
                             <span className="text-xs text-slate-400">置信度 {formatPercent(researchSnapshot.tradingagents_panel.confidence)}</span>
                             <span className="text-xs text-slate-500">角色 {researchSnapshot.tradingagents_panel.role_count ?? 0} 个</span>
-                            {researchSnapshot.tradingagents_panel.risk_veto && (
-                              <Badge variant="outline" className="border-amber-400/25 bg-amber-400/10 text-amber-200">风控否决</Badge>
-                            )}
+                            <Badge variant="outline" className={researchSnapshot.tradingagents_panel.risk_veto ? "border-amber-400/25 bg-amber-400/10 text-amber-200" : "border-emerald-400/25 bg-emerald-400/10 text-emerald-200"}>
+                              {researchSnapshot.tradingagents_panel.risk_veto ? "风控否决" : "风控未否决"}
+                            </Badge>
                           </div>
                           <p className="mt-2 line-clamp-3 text-xs leading-5 text-slate-300">
                             {researchSnapshot.tradingagents_panel.summary || "这条历史决策没有写入摘要。"}
@@ -1987,7 +2470,10 @@ export default function DashboardPage() {
                             return (
                               <div key={section.key} className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
                                 <div className="mb-2 flex items-center justify-between gap-2">
-                                  <p className="text-xs font-semibold text-slate-200">{section.title}</p>
+                                  <div>
+                                    <p className="text-xs font-semibold text-slate-200">{section.title}</p>
+                                    <p className="mt-1 text-[10px] leading-4 text-slate-500">{roleHelpText(section.key, section.title)}</p>
+                                  </div>
                                   <Badge variant="outline" className="border-slate-500/35 bg-slate-900/50 text-slate-300">
                                     {section.items?.length || 0}
                                   </Badge>
@@ -2002,7 +2488,7 @@ export default function DashboardPage() {
                                       {firstRole.summary || firstRole.reasoning || "该角色没有写入文本输出。"}
                                     </p>
                                     <p className="mt-2 text-[10px] text-slate-500">
-                                      数据链路：{firstRole.data_source_chain || "AnalysisContext / OpenBB / CCXT / ClickHouse / L5"}
+                                      数据链路：{formatDataSourceChain(firstRole.data_source_chain)}
                                     </p>
                                   </>
                                 ) : (
@@ -2026,9 +2512,9 @@ export default function DashboardPage() {
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <p className="text-sm font-bold text-white">新闻面板</p>
-                        <p className="mt-1 text-[11px] text-slate-400">标准化 NewsEvent 列表，含情绪评分和资产映射。</p>
+                        <p className="mt-1 text-[11px] text-slate-400">已标准化新闻列表，含情绪评分和关联资产。</p>
                       </div>
-                      <Badge variant="outline" className="border-cyan-400/25 bg-cyan-400/10 text-cyan-200">OpenBB/yfinance → DuckDB</Badge>
+                      <Badge variant="outline" className="border-cyan-400/25 bg-cyan-400/10 text-cyan-200">新闻来源：OpenBB/yfinance</Badge>
                     </div>
                     <div className="space-y-2">
                       {researchNews.slice(0, 5).map((item) => (
@@ -2065,10 +2551,10 @@ export default function DashboardPage() {
                   <div className="rounded-2xl border border-white/10 bg-slate-950/45 p-4">
                     <p className="text-sm font-bold text-white">来源与一致性说明</p>
                     <div className="mt-3 space-y-2 text-xs leading-5 text-slate-400">
-                      <p>K 线：页面读取的是标准化后的 Bar；本地 ClickHouse 是缓存/存储层，不是原始来源。上游链路为 MarketDataGateway 调 OpenBB/yfinance，必要时可降级到 CCXT/OKX。</p>
-                      <p>因子与信号：由 L5 管道从 K 线、新闻、宏观上下文计算并写入 factor_snapshots / signal_events，面板数字直接来自后端研究快照。</p>
-                      <p>新闻与宏观：新闻经 OpenBB/yfinance 标准化为 NewsEvent；宏观经 OpenBB/FRED/OECD 标准化为宏观事件，再参与因子和 Agent 上下文。</p>
-                      <p>回看模式：输入任意历史时间后，后端统一使用 available_time ≤ as_of_time，避免研究页面看到未来数据。</p>
+                      <p>K 线：页面读取的是标准化后的 K 线；本地 ClickHouse 只是缓存/存储层，不是原始行情源。上游由行情网关读取 OpenBB/yfinance，必要时降级到 CCXT/OKX。</p>
+                      <p>因子与信号：系统从 K 线、新闻、宏观上下文计算因子，再生成策略信号；后端分别记录为“因子快照”和“信号事件”。</p>
+                      <p>新闻与宏观：新闻来自 OpenBB/yfinance；宏观来自 OpenBB/FRED/OECD。它们会先标准化，再进入因子和 Agent 上下文。</p>
+                      <p>回看模式：输入任意历史时间后，后端只使用当时已经可用的数据，避免研究页面看到未来数据。</p>
                     </div>
                   </div>
                 </div>
@@ -2416,7 +2902,7 @@ export default function DashboardPage() {
             </div>
           </section>
 
-          {riskStatus && (
+          {(riskLoading || riskError || riskStatus) && (
             <Card className="border-border/50 bg-card/90">
               <CardHeader className="pb-3">
                 <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
@@ -2429,28 +2915,58 @@ export default function DashboardPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                  <div className={`rounded-xl border p-3 ${riskStatus.kill_switch_active ? "border-red-500/30 bg-red-500/10 text-red-300" : "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"}`}>
-                    <p className="text-[10px] uppercase tracking-wider opacity-80">交易开关</p>
-                    <p className="mt-1 text-sm font-bold">{riskStatus.kill_switch_active ? "已触发" : "安全"}</p>
+                {riskLoading ? (
+                  <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> 正在读取风控状态...
                   </div>
-                  <div className="rounded-xl border border-border/60 bg-secondary/30 p-3">
-                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">总回撤</p>
-                    <p className={`mt-1 text-sm font-bold ${riskStatus.drawdown_breached ? "text-red-400" : "text-foreground"}`}>
-                      {riskStatus.total_drawdown_pct}% / {riskStatus.drawdown_limit_pct}%
-                    </p>
+                ) : riskError && !riskStatus ? (
+                  <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 p-4 text-sm text-amber-200">
+                    {riskError}
                   </div>
-                  <div className="rounded-xl border border-border/60 bg-secondary/30 p-3">
-                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">日内盈亏</p>
-                    <p className={`mt-1 text-sm font-bold ${riskStatus.daily_loss_breached ? "text-red-400" : "text-foreground"}`}>
-                      {formatCurrency(riskStatus.daily_pnl)}
-                    </p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    {riskError && (
+                      <div className="mb-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                        {riskError}
+                      </div>
+                    )}
+                    <table className="w-full min-w-[760px] text-left text-sm">
+                      <thead className="border-b border-border/60 text-xs text-muted-foreground">
+                        <tr>
+                          <th className="py-2 font-medium">风控项</th>
+                          <th className="py-2 font-medium">当前值</th>
+                          <th className="py-2 font-medium">阈值</th>
+                          <th className="py-2 font-medium">状态</th>
+                          <th className="py-2 font-medium">说明</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(riskStatus?.checked_rules || []).length > 0 ? (
+                          (riskStatus?.checked_rules || []).map((rule, index) => {
+                            const passed = rule.passed !== false;
+                            return (
+                              <tr key={`${rule.ruleName || rule.rule_name || "rule"}-${index}`} className="border-b border-border/30 last:border-0">
+                                <td className="py-2 font-medium text-foreground">{rule.ruleName || rule.rule_name || "风控项"}</td>
+                                <td className="py-2 font-mono text-foreground/80">{formatRuleValue(rule.currentValue ?? rule.current_value)}</td>
+                                <td className="py-2 font-mono text-muted-foreground">{formatRuleValue(rule.limitValue ?? rule.limit_value)}</td>
+                                <td className="py-2">
+                                  <Badge variant="outline" className={passed ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300" : "border-red-500/20 bg-red-500/10 text-red-300"}>
+                                    {passed ? "通过" : "阻断"}
+                                  </Badge>
+                                </td>
+                                <td className="py-2 text-xs text-muted-foreground">{rule.message || "—"}</td>
+                              </tr>
+                            );
+                          })
+                        ) : (
+                          <tr>
+                            <td colSpan={5} className="py-8 text-center text-muted-foreground">暂无风控状态。</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
                   </div>
-                  <div className="rounded-xl border border-border/60 bg-secondary/30 p-3">
-                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">最大杠杆</p>
-                    <p className="mt-1 text-sm font-bold text-foreground">{riskStatus.max_leverage}x</p>
-                  </div>
-                </div>
+                )}
               </CardContent>
             </Card>
           )}
@@ -2474,6 +2990,20 @@ export default function DashboardPage() {
                   <p className="mt-1 text-xs text-muted-foreground">
                     当前未平仓的模拟仓位，盈亏按 {currentExchangeInfo.label} 标记价格估算。
                   </p>
+                  <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
+                    <Badge variant="outline" className="border-border bg-secondary/40 text-muted-foreground">
+                      数据源 {positionsMeta?.data_source || "paper_positions"}
+                    </Badge>
+                    <Badge variant="outline" className="border-border bg-secondary/40 text-muted-foreground">
+                      最后更新 {formatMetaTime(positionsMeta?.last_updated)}
+                    </Badge>
+                    <Badge variant="outline" className="border-border bg-secondary/40 text-muted-foreground">
+                      缓存 {positionsMeta?.is_cached ? "是" : "否"}
+                    </Badge>
+                    <Badge variant="outline" className={positionsMeta?.fallback_source ? "border-amber-500/25 bg-amber-500/10 text-amber-200" : "border-border bg-secondary/40 text-muted-foreground"}>
+                      备用源 {positionsMeta?.fallback_source || "未使用"}
+                    </Badge>
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground hover:text-foreground px-2" onClick={fetchPositions}>
@@ -2492,6 +3022,10 @@ export default function DashboardPage() {
                 <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
                   <RefreshCw className="w-4 h-4 animate-spin mr-2" /> 加载持仓中...
                 </div>
+              ) : positionsError && positions.length === 0 ? (
+                <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 p-5 text-center text-sm text-amber-200">
+                  {positionsError}
+                </div>
               ) : positions.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-10 text-muted-foreground">
                   <Activity className="w-10 h-10 mb-3 opacity-30" />
@@ -2499,58 +3033,68 @@ export default function DashboardPage() {
                   <p className="text-xs text-muted-foreground/50 mt-1">点击上方「模拟下单」开始模拟交易</p>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {positions.map((pos, idx) => (
-                    <div key={idx} className="group relative p-4 bg-gradient-to-br bg-card rounded-xl border border-border/50 hover:hover:border-border transition-all hover:shadow-lg">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 bg-green-500/15 text-green-400 border border-green-500/20 rounded-lg flex items-center justify-center">
-                            <TrendingUp className="w-4 h-4" />
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-bold text-foreground">{pos.symbol}</span>
-                              <Badge variant="outline" className="text-[9px] px-1 py-0 bg-green-500/10 text-green-400 border-green-500/20">LONG</Badge>
-                            </div>
-                            <p className="text-[10px] text-muted-foreground">持仓 {Number(pos.quantity).toFixed(6)}</p>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <p className={`text-lg font-bold ${pos.pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
-                            {pos.pnl >= 0 ? "+" : ""}${Number(pos.pnl).toFixed(2)}
-                          </p>
-                          <div className={`inline-flex items-center px-1.5 rounded text-[10px] font-medium ${pos.pnl >= 0 ? "bg-green-500/10 text-green-400" : "bg-red-500/10 text-red-400"}`}>
-                            {pos.pnl_pct >= 0 ? "+" : ""}{Number(pos.pnl_pct).toFixed(2)}%
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-3 gap-1 p-2 bg-card/50 rounded-lg border border-border/50 text-center">
-                        <div>
-                          <p className="text-muted-foreground text-[9px] uppercase">开仓</p>
-                          <p className="text-foreground/90 font-medium text-xs">${Number(pos.avg_price).toFixed(2)}</p>
-                        </div>
-                        <div className="border-x border-border/50">
-                          <p className="text-muted-foreground text-[9px] uppercase">标记价</p>
-                          <p className="text-blue-400 font-medium text-xs">${Number(pos.mark_price).toFixed(2)}</p>
-                        </div>
-                        <div>
-                          <p className="text-muted-foreground text-[9px] uppercase">数量</p>
-                          <p className="text-foreground/80 font-medium text-xs">{Number(pos.quantity).toFixed(4)}</p>
-                        </div>
-                      </div>
-
-                      <div className="mt-2 flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Button
-                          variant="ghost" size="sm"
-                          className="h-6 text-[10px] text-red-400 hover:bg-red-500/10 px-2"
-                          onClick={() => handleClosePosition(pos)}
-                        >
-                          平仓
-                        </Button>
-                      </div>
+                <div className="overflow-x-auto">
+                  {positionsError && (
+                    <div className="mb-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                      {positionsError}
                     </div>
-                  ))}
+                  )}
+                  <table className="w-full min-w-[1080px] text-left text-sm">
+                    <thead className="border-b border-border/60 text-xs text-muted-foreground">
+                      <tr>
+                        <th className="py-2 font-medium">symbol</th>
+                        <th className="py-2 font-medium">side</th>
+                        <th className="py-2 font-medium">quantity</th>
+                        <th className="py-2 font-medium">avgEntryPrice</th>
+                        <th className="py-2 font-medium">markPrice</th>
+                        <th className="py-2 font-medium">unrealizedPnl</th>
+                        <th className="py-2 font-medium">unrealizedPnlPct</th>
+                        <th className="py-2 font-medium">source</th>
+                        <th className="py-2 font-medium">relatedDecisionId</th>
+                        <th className="py-2 font-medium">riskStatus</th>
+                        <th className="py-2 font-medium">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {positions.map((pos, idx) => {
+                        const pnl = hasFiniteNumber(pos.unrealizedPnl) ? toFiniteNumber(pos.unrealizedPnl) : toFiniteNumber(pos.pnl);
+                        const pnlPct = hasFiniteNumber(pos.unrealizedPnlPct) ? toFiniteNumber(pos.unrealizedPnlPct) : toFiniteNumber(pos.pnl_pct);
+                        const avgEntry = hasFiniteNumber(pos.avgEntryPrice) ? toFiniteNumber(pos.avgEntryPrice) : toFiniteNumber(pos.avg_price);
+                        const mark = hasFiniteNumber(pos.markPrice) ? toFiniteNumber(pos.markPrice) : toFiniteNumber(pos.mark_price);
+                        return (
+                          <tr key={`${pos.symbol}-${idx}`} className="border-b border-border/30 last:border-0">
+                            <td className="py-2 font-medium text-foreground">{pos.symbol}</td>
+                            <td className="py-2">
+                              <Badge variant="outline" className={toFiniteNumber(pos.quantity) >= 0 ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300" : "border-red-500/20 bg-red-500/10 text-red-300"}>
+                                {formatPositionSide(pos)}
+                              </Badge>
+                            </td>
+                            <td className="py-2 font-mono text-foreground/80">{Math.abs(toFiniteNumber(pos.quantity)).toFixed(6)}</td>
+                            <td className="py-2 font-mono text-foreground/80">{formatCurrency(avgEntry)}</td>
+                            <td className="py-2 font-mono text-blue-300">{formatCurrency(mark)}</td>
+                            <td className={`py-2 font-mono ${pnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>{pnl >= 0 ? "+" : ""}{formatCurrency(pnl)}</td>
+                            <td className={`py-2 font-mono ${pnlPct >= 0 ? "text-emerald-400" : "text-red-400"}`}>{pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%</td>
+                            <td className="py-2 text-muted-foreground">{formatSourceLabel(pos.source)}</td>
+                            <td className="py-2 font-mono text-muted-foreground">{pos.relatedDecisionId ?? "—"}</td>
+                            <td className="py-2">
+                              <Badge variant="outline" className={pos.riskStatus === "warning" ? "border-amber-500/25 bg-amber-500/10 text-amber-200" : "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"}>
+                                {formatRiskLabel(pos.riskStatus)}
+                              </Badge>
+                            </td>
+                            <td className="py-2">
+                              <Button
+                                variant="ghost" size="sm"
+                                className="h-7 text-[11px] text-red-400 hover:bg-red-500/10 px-2"
+                                onClick={() => handleClosePosition(pos)}
+                              >
+                                平仓
+                              </Button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </CardContent>
@@ -2569,6 +3113,20 @@ export default function DashboardPage() {
                   <p className="mt-1 text-xs text-muted-foreground">
                     这里是模拟盘订单流水，成交价来自当时的标记价格，不代表真实账户成交记录。
                   </p>
+                  <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
+                    <Badge variant="outline" className="border-border bg-secondary/40 text-muted-foreground">
+                      数据源 {ordersMeta?.data_source || "paper_trades"}
+                    </Badge>
+                    <Badge variant="outline" className="border-border bg-secondary/40 text-muted-foreground">
+                      最后更新 {formatMetaTime(ordersMeta?.last_updated)}
+                    </Badge>
+                    <Badge variant="outline" className="border-border bg-secondary/40 text-muted-foreground">
+                      缓存 {ordersMeta?.is_cached ? "是" : "否"}
+                    </Badge>
+                    <Badge variant="outline" className={ordersMeta?.fallback_source ? "border-amber-500/25 bg-amber-500/10 text-amber-200" : "border-border bg-secondary/40 text-muted-foreground"}>
+                      备用源 {ordersMeta?.fallback_source || "未使用"}
+                    </Badge>
+                  </div>
                 </div>
                 <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground hover:text-foreground px-2" onClick={fetchPaperOrders}>
                   <RefreshCw className="w-3 h-3 mr-1" /> 刷新
@@ -2580,31 +3138,44 @@ export default function DashboardPage() {
                 <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
                   <RefreshCw className="w-4 h-4 animate-spin mr-2" /> 加载订单中...
                 </div>
+              ) : ordersError && paperOrders.length === 0 ? (
+                <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 p-5 text-center text-sm text-amber-200">
+                  {ordersError}
+                </div>
               ) : paperOrders.length === 0 ? (
                 <div className="rounded-xl border border-border/60 bg-secondary/20 p-5 text-center text-sm text-muted-foreground">
                   暂无模拟订单。点击“模拟下单”后，成交会出现在这里。
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[760px] text-left text-sm">
+                  {ordersError && (
+                    <div className="mb-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                      {ordersError}
+                    </div>
+                  )}
+                  <table className="w-full min-w-[1120px] text-left text-sm">
                     <thead className="border-b border-border/60 text-xs text-muted-foreground">
                       <tr>
-                        <th className="py-2 font-medium">时间</th>
-                        <th className="py-2 font-medium">交易对</th>
-                        <th className="py-2 font-medium">方向</th>
-                        <th className="py-2 font-medium">数量</th>
-                        <th className="py-2 font-medium">成交价</th>
-                        <th className="py-2 font-medium">手续费</th>
-                        <th className="py-2 font-medium">已实现盈亏</th>
-                        <th className="py-2 font-medium">状态</th>
+                        <th className="py-2 font-medium">orderId</th>
+                        <th className="py-2 font-medium">source</th>
+                        <th className="py-2 font-medium">symbol</th>
+                        <th className="py-2 font-medium">side</th>
+                        <th className="py-2 font-medium">quantity</th>
+                        <th className="py-2 font-medium">filledAt</th>
+                        <th className="py-2 font-medium">fillPrice</th>
+                        <th className="py-2 font-medium">fee</th>
+                        <th className="py-2 font-medium">slippage</th>
+                        <th className="py-2 font-medium">realizedPnl</th>
+                        <th className="py-2 font-medium">relatedDecisionId</th>
+                        <th className="py-2 font-medium">status</th>
+                        <th className="py-2 font-medium">审计联动</th>
                       </tr>
                     </thead>
                     <tbody>
                       {paperOrders.map((order) => (
                         <tr key={order.order_id} className="border-b border-border/30 last:border-0">
-                          <td className="py-2 text-xs text-muted-foreground">
-                            {order.created_at ? new Date(order.created_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
-                          </td>
+                          <td className="py-2 font-mono text-xs text-muted-foreground">{order.orderId || order.order_id}</td>
+                          <td className="py-2 text-muted-foreground">{formatSourceLabel(order.source)}</td>
                           <td className="py-2 font-medium text-foreground">{order.symbol}</td>
                           <td className="py-2">
                             <Badge variant="outline" className={order.side === "BUY" ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300" : "border-red-500/20 bg-red-500/10 text-red-300"}>
@@ -2612,12 +3183,28 @@ export default function DashboardPage() {
                             </Badge>
                           </td>
                           <td className="py-2 font-mono text-foreground/80">{toFiniteNumber(order.quantity).toFixed(6)}</td>
-                          <td className="py-2 font-mono text-foreground/80">{formatCurrency(order.price)}</td>
+                          <td className="py-2 text-xs text-muted-foreground">{formatMetaTime(order.filledAt || order.createdAt || order.created_at)}</td>
+                          <td className="py-2 font-mono text-foreground/80">{formatCurrency(order.fillPrice ?? order.price)}</td>
                           <td className="py-2 font-mono text-muted-foreground">{formatCurrency(order.fee)}</td>
-                          <td className={`py-2 font-mono ${hasFiniteNumber(order.pnl) ? (toFiniteNumber(order.pnl) >= 0 ? "text-emerald-400" : "text-red-400") : "text-muted-foreground"}`}>
-                            {hasFiniteNumber(order.pnl) ? formatCurrency(order.pnl) : "—"}
+                          <td className="py-2 font-mono text-muted-foreground">{hasFiniteNumber(order.slippage) ? `${(toFiniteNumber(order.slippage) * 100).toFixed(4)}%` : "—"}</td>
+                          <td className={`py-2 font-mono ${hasFiniteNumber(order.realizedPnl ?? order.pnl) ? (toFiniteNumber(order.realizedPnl ?? order.pnl) >= 0 ? "text-emerald-400" : "text-red-400") : "text-muted-foreground"}`}>
+                            {hasFiniteNumber(order.realizedPnl ?? order.pnl) ? formatCurrency(order.realizedPnl ?? order.pnl) : "—"}
                           </td>
+                          <td className="py-2 font-mono text-muted-foreground">{order.relatedDecisionId ?? "—"}</td>
                           <td className="py-2 text-xs text-muted-foreground">{formatOrderStatus(order.status)}</td>
+                          <td className="py-2 text-xs">
+                            {order.relatedDecisionId ? (
+                              <Link href={`/audit?decision_id=${order.relatedDecisionId}`} className="text-cyan-300 hover:text-cyan-200">
+                                决策详情
+                              </Link>
+                            ) : (order.orderId || order.order_id) ? (
+                              <Link href={`/audit?order_id=${encodeURIComponent(order.orderId || order.order_id)}`} className="text-slate-300 hover:text-white">
+                                审计查询
+                              </Link>
+                            ) : (
+                              <span className="text-muted-foreground">暂无关联记录</span>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -2804,5 +3391,13 @@ export default function DashboardPage() {
         />
       )}
     </div>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><p className="text-muted-foreground">Loading...</p></div>}>
+      <DashboardPageContent />
+    </Suspense>
   );
 }

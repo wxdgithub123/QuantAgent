@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { fetchCached } from "@/lib/fetchCache";
 import { Activity, AlertTriangle, CheckCircle2, Database, GitBranch, Layers, RefreshCw, Workflow } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -70,9 +71,7 @@ export function PrdV1FlowPanel({ className }: { className?: string }) {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetch("/api/v1/system/prd-flow", { cache: "no-store" });
-      if (!response.ok) throw new Error(`prd-flow ${response.status}`);
-      const payload = (await response.json()) as unknown;
+      const payload = await fetchCached("/api/v1/system/prd-flow", { cache: "no-store" }, 30_000);
       setState({
         overallStatus: readString(payload, ["overall_status"], "check"),
         stages: toStages(readPath(payload, ["stages"])),

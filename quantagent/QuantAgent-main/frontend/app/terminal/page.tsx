@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import Link from "next/link";
 import ReactMarkdown from "react-markdown";
+import { AppTopNav } from "@/components/navigation/AppTopNav";
 import remarkGfm from "remark-gfm";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -388,79 +388,47 @@ export default function TerminalPage() {
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* ── Header ── */}
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
-        <div className="container mx-auto px-4 py-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 bg-gradient-to-br from-purple-500 to-blue-600 rounded-xl flex items-center justify-center">
-                <Brain className="w-5 h-5 text-white" />
+      <AppTopNav
+        activeSection="terminal"
+        title="对话分析"
+        subtitle="自然语言驱动的多代理交易分析"
+        rightSlot={
+          <>
+            {/* LLM Provider Selector */}
+            <div className="flex flex-col items-end gap-0.5">
+              <div className="flex items-center gap-1.5">
+                <Cpu className="w-3.5 h-3.5 text-muted-foreground" />
+                <Select value={provider} onValueChange={v => { setProvider(v); if (v === "ollama") fetch("/api/v1/market/ollama/status").then(r => r.ok ? r.json() : null).then(d => { if (d) setOllamaStatus({ ...d, checked: true }); }).catch(() => setOllamaStatus({ online: false, checked: true })); }}>
+                  <SelectTrigger className={`w-[185px] bg-secondary border-border text-foreground h-8 text-sm ${isOllamaOffline ? "border-orange-500/50" : ""}`}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-secondary border-border">
+                    {LLM_PROVIDERS.map(p => (
+                      <SelectItem key={p.value} value={p.value} className="text-foreground focus:bg-secondary cursor-pointer">{p.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-              <div>
-                <h1 className="text-lg font-bold text-foreground">QuantAgent Terminal</h1>
-                <p className="text-[10px] text-muted-foreground">Multi-Agent Natural Language Trading</p>
-              </div>
+              {provider === "ollama" && ollamaStatus.checked && (
+                <span className={`text-[10px] ${ollamaStatus.online ? "text-green-400" : "text-orange-400"} flex items-center gap-0.5`}>
+                  {ollamaStatus.online ? <><CheckCircle className="w-2.5 h-2.5" />在线</> : <><WifiOff className="w-2.5 h-2.5" />未运行</>}
+                </span>
+              )}
             </div>
-
-            <nav className="hidden md:flex items-center gap-1">
-              <Link href="/dashboard" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-                <LayoutDashboard className="w-4 h-4" /> 仪表盘
-              </Link>
-              <Link href="/backtest" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-                <BarChart className="w-4 h-4" /> 回测
-              </Link>
-              <Link href="/replay" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-                <History className="w-4 h-4" /> 历史回放
-              </Link>
-              <Link href="/strategies" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-                <BookOpen className="w-4 h-4" /> 策略库
-              </Link>
-              <span className="px-3 py-1.5 text-sm text-purple-400 bg-purple-500/10 rounded-lg border border-purple-500/20 font-medium flex items-center gap-1.5">
-                <Brain className="w-4 h-4" /> 终端
-              </span>
-              <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
-                <Server className="w-4 h-4" /> Hummingbot
-              </Link>
-              <Link href="/signals" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Layers className="w-4 h-4" /> 因子/信号</Link>
-              <Link href="/decisions" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Brain className="w-4 h-4" /> 决策中心</Link>
-            </nav>
-
-            <div className="flex items-center gap-2">
-              {/* LLM Provider Selector */}
-              <div className="flex flex-col items-end gap-0.5">
-                <div className="flex items-center gap-1.5">
-                  <Cpu className="w-3.5 h-3.5 text-muted-foreground" />
-                  <Select value={provider} onValueChange={v => { setProvider(v); if (v === "ollama") fetch("/api/v1/market/ollama/status").then(r => r.ok ? r.json() : null).then(d => { if (d) setOllamaStatus({ ...d, checked: true }); }).catch(() => setOllamaStatus({ online: false, checked: true })); }}>
-                    <SelectTrigger className={`w-[185px] bg-secondary border-border text-foreground h-8 text-sm ${isOllamaOffline ? "border-orange-500/50" : ""}`}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="bg-secondary border-border">
-                      {LLM_PROVIDERS.map(p => (
-                        <SelectItem key={p.value} value={p.value} className="text-foreground focus:bg-secondary cursor-pointer">{p.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                {provider === "ollama" && ollamaStatus.checked && (
-                  <span className={`text-[10px] ${ollamaStatus.online ? "text-green-400" : "text-orange-400"} flex items-center gap-0.5`}>
-                    {ollamaStatus.online ? <><CheckCircle className="w-2.5 h-2.5" />在线</> : <><WifiOff className="w-2.5 h-2.5" />未运行</>}
-                  </span>
-                )}
-              </div>
-              {/* Symbol Selector */}
-              <Select value={symbol} onValueChange={setSymbol}>
-                <SelectTrigger className="w-[130px] bg-secondary border-border text-foreground h-8 text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="bg-secondary border-border">
-                  {SYMBOLS.map(s => (
-                    <SelectItem key={s.value} value={s.value} className="text-foreground focus:bg-secondary cursor-pointer">{s.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </div>
-      </header>
+            {/* Symbol Selector */}
+            <Select value={symbol} onValueChange={setSymbol}>
+              <SelectTrigger className="w-[130px] bg-secondary border-border text-foreground h-8 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-secondary border-border">
+                {SYMBOLS.map(s => (
+                  <SelectItem key={s.value} value={s.value} className="text-foreground focus:bg-secondary cursor-pointer">{s.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </>
+        }
+      />
 
       {/* ── Main ── */}
       <main className="flex-1 container mx-auto px-4 py-4 flex gap-4 min-h-0">

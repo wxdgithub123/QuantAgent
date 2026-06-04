@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
-import Link from "next/link";
+import { AppTopNav } from "@/components/navigation/AppTopNav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -408,50 +408,9 @@ export default function StrategiesPage() {
   const strategyColorCls = STRATEGY_COLORS[selectedTemplate] || "text-muted-foreground bg-secondary border-border";
 
   return (
-    <div className="min-h-screen bg-[#0a0e1a] text-foreground">
+    <div className="min-h-screen bg-background text-foreground">
       {/* ── Header ── */}
-      <header className="sticky top-0 z-40 border-b border-border/60 bg-[#0a0e1a]/95 backdrop-blur-md">
-        <div className="container mx-auto px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-orange-500 to-amber-600 flex items-center justify-center shadow-lg shadow-orange-500/20">
-              <BookOpen className="w-4 h-4 text-white" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-foreground">QuantAgent OS</h1>
-              <p className="text-[10px] text-muted-foreground">策略库 & 参数优化</p>
-            </div>
-          </div>
-
-          <nav className="hidden md:flex items-center gap-1">
-            <Link href="/dashboard" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-              <LayoutDashboard className="w-4 h-4" /> 仪表盘
-            </Link>
-            <Link href="/backtest" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-              <BarChart2 className="w-4 h-4" /> 回测
-            </Link>
-            <Link href="/replay" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-              <History className="w-4 h-4" /> 历史回放
-            </Link>
-            <span className="px-3 py-1.5 text-sm text-orange-400 bg-orange-500/10 rounded-lg border border-orange-500/20 font-medium flex items-center gap-1.5">
-              <BookOpen className="w-4 h-4" /> 策略库
-            </span>
-            <Link href="/strategies/monitor" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-              <Activity className="w-4 h-4" /> 监控大盘
-            </Link>
-            <Link href="/terminal" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5">
-              <Terminal className="w-4 h-4" /> 终端
-            </Link>
-            <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
-              <Server className="w-4 h-4" /> Hummingbot
-            </Link>
-            <Link href="/hummingbot-testnet" className="px-3 py-1.5 text-sm text-orange-400 hover:text-orange-100 hover:bg-orange-500/10 rounded-lg transition-all flex items-center gap-1.5">
-              <Server className="w-4 h-4" /> Testnet
-            </Link>
-            <Link href="/signals" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Layers className="w-4 h-4" /> 因子/信号</Link>
-            <Link href="/decisions" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Brain className="w-4 h-4" /> 决策中心</Link>
-          </nav>
-        </div>
-      </header>
+      <AppTopNav activeSection="strategies" title="策略库" subtitle="策略模板、参数优化与回测验证" />
 
       <main className="container mx-auto px-4 py-6 space-y-6">
         {/* ── Strategy Selection Row ── */}

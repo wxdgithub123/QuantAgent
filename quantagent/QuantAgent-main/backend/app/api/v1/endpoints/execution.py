@@ -64,7 +64,21 @@ async def latest_order_intent_audit(
     from sqlalchemy import text
     from app.services.database import get_db
 
-    where = "action LIKE 'ORDER_INTENT_%'"
+    where = """
+    (
+      action LIKE 'ORDER_INTENT_%'
+      OR action IN (
+        'ORDER_INTENT_CREATED',
+        'RISK_CHECK_PASSED',
+        'RISK_BLOCKED',
+        'PAPER_ORDER_FILLED',
+        'PAPER_ORDER_REJECTED',
+        'HOLD_RECORDED'
+      )
+      OR details->>'orderIntentId' IS NOT NULL
+      OR details->'intent'->>'intent_id' IS NOT NULL
+    )
+    """
     params: Dict[str, Any] = {"limit": limit}
     if symbol:
         where += " AND resource = :symbol"

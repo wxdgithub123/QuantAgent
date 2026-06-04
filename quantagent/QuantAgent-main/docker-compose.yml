@@ -258,6 +258,9 @@ services:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:1.5b}
       - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
       - OPENBB_FRED_API_KEY=${OPENBB_FRED_API_KEY:-}
       - USE_TRADINGAGENTS=${USE_TRADINGAGENTS:-true}
       - TRADINGAGENTS_SERVICE_URL=${TRADINGAGENTS_SERVICE_URL:-http://tradingagents-service:8010}
@@ -289,7 +292,7 @@ services:
     extra_hosts:
       - "host-gateway:host-gateway"
       - "host.docker.internal:host-gateway"
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
 
   # Frontend (Next.js)
   frontend:
@@ -304,8 +307,6 @@ services:
       - NEXT_PUBLIC_API_URL=http://backend:8000
       - NEXT_PUBLIC_WS_URL=ws://backend:8000/ws/market
       - TRADINGAGENTS_SERVICE_URL=http://tradingagents-service:8010
-      - CHOKIDAR_USEPOLLING=true
-      - WATCHPACK_POLLING=true
     volumes:
       - ./frontend:/app
       - /app/.next           # 排除 .next，使用容器内部目录（避免 lockfile 权限问题）
@@ -314,6 +315,7 @@ services:
       - backend
     networks:
       - quantagent-network
+    command: sh -c "cd /app && sh start.sh"
 
 volumes:
   postgres_data:

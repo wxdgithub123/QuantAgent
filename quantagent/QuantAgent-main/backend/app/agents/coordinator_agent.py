@@ -992,9 +992,10 @@ DECISION_REASONING: <裁决理由>
     async def _persist_result(result: CoordinationResult) -> None:
         """Persist full coordination result to coordination_history."""
         import json as json_module
+        decision_id = None
         try:
             async with get_db() as session:
-                await session.execute(
+                persisted = await session.execute(
                     sql_text("""
                         INSERT INTO coordination_history
                             (symbol, timestamp, final_signal, confidence,
@@ -1006,6 +1007,7 @@ DECISION_REASONING: <裁决理由>
                              :vote_breakdown, :risk_veto, :summary, :agent_signals,
                              :bull_view, :bear_view, :input_snapshot_ids,
                              :role_opinions, :position_advice, :risk_notes)
+                        RETURNING id
                     """),
                     {
                         "symbol": result.symbol,
@@ -1024,8 +1026,42 @@ DECISION_REASONING: <裁决理由>
                         "risk_notes": (result.risk_notes or "")[:2000],
                     },
                 )
+                decision_id = persisted.scalar()
         except Exception as e:
             logger.error(f"[coordinator] Failed to persist result: {e}")
+            return
+
+        if decision_id:
+            try:
+                from app.services.audit_service import audit_service
+
+                await audit_service.log_event(
+                    action="AGENT_DECISION",
+                    user_id="system",
+                    resource=result.symbol,
+                    details={
+                        "decisionId": decision_id,
+                        "asOfTime": result.timestamp.isoformat() if result.timestamp else None,
+                        "snapshotId": result.input_snapshot_ids,
+                        "inputSummary": {
+                            "snapshot_ids": result.input_snapshot_ids,
+                            "risk_notes": result.risk_notes,
+                        },
+                        "agentOutputs": result.role_opinions or result.agent_signals,
+                        "decision": {
+                            "id": decision_id,
+                            "symbol": result.symbol,
+                            "timestamp": result.timestamp.isoformat() if result.timestamp else None,
+                            "final_signal": result.final_signal.value,
+                            "confidence": result.confidence,
+                            "risk_veto": result.risk_veto,
+                            "summary": result.summary,
+                        },
+                    },
+                    ip_address="internal",
+                )
+            except Exception as exc:
+                logger.warning("[coordinator] Failed to write AGENT_DECISION audit: %s", exc)
 
     # ── Streaming ────────────────────────────────────────────────────────────
 

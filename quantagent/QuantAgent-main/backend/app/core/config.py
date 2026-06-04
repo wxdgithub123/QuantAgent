@@ -71,8 +71,10 @@ class Settings(BaseSettings):
     
     # Risk Management (Phase B Hot Reload)
     MAX_SINGLE_POSITION_PCT: float = 0.20
+    MAX_TOTAL_EXPOSURE_PCT: float = 1.00
     MAX_TOTAL_DRAWDOWN_PCT: float = 0.15
     MAX_DAILY_LOSS_PCT: float = 0.05
+    FORBIDDEN_SYMBOLS: list[str] = []
     PRICE_DEVIATION_PCT: float = 0.05
     
     # Leverage & Margin (Phase C)

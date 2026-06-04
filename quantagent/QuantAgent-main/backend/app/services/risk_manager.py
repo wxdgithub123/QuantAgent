@@ -69,7 +69,7 @@ class RiskManager:
         return self.simulated_time or datetime.now(timezone.utc)
 
     # ── 阈值获取 (支持热更新) ──────────────────────────────────────────────────
-    async def get_config(self) -> Dict[str, float]:
+    async def get_config(self) -> Dict[str, Any]:
         """获取当前风控配置，优先从 Redis 获取，否则使用 settings"""
         cached = await redis_get(REDIS_RISK_CONFIG_KEY)
         if cached:
@@ -83,6 +83,8 @@ class RiskManager:
             "MAX_SINGLE_POSITION_PCT": settings.MAX_SINGLE_POSITION_PCT,
             "MAX_TOTAL_DRAWDOWN_PCT": settings.MAX_TOTAL_DRAWDOWN_PCT,
             "MAX_DAILY_LOSS_PCT": settings.MAX_DAILY_LOSS_PCT,
+            "MAX_TOTAL_EXPOSURE_PCT": getattr(settings, "MAX_TOTAL_EXPOSURE_PCT", 1.0),
+            "FORBIDDEN_SYMBOLS": getattr(settings, "FORBIDDEN_SYMBOLS", []),
             "PRICE_DEVIATION_PCT": settings.PRICE_DEVIATION_PCT,
             "MAX_VOLATILITY_THRESHOLD": 0.80, # 80% 年化波动率阈值
             "MAINTENANCE_MARGIN_RATE": settings.MAINTENANCE_MARGIN_RATE,
@@ -90,6 +92,75 @@ class RiskManager:
             "PRE_LIQUIDATION_LEVEL": settings.PRE_LIQUIDATION_LEVEL,
             "VOLATILITY_TARGET_PCT": settings.VOLATILITY_TARGET_PCT,
         }
+
+    async def preview_order_rules(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        current_balance: float,
+        current_positions: Dict[str, float],
+        total_portfolio_value: float,
+        leverage: int = 1,
+    ) -> List[Dict[str, Any]]:
+        """Build user-facing RiskGuard rule rows for preview and dashboard display."""
+        config = await self.get_config()
+        symbol = symbol.upper()
+        side = side.upper()
+        qty_dec = Decimal(str(quantity))
+        price_dec = Decimal(str(price))
+        order_value = float(qty_dec * price_dec)
+        portfolio_value = max(float(total_portfolio_value), 0.0)
+        current_pos_qty = Decimal(str(current_positions.get(symbol, 0)))
+        new_qty = current_pos_qty
+        if side == "BUY":
+            new_qty = current_pos_qty + qty_dec
+        elif side == "SELL":
+            new_qty = current_pos_qty - qty_dec
+
+        single_limit_pct = float(config.get("MAX_SINGLE_POSITION_PCT", 0.20))
+        exposure_limit_pct = float(config.get("MAX_TOTAL_EXPOSURE_PCT", 1.0))
+        drawdown_limit_pct = float(config.get("MAX_TOTAL_DRAWDOWN_PCT", 0.15))
+        daily_loss_limit_pct = float(config.get("MAX_DAILY_LOSS_PCT", 0.05))
+        max_leverage = self._calculate_dynamic_leverage(portfolio_value)
+        forbidden_symbols = {str(item).upper() for item in (config.get("FORBIDDEN_SYMBOLS") or [])}
+        peak = await self._get_peak_balance(portfolio_value)
+        drawdown = (peak - portfolio_value) / peak if peak > 0 else 0.0
+        daily_pnl = await self._get_today_realized_pnl()
+        daily_loss_pct = abs(daily_pnl) / float(INITIAL_BALANCE) if daily_pnl < 0 else 0.0
+        kill_switch = await redis_get(REDIS_KILL_SWITCH_KEY)
+
+        current_exposure = sum(abs(Decimal(str(q))) * price_dec for q in current_positions.values())
+        previous_symbol_exposure = abs(current_pos_qty) * price_dec
+        new_symbol_exposure = abs(new_qty) * price_dec
+        total_exposure = current_exposure - previous_symbol_exposure + new_symbol_exposure
+        max_single_value = portfolio_value * single_limit_pct
+        max_total_exposure = portfolio_value * exposure_limit_pct
+
+        def row(rule: str, current: Any, limit: Any, passed: bool, message: str) -> Dict[str, Any]:
+            return {
+                "ruleName": rule,
+                "rule_name": rule,
+                "currentValue": current,
+                "current_value": current,
+                "limitValue": limit,
+                "limit_value": limit,
+                "passed": bool(passed),
+                "message": message,
+            }
+
+        return [
+            row("交易开关", "开启" if not kill_switch else "熔断", "必须开启", not bool(kill_switch), "全局熔断打开时禁止新增模拟订单。"),
+            row("单笔仓位上限", round(float(new_symbol_exposure), 4), round(max_single_value, 4), float(new_symbol_exposure) <= max_single_value or portfolio_value <= 0, "单一标的仓位不得超过账户权益上限。"),
+            row("总敞口上限", round(float(total_exposure), 4), round(max_total_exposure, 4), float(total_exposure) <= max_total_exposure or portfolio_value <= 0, "所有未平仓风险敞口合计不得超过账户权益上限。"),
+            row("日内最大亏损", round(daily_loss_pct * 100, 4), round(daily_loss_limit_pct * 100, 4), daily_loss_pct < daily_loss_limit_pct, "超过日内亏损阈值时禁止新增开仓。"),
+            row("最大回撤", round(drawdown * 100, 4), round(drawdown_limit_pct * 100, 4), drawdown < drawdown_limit_pct, "账户回撤超过阈值时触发保护。"),
+            row("禁止交易标的", symbol, "不在禁用列表", symbol not in forbidden_symbols, "禁用列表中的标的不允许模拟下单。"),
+            row("最大杠杆", leverage, max_leverage, int(leverage) <= max_leverage, "模拟订单杠杆不得超过动态上限。"),
+            row("订单名义金额", round(order_value, 4), round(portfolio_value * 1.05, 4), order_value <= portfolio_value * 1.05 or portfolio_value <= 0, "防止把 USDT 金额误填成币数量。"),
+        ]
 
     async def update_config(self, new_config: Dict[str, float]):
         """更新风控配置到 Redis"""
@@ -170,6 +241,9 @@ class RiskManager:
 
         # 获取当前配置
         config = await self.get_config()
+        forbidden_symbols = {str(item).upper() for item in (config.get("FORBIDDEN_SYMBOLS") or [])}
+        if symbol.upper() in forbidden_symbols:
+            return RiskCheckResult(allowed=False, rule="FORBIDDEN_SYMBOL", reason=f"{symbol} is blocked by RiskGuard forbidden-symbol list")
         
         # 判定是否为开仓/加仓行为 (增加敞口)
         current_pos_qty = Decimal(str(current_positions.get(symbol, 0)))
@@ -251,6 +325,22 @@ class RiskManager:
                     "max_allowed": float(max_allowed),
                 })
                 return RiskCheckResult(allowed=False, rule="MAX_SINGLE_POSITION", reason=reason)
+
+            exposure_limit = Decimal(str(config.get("MAX_TOTAL_EXPOSURE_PCT", 1.0)))
+            current_exposure = sum(abs(Decimal(str(q))) * price_dec for q in current_positions.values())
+            previous_symbol_exposure = abs(current_pos_qty) * price_dec
+            total_exposure = current_exposure - previous_symbol_exposure + new_pos_value
+            max_total_exposure = Decimal(str(total_portfolio_value)) * exposure_limit
+            if total_exposure > max_total_exposure:
+                reason = (
+                    f"总敞口超限：模拟后总敞口 ${float(total_exposure):.2f}，"
+                    f"超过账户总值 {float(exposure_limit) * 100:.0f}% 上限 ${float(max_total_exposure):.2f}"
+                )
+                await self._log_risk_event(symbol, "MAX_TOTAL_EXPOSURE", True, {
+                    "total_exposure": float(total_exposure),
+                    "max_total_exposure": float(max_total_exposure),
+                })
+                return RiskCheckResult(allowed=False, rule="MAX_TOTAL_EXPOSURE", reason=reason)
 
         # ── 规则 1.1：保证金使用率预警/拦截 ────────────────────────────────────
         if is_opening:
@@ -577,7 +667,7 @@ class RiskManager:
             await redis_set(REDIS_PEAK_BALANCE_KEY, current_total_value, ttl=86400 * 365)
 
     # ── 获取账户风控状态（供前端展示）────────────────────────────────────────
-    async def get_risk_status(self, total_portfolio_value: float) -> Dict[str, Any]:
+    async def get_risk_status(self, total_portfolio_value: float, positions: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """返回当前账户的风控指标概览。"""
         config = await self.get_config()
         peak = await self._get_peak_balance(total_portfolio_value)
@@ -588,6 +678,30 @@ class RiskManager:
         drawdown_limit = config.get("MAX_TOTAL_DRAWDOWN_PCT", 0.15)
         daily_loss_limit = config.get("MAX_DAILY_LOSS_PCT", 0.05)
         single_pos_limit = config.get("MAX_SINGLE_POSITION_PCT", 0.20)
+        exposure_limit = config.get("MAX_TOTAL_EXPOSURE_PCT", 1.0)
+        positions = positions or []
+        position_values = [
+            abs(float(pos.get("quantity", 0.0))) * float(pos.get("mark_price", pos.get("markPrice", pos.get("avg_price", 0.0))))
+            for pos in positions
+        ]
+        max_position_value = max(position_values) if position_values else 0.0
+        total_exposure = sum(position_values)
+        max_single_value = total_portfolio_value * single_pos_limit
+        max_total_exposure = total_portfolio_value * exposure_limit
+        max_leverage = self._calculate_dynamic_leverage(total_portfolio_value)
+        forbidden_symbols = [str(item).upper() for item in (config.get("FORBIDDEN_SYMBOLS") or [])]
+
+        def rule_row(rule: str, current: Any, limit: Any, passed: bool, message: str) -> Dict[str, Any]:
+            return {
+                "ruleName": rule,
+                "rule_name": rule,
+                "currentValue": current,
+                "current_value": current,
+                "limitValue": limit,
+                "limit_value": limit,
+                "passed": bool(passed),
+                "message": message,
+            }
 
         return {
             "peak_balance":         round(peak, 2),
@@ -599,8 +713,20 @@ class RiskManager:
             "daily_loss_limit_pct": daily_loss_limit * 100,
             "daily_loss_breached":  daily_pnl < 0 and abs(daily_pnl) / float(INITIAL_BALANCE) >= daily_loss_limit,
             "single_position_limit_pct": single_pos_limit * 100,
-            "max_leverage":         self._calculate_dynamic_leverage(total_portfolio_value),
+            "total_exposure_limit_pct": exposure_limit * 100,
+            "total_exposure":       round(total_exposure, 4),
+            "max_single_position_value": round(max_position_value, 4),
+            "max_leverage":         max_leverage,
             "kill_switch_active":   bool(kill_switch),
+            "checked_rules": [
+                rule_row("交易开关", "开启" if not kill_switch else "熔断", "必须开启", not bool(kill_switch), "全局熔断打开时禁止新增模拟订单。"),
+                rule_row("单笔仓位上限", round(max_position_value, 4), round(max_single_value, 4), max_position_value <= max_single_value or total_portfolio_value <= 0, "任一标的仓位不得超过账户权益上限。"),
+                rule_row("总敞口上限", round(total_exposure, 4), round(max_total_exposure, 4), total_exposure <= max_total_exposure or total_portfolio_value <= 0, "所有未平仓风险敞口合计不得超过账户权益上限。"),
+                rule_row("日内最大亏损", round((abs(daily_pnl) / float(INITIAL_BALANCE) if daily_pnl < 0 else 0.0) * 100, 4), round(daily_loss_limit * 100, 4), not (daily_pnl < 0 and abs(daily_pnl) / float(INITIAL_BALANCE) >= daily_loss_limit), "超过日内亏损阈值时禁止新增开仓。"),
+                rule_row("最大回撤", round(drawdown * 100, 4), round(drawdown_limit * 100, 4), drawdown < drawdown_limit, "账户回撤超过阈值时触发保护。"),
+                rule_row("禁止交易标的", ", ".join(forbidden_symbols) if forbidden_symbols else "无", "无禁用标的被交易", True, "禁用列表中的标的不允许模拟下单。"),
+                rule_row("最大杠杆", max_leverage, max_leverage, True, "模拟订单杠杆不得超过动态上限。"),
+            ],
             "config":               config
         }
 

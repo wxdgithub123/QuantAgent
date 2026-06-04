@@ -41,7 +41,6 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-
 from app.services.hummingbot_api_service import (
     get_hummingbot_service,
     HummingbotAPIError,
@@ -65,9 +64,7 @@ from app.schemas.hummingbot_paper_bot import (
     PaperConnectorResponse,
 )
 
-
 router = APIRouter()
-
 
 class HummingbotResponse(BaseModel):
     """统一响应格式"""
@@ -76,7 +73,6 @@ class HummingbotResponse(BaseModel):
     data: Optional[Any] = None
     error: Optional[str] = None
     timestamp: str
-
 
 def make_response(connected: bool, data: Any = None, error: Optional[str] = None) -> Dict[str, Any]:
     """构建统一响应"""
@@ -87,7 +83,6 @@ def make_response(connected: bool, data: Any = None, error: Optional[str] = None
         "error": error,
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
-
 
 @router.get("/status", response_model=HummingbotResponse)
 async def get_status():
@@ -106,7 +101,6 @@ async def get_status():
         return make_response(connected=False, error=e.message)
     except Exception as e:
         return make_response(connected=False, error=f"未知错误: {str(e)}")
-
 
 @router.get("/docker", response_model=HummingbotResponse)
 async def get_docker():
@@ -140,12 +134,11 @@ async def get_docker():
             "active_containers": active_data,
         }
 
-        return make_response(connected=True, data=data)
+        result = make_response(connected=True, data=data)
     except HummingbotAPIError as e:
-        return make_response(connected=False, error=e.message)
+        result = make_response(connected=False, error=e.message)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gateway error: {str(e)}")
-
 
 @router.get("/connectors", response_model=HummingbotResponse)
 async def get_connectors():
@@ -155,12 +148,11 @@ async def get_connectors():
     try:
         service = get_hummingbot_service()
         data = await service.get_connectors()
-        return make_response(connected=True, data=data)
+        result = make_response(connected=True, data=data)
     except HummingbotAPIError as e:
-        return make_response(connected=False, error=e.message)
+        result = make_response(connected=False, error=e.message)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gateway error: {str(e)}")
-
 
 @router.get("/paper-connectors", response_model=PaperConnectorResponse)
 async def get_paper_connectors_endpoint():
@@ -205,7 +197,6 @@ async def get_paper_connectors_endpoint():
             },
             error=str(e),
         )
-
 
 @router.get("/portfolio", response_model=HummingbotResponse)
 async def get_portfolio():
@@ -264,10 +255,9 @@ async def get_portfolio():
                 connected=False,
                 error=f"当前 Hummingbot API 版本未提供 portfolio 接口，请以 Swagger /docs 为准。"
             )
-        return make_response(connected=False, error=e.message)
+        result = make_response(connected=False, error=e.message)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gateway error: {str(e)}")
-
 
 @router.get("/bots", response_model=HummingbotResponse)
 async def get_bots():
@@ -355,10 +345,9 @@ async def get_bots():
         )
 
     except HummingbotAPIError as e:
-        return make_response(connected=False, error=e.message)
+        result = make_response(connected=False, error=e.message)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gateway error: {str(e)}")
-
 
 @router.get("/orders", response_model=HummingbotResponse)
 async def get_orders():
@@ -393,7 +382,6 @@ async def get_orders():
         # 如果没有活跃订单，尝试搜索历史订单（最近24小时）
         if active_orders is None:
             try:
-                import time
                 end_time = int(time.time() * 1000)
                 start_time = end_time - 86400000  # 24小时前
                 result = await service.search_orders({
@@ -434,10 +422,9 @@ async def get_orders():
                 connected=False,
                 error=f"当前 Hummingbot API 版本未提供订单接口，请以 Swagger /docs 为准。"
             )
-        return make_response(connected=False, error=e.message)
+        result = make_response(connected=False, error=e.message)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gateway error: {str(e)}")
-
 
 @router.get("/positions", response_model=HummingbotResponse)
 async def get_positions():
@@ -489,10 +476,9 @@ async def get_positions():
                 connected=False,
                 error=f"当前 Hummingbot API 版本未提供持仓接口，请以 Swagger /docs 为准。"
             )
-        return make_response(connected=False, error=e.message)
+        result = make_response(connected=False, error=e.message)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gateway error: {str(e)}")
-
 
 # ── Paper Bot 配置预览 (v1.2.1) ─────────────────────────────────────────────────
 
@@ -538,7 +524,6 @@ async def preview_paper_bot(
             valid=False,
             error=f"生成预览时发生错误: {str(e)}",
         )
-
 
 # ── Paper Bot 启动 (v1.2.2) ───────────────────────────────────────────────────
 
@@ -588,7 +573,6 @@ async def start_paper_bot_endpoint(
             error=f"启动 Paper Bot 时发生错误: {str(e)}",
         )
 
-
 # ── Paper Bot 查询接口 (v1.2.3) ────────────────────────────────────────────
 
 @router.get("/paper-bots")
@@ -609,7 +593,6 @@ async def list_paper_bots():
             "error": str(e),
         }
 
-
 @router.get("/paper-bots/{paper_bot_id}")
 async def get_paper_bot(paper_bot_id: str):
     """
@@ -625,7 +608,6 @@ async def get_paper_bot(paper_bot_id: str):
             "data": None,
             "error": str(e),
         }
-
 
 @router.get("/paper-bots/{paper_bot_id}/orders")
 async def get_paper_bot_orders(paper_bot_id: str):
@@ -650,7 +632,6 @@ async def get_paper_bot_orders(paper_bot_id: str):
             "error": str(e),
         }
 
-
 @router.get("/paper-bots/{paper_bot_id}/positions")
 async def get_paper_bot_positions(paper_bot_id: str):
     """
@@ -673,7 +654,6 @@ async def get_paper_bot_positions(paper_bot_id: str):
             },
             "error": str(e),
         }
-
 
 @router.get("/paper-bots/{paper_bot_id}/portfolio")
 async def get_paper_bot_portfolio(paper_bot_id: str):
@@ -698,7 +678,6 @@ async def get_paper_bot_portfolio(paper_bot_id: str):
             "error": str(e),
         }
 
-
 @router.get("/paper-bots/{paper_bot_id}/logs")
 async def get_paper_bot_logs(paper_bot_id: str):
     """
@@ -721,7 +700,6 @@ async def get_paper_bot_logs(paper_bot_id: str):
             },
             "error": str(e),
         }
-
 
 # ── Paper Bot 停止接口 (v1.2.4) ────────────────────────────────────────────
 
@@ -768,7 +746,6 @@ async def stop_paper_bot_endpoint(
             "timestamp": now,
         }
 
-
 # ── Paper Bot 本地资产隔离接口 (v1.3.0 Phase 3 P2-2) ──────────────────────
 
 @router.get("/paper-bots/{paper_bot_id}/local-portfolio")
@@ -803,7 +780,6 @@ async def get_paper_bot_local_portfolio(paper_bot_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取本地资产失败: {str(e)}")
 
-
 @router.get("/paper-bots/{paper_bot_id}/trade-history")
 async def get_paper_bot_trade_history(
     paper_bot_id: str,
@@ -823,7 +799,6 @@ async def get_paper_bot_trade_history(
         return {"paper_bot_id": paper_bot_id, "trades": history, "count": len(history)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取成交历史失败: {str(e)}")
-
 
 @router.get("/paper-bots/local-portfolios")
 async def get_all_local_portfolios():

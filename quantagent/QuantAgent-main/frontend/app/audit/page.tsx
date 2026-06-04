@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
@@ -87,6 +87,64 @@ interface AuditLogRow {
 }
 
 type OrderIntentAuditRow = AuditLogRow;
+
+interface StandardAuditRecord {
+  id: number | null;
+  eventType: string;
+  symbol?: string | null;
+  asOfTime?: string | null;
+  snapshotId?: unknown;
+  decisionId?: number | string | null;
+  orderIntentId?: string | null;
+  orderId?: string | null;
+  action?: string | null;
+  executionStatus?: string | null;
+  riskStatus?: string | null;
+  source?: string | null;
+  inputSummary?: unknown;
+  agentOutputs?: unknown;
+  riskCheckResult?: JsonRecord;
+  executionResult?: JsonRecord;
+  backtestId?: number | string | null;
+  replaySessionId?: string | null;
+  executionMode?: string | null;
+  replayTime?: string | null;
+  createdAt?: string | null;
+  immutable: boolean;
+  raw?: JsonRecord;
+  synthetic?: boolean;
+}
+
+interface AuditRecordsResponse {
+  schema_version: string;
+  generated_at: string;
+  immutability_note: string;
+  data: StandardAuditRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+interface AuditRecordDetailResponse {
+  audit_record: StandardAuditRecord;
+}
+
+interface AuditFilters {
+  symbol: string;
+  eventType: string;
+  action: string;
+  executionStatus: string;
+  riskStatus: string;
+  source: string;
+  decisionId: string;
+  orderIntentId: string;
+  orderId: string;
+  backtestId: string;
+  replaySessionId: string;
+  executionMode: string;
+  startTime: string;
+  endTime: string;
+}
 
 interface DecisionRow {
   id: number;
@@ -369,6 +427,15 @@ function nestedObject(source: JsonRecord | undefined, key: string) {
 }
 
 function orderIntentActionLabel(action: string) {
+  if (action === "AGENT_DECISION") return "Agent 决策";
+  if (action === "ORDER_INTENT_CREATED") return "交易意图已创建";
+  if (action === "RISK_CHECK_PASSED") return "风控通过";
+  if (action === "RISK_BLOCKED") return "风控拦截";
+  if (action === "PAPER_ORDER_FILLED") return "模拟成交";
+  if (action === "PAPER_ORDER_REJECTED") return "模拟订单拒绝";
+  if (action === "POSITION_UPDATED") return "持仓已更新";
+  if (action === "PNL_UPDATED") return "盈亏已更新";
+  if (action === "HOLD_RECORDED") return "观望已留痕";
   if (action === "ORDER_INTENT_NOOP") return "不下单";
   if (action === "ORDER_INTENT_PREVIEW") return "已预览";
   if (action === "ORDER_INTENT_BLOCKED") return "风控拦截";
@@ -377,9 +444,11 @@ function orderIntentActionLabel(action: string) {
 }
 
 function orderIntentBadge(action: string) {
-  if (action === "ORDER_INTENT_EXECUTED") return "border-emerald-400/30 bg-emerald-500/15 text-emerald-300";
-  if (action === "ORDER_INTENT_BLOCKED") return "border-rose-400/30 bg-rose-500/15 text-rose-300";
-  if (action === "ORDER_INTENT_PREVIEW") return "border-cyan-400/30 bg-cyan-500/15 text-cyan-200";
+  if (action === "PAPER_ORDER_FILLED" || action === "ORDER_INTENT_EXECUTED" || action === "RISK_CHECK_PASSED") return "border-emerald-400/30 bg-emerald-500/15 text-emerald-300";
+  if (action === "RISK_BLOCKED" || action === "PAPER_ORDER_REJECTED" || action === "ORDER_INTENT_BLOCKED") return "border-rose-400/30 bg-rose-500/15 text-rose-300";
+  if (action === "ORDER_INTENT_CREATED" || action === "ORDER_INTENT_PREVIEW") return "border-cyan-400/30 bg-cyan-500/15 text-cyan-200";
+  if (action === "AGENT_DECISION") return "border-fuchsia-400/30 bg-fuchsia-500/15 text-fuchsia-200";
+  if (action === "HOLD_RECORDED") return "border-slate-400/30 bg-slate-500/15 text-slate-200";
   return "border-slate-400/20 bg-slate-500/15 text-slate-300";
 }
 
@@ -502,7 +571,22 @@ function StatusCard({
   );
 }
 
-export default function AuditPage() {
+function friendlyAuditError(error: unknown, fallback = "数据暂不可用，已展示缓存数据 / 暂无数据。") {
+  const raw = error instanceof Error ? error.message : String(error || "");
+  const lower = raw.toLowerCase();
+  if (!raw || lower.includes("failed to fetch") || lower.includes("timeout") || lower.includes("abort") || lower.includes("http 5")) {
+    return fallback;
+  }
+  return raw.length > 120 ? fallback : raw;
+}
+
+function fetchWithTimeout(url: string, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { cache: "no-store", signal: controller.signal }).finally(() => clearTimeout(timeout));
+}
+
+function AuditPageContent() {
   const searchParams = useSearchParams();
   const [overview, setOverview] = useState<AuditOverview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -511,19 +595,41 @@ export default function AuditPage() {
   const [decisionDetail, setDecisionDetail] = useState<DecisionAuditDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
+  const [auditRecords, setAuditRecords] = useState<StandardAuditRecord[]>([]);
+  const [auditRecordsLoading, setAuditRecordsLoading] = useState(false);
+  const [auditRecordsError, setAuditRecordsError] = useState("");
+  const [auditFilters, setAuditFilters] = useState<AuditFilters>({
+    symbol: "",
+    eventType: "",
+    action: "",
+    executionStatus: "",
+    riskStatus: "",
+    source: "",
+    decisionId: "",
+    orderIntentId: "",
+    orderId: "",
+    backtestId: "",
+    replaySessionId: "",
+    executionMode: "",
+    startTime: "",
+    endTime: "",
+  });
+  const [selectedAuditRecord, setSelectedAuditRecord] = useState<StandardAuditRecord | null>(null);
+  const [auditRecordDetailLoading, setAuditRecordDetailLoading] = useState(false);
+  const [copyMessage, setCopyMessage] = useState("");
 
   const fetchOverview = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/v1/audit/overview", { cache: "no-store" });
+      const response = await fetchWithTimeout("/api/v1/audit/overview");
       const data = (await response.json()) as AuditOverview;
       if (!response.ok || data.error) {
         throw new Error(data.error || "回测与审计概览加载失败");
       }
       setOverview(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(friendlyAuditError(err));
     } finally {
       setLoading(false);
     }
@@ -533,12 +639,78 @@ export default function AuditPage() {
     void fetchOverview();
   }, [fetchOverview]);
 
+  const fetchAuditRecords = useCallback(async () => {
+    setAuditRecordsLoading(true);
+    setAuditRecordsError("");
+    const params = new URLSearchParams({ limit: "50" });
+    Object.entries(auditFilters).forEach(([key, value]) => {
+      if (!value) return;
+      if (key === "startTime" || key === "endTime") {
+        params.set(key, new Date(value).toISOString());
+      } else {
+        params.set(key, value);
+      }
+    });
+    try {
+      const response = await fetchWithTimeout(`/api/v1/audit/records?${params.toString()}`, 20000);
+      const data = (await response.json()) as AuditRecordsResponse & { detail?: string };
+      if (!response.ok) {
+        throw new Error(data.detail || "审计记录加载失败");
+      }
+      setAuditRecords(Array.isArray(data.data) ? data.data : []);
+      setSelectedAuditRecord((current) => current || data.data?.[0] || null);
+    } catch (err) {
+      setAuditRecords([]);
+      setAuditRecordsError(friendlyAuditError(err, "数据暂不可用，暂无审计记录。"));
+    } finally {
+      setAuditRecordsLoading(false);
+    }
+  }, [auditFilters]);
+
+  useEffect(() => {
+    void fetchAuditRecords();
+  }, [fetchAuditRecords]);
+
+  const updateAuditFilter = useCallback((key: keyof AuditFilters, value: string) => {
+    setAuditFilters((current) => ({ ...current, [key]: value }));
+  }, []);
+
+  const fetchAuditRecordDetail = useCallback(async (record: StandardAuditRecord) => {
+    if (!record.id) {
+      setSelectedAuditRecord(record);
+      return;
+    }
+    setAuditRecordDetailLoading(true);
+    setCopyMessage("");
+    try {
+      const response = await fetchWithTimeout(`/api/v1/audit/records/${record.id}`, 15000);
+      const data = (await response.json()) as AuditRecordDetailResponse & { detail?: string };
+      if (!response.ok) throw new Error(data.detail || "审计详情加载失败");
+      setSelectedAuditRecord(data.audit_record);
+    } catch (err) {
+      setAuditRecordsError(friendlyAuditError(err, "数据暂不可用，暂无审计详情。"));
+      setSelectedAuditRecord(record);
+    } finally {
+      setAuditRecordDetailLoading(false);
+    }
+  }, []);
+
+  const copyAuditJson = useCallback(async () => {
+    if (!selectedAuditRecord) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(selectedAuditRecord, null, 2));
+      setCopyMessage("已复制 JSON");
+    } catch {
+      setCopyMessage("复制失败，可以手动选中 JSON 内容");
+    }
+  }, [selectedAuditRecord]);
+
   const fetchDecisionDetail = useCallback(async (decisionId: number) => {
     setSelectedDecisionId(decisionId);
     setDetailLoading(true);
     setDetailError("");
     try {
-      const response = await fetch(`/api/v1/audit/decisions/${decisionId}`, { cache: "no-store" });
+      const response = await fetchWithTimeout(`/api/v1/audit/decisions/${decisionId}`);
       const data = (await response.json()) as DecisionAuditDetail & { detail?: string };
       if (!response.ok) {
         throw new Error(data.detail || "决策审计详情加载失败");
@@ -546,7 +718,7 @@ export default function AuditPage() {
       setDecisionDetail(data);
     } catch (err) {
       setDecisionDetail(null);
-      setDetailError(err instanceof Error ? err.message : String(err));
+      setDetailError(friendlyAuditError(err, "数据暂不可用，暂无决策审计详情。"));
     } finally {
       setDetailLoading(false);
     }
@@ -555,6 +727,11 @@ export default function AuditPage() {
   const counts = overview?.counts || {};
   const pit = overview?.point_in_time;
   const decisionParam = searchParams.get("decision_id");
+  const orderIdParam = searchParams.get("order_id");
+  const orderIntentParam = searchParams.get("order_intent_id");
+  const auditIdParam = searchParams.get("audit_id");
+  const backtestParam = searchParams.get("backtest_id");
+  const replaySessionParam = searchParams.get("replay_session_id") || searchParams.get("session_id");
   const readyComparisons = useMemo(
     () => (overview?.comparison_candidates || []).filter((item) => item.ready).length,
     [overview?.comparison_candidates],
@@ -568,8 +745,30 @@ export default function AuditPage() {
     }
   }, [decisionParam, fetchDecisionDetail, selectedDecisionId]);
 
+  useEffect(() => {
+    if (!decisionParam && !orderIdParam && !orderIntentParam && !backtestParam && !replaySessionParam) return;
+    setAuditFilters((current) => ({
+      ...current,
+      decisionId: decisionParam || current.decisionId,
+      orderId: orderIdParam || current.orderId,
+      orderIntentId: orderIntentParam || current.orderIntentId,
+      backtestId: backtestParam || current.backtestId,
+      replaySessionId: replaySessionParam || current.replaySessionId,
+    }));
+  }, [backtestParam, decisionParam, orderIdParam, orderIntentParam, replaySessionParam]);
+
+  useEffect(() => {
+    const auditId = Number(auditIdParam);
+    if (!Number.isFinite(auditId) || auditId <= 0) return;
+    void fetchAuditRecordDetail({
+      id: auditId,
+      eventType: "AUDIT_RECORDED",
+      immutable: true,
+    });
+  }, [auditIdParam, fetchAuditRecordDetail]);
+
   return (
-    <div className="min-h-screen bg-[#070b12] text-slate-100">
+    <div className="min-h-screen bg-background text-foreground">
       <AppTopNav
         activeSection="audit"
         title="回测与审计"
@@ -1203,7 +1402,7 @@ export default function AuditPage() {
                           const intent = nestedObject(details, "intent");
                           const risk = nestedObject(details, "risk_preview");
                           const lineage = nestedObject(details, "data_lineage");
-                          const riskAllowed = typeof risk.allowed === "boolean" ? risk.allowed : null;
+                          const riskAllowed = typeof risk.passed === "boolean" ? risk.passed : typeof risk.allowed === "boolean" ? risk.allowed : null;
                           return (
                             <div key={row.id} className="rounded-xl border border-white/10 bg-slate-950/45 p-3 text-xs text-slate-400">
                               <div className="flex items-start justify-between gap-3">
@@ -1262,6 +1461,244 @@ export default function AuditPage() {
           </Card>
         )}
 
+        <Card className="border-emerald-400/20 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.12),transparent_36%),rgba(255,255,255,0.04)]">
+          <CardHeader>
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <CardTitle className="text-white">审计记录查询</CardTitle>
+                <p className="mt-1 text-sm leading-6 text-slate-500">
+                  审计记录写入后不可修改，后续变化通过新增事件记录追踪。
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"
+                onClick={() => void fetchAuditRecords()}
+              >
+                <RefreshCw className={cn("mr-2 h-4 w-4", auditRecordsLoading && "animate-spin")} />
+                查询
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-10">
+              <input
+                value={auditFilters.symbol}
+                onChange={(event) => updateAuditFilter("symbol", event.target.value.toUpperCase())}
+                placeholder="symbol"
+                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
+              />
+              <select
+                value={auditFilters.eventType}
+                onChange={(event) => updateAuditFilter("eventType", event.target.value)}
+                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
+              >
+                <option value="">eventType</option>
+                {["AGENT_DECISION", "ORDER_INTENT_CREATED", "RISK_CHECK_PASSED", "RISK_BLOCKED", "PAPER_ORDER_FILLED", "PAPER_ORDER_REJECTED", "POSITION_UPDATED", "PNL_UPDATED", "HOLD_RECORDED"].map((item) => (
+                  <option key={item} value={item}>{orderIntentActionLabel(item)}</option>
+                ))}
+              </select>
+              <select
+                value={auditFilters.action}
+                onChange={(event) => updateAuditFilter("action", event.target.value)}
+                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
+              >
+                <option value="">action</option>
+                <option value="BUY">买入</option>
+                <option value="SELL">卖出</option>
+                <option value="HOLD">持有/观望</option>
+              </select>
+              <select
+                value={auditFilters.executionStatus}
+                onChange={(event) => updateAuditFilter("executionStatus", event.target.value)}
+                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
+              >
+                <option value="">executionStatus</option>
+                <option value="FILLED">已成交</option>
+                <option value="REJECTED">已拒绝</option>
+                <option value="BLOCKED">已拦截</option>
+              </select>
+              <select
+                value={auditFilters.riskStatus}
+                onChange={(event) => updateAuditFilter("riskStatus", event.target.value)}
+                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
+              >
+                <option value="">riskStatus</option>
+                <option value="passed">风控通过</option>
+                <option value="blocked">风控拦截</option>
+                <option value="not_checked">未触发风控</option>
+              </select>
+              <select
+                value={auditFilters.source}
+                onChange={(event) => updateAuditFilter("source", event.target.value)}
+                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
+              >
+                <option value="">source</option>
+                <option value="manual">manual</option>
+                <option value="coordination_history">agent</option>
+                <option value="backtest">backtest</option>
+              </select>
+              <select
+                value={auditFilters.executionMode}
+                onChange={(event) => updateAuditFilter("executionMode", event.target.value)}
+                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
+              >
+                <option value="">executionMode</option>
+                <option value="rule_only">普通规则回测</option>
+                <option value="agent_audited">Agent 审计回测</option>
+              </select>
+              <input
+                value={auditFilters.backtestId}
+                onChange={(event) => updateAuditFilter("backtestId", event.target.value)}
+                placeholder="backtestId"
+                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
+              />
+              <input
+                value={auditFilters.replaySessionId}
+                onChange={(event) => updateAuditFilter("replaySessionId", event.target.value)}
+                placeholder="replaySessionId"
+                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
+              />
+              <input
+                type="datetime-local"
+                value={auditFilters.startTime}
+                onChange={(event) => updateAuditFilter("startTime", event.target.value)}
+                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
+              />
+              <input
+                type="datetime-local"
+                value={auditFilters.endTime}
+                onChange={(event) => updateAuditFilter("endTime", event.target.value)}
+                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
+              />
+            </div>
+
+            {auditRecordsError && (
+              <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+                {auditRecordsError}
+              </div>
+            )}
+
+            <div className="grid gap-4 xl:grid-cols-[1.25fr_0.75fr]">
+              <div className="overflow-x-auto rounded-2xl border border-white/10 bg-black/20">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-white/10 hover:bg-transparent">
+                      <TableHead className="text-slate-400">createdAt</TableHead>
+                      <TableHead className="text-slate-400">symbol</TableHead>
+                      <TableHead className="text-slate-400">eventType</TableHead>
+                      <TableHead className="text-slate-400">decisionId</TableHead>
+                      <TableHead className="text-slate-400">orderIntentId</TableHead>
+                      <TableHead className="text-slate-400">orderId</TableHead>
+                      <TableHead className="text-slate-400">action</TableHead>
+                      <TableHead className="text-slate-400">executionStatus</TableHead>
+                      <TableHead className="text-slate-400">riskStatus</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {auditRecordsLoading ? (
+                      <TableRow className="border-white/10">
+                        <TableCell colSpan={9} className="py-8 text-center text-slate-500">
+                          <RefreshCw className="mr-2 inline h-4 w-4 animate-spin" />
+                          正在读取审计记录...
+                        </TableCell>
+                      </TableRow>
+                    ) : auditRecords.length ? auditRecords.map((record) => (
+                      <TableRow
+                        key={`${record.id}-${record.eventType}`}
+                        className={cn("cursor-pointer border-white/10 hover:bg-white/[0.04]", selectedAuditRecord?.id === record.id && "bg-white/[0.06]")}
+                        onClick={() => void fetchAuditRecordDetail(record)}
+                      >
+                        <TableCell className="text-xs text-slate-400">{formatTime(record.createdAt)}</TableCell>
+                        <TableCell className="font-mono text-xs text-white">{record.symbol || "暂无数据"}</TableCell>
+                        <TableCell><Badge className={orderIntentBadge(record.eventType)}>{orderIntentActionLabel(record.eventType)}</Badge></TableCell>
+                        <TableCell className="font-mono text-xs text-slate-300">
+                          {record.decisionId ? <Link href={`/audit?decision_id=${record.decisionId}`} className="text-cyan-200 hover:text-cyan-100">{String(record.decisionId)}</Link> : "暂无关联记录"}
+                        </TableCell>
+                        <TableCell className="max-w-[160px] truncate font-mono text-xs text-slate-400">{record.orderIntentId || "暂无关联记录"}</TableCell>
+                        <TableCell className="font-mono text-xs text-slate-400">{record.orderId || "暂无关联记录"}</TableCell>
+                        <TableCell className="text-xs text-slate-300">{record.action || "暂无数据"}</TableCell>
+                        <TableCell className="text-xs text-slate-300">{record.executionStatus || "暂无数据"}</TableCell>
+                        <TableCell className="text-xs text-slate-300">{record.riskStatus || "暂无数据"}</TableCell>
+                      </TableRow>
+                    )) : (
+                      <TableRow className="border-white/10">
+                        <TableCell colSpan={9} className="py-8 text-center text-slate-500">暂无审计记录。</TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-white">审计详情</p>
+                    <p className="mt-1 text-xs text-slate-500">点击左侧记录查看完整 JSON 和友好摘要。</p>
+                  </div>
+                  <Button size="sm" variant="outline" className="border-white/10 bg-white/5 text-xs text-slate-100" onClick={() => void copyAuditJson()} disabled={!selectedAuditRecord}>
+                    复制 JSON
+                  </Button>
+                </div>
+                {copyMessage && <p className="mt-2 text-xs text-emerald-300">{copyMessage}</p>}
+                {auditRecordDetailLoading ? (
+                  <div className="py-10 text-center text-sm text-slate-500">
+                    <RefreshCw className="mr-2 inline h-4 w-4 animate-spin" />
+                    正在读取审计详情...
+                  </div>
+                ) : selectedAuditRecord ? (
+                  <div className="mt-4 space-y-3">
+                    <div className="rounded-xl border border-white/10 bg-slate-950/50 p-3 text-xs leading-5 text-slate-400">
+                      <p>事件：<span className="text-slate-100">{orderIntentActionLabel(selectedAuditRecord.eventType)}</span></p>
+                      <p>标的：<span className="font-mono text-slate-100">{selectedAuditRecord.symbol || "暂无数据"}</span></p>
+                      <p>决策：<span className="font-mono text-slate-100">{selectedAuditRecord.decisionId || "暂无关联记录"}</span></p>
+                      <p>OrderIntent：<span className="font-mono text-slate-100">{selectedAuditRecord.orderIntentId || "暂无关联记录"}</span></p>
+                      <p>订单：<span className="font-mono text-slate-100">{selectedAuditRecord.orderId || "暂无关联记录"}</span></p>
+                      <p>回测：<span className="font-mono text-slate-100">{selectedAuditRecord.backtestId || "暂无关联记录"}</span></p>
+                      <p>回放：<span className="font-mono text-slate-100">{selectedAuditRecord.replaySessionId || "暂无关联记录"}</span></p>
+                      <p>模式：<span className="font-mono text-slate-100">{selectedAuditRecord.executionMode || "暂无数据"}</span></p>
+                      <p>不可修改：{selectedAuditRecord.immutable ? "是" : "否"}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedAuditRecord.decisionId ? (
+                        <Link href={`/audit?decision_id=${selectedAuditRecord.decisionId}`}>
+                          <Button size="sm" variant="outline" className="h-7 border-cyan-500/30 text-xs text-cyan-200">查看决策详情</Button>
+                        </Link>
+                      ) : <span className="text-[11px] text-slate-500">暂无关联决策</span>}
+                      {selectedAuditRecord.backtestId ? (
+                        <Link href={`/backtest?backtest_id=${selectedAuditRecord.backtestId}`}>
+                          <Button size="sm" variant="outline" className="h-7 border-indigo-500/30 text-xs text-indigo-200">返回回测详情</Button>
+                        </Link>
+                      ) : <span className="text-[11px] text-slate-500">暂无关联回测</span>}
+                      {selectedAuditRecord.replaySessionId ? (
+                        <Link href={`/replay?session_id=${selectedAuditRecord.replaySessionId}${selectedAuditRecord.replayTime ? `&as_of_time=${encodeURIComponent(selectedAuditRecord.replayTime)}` : ""}`}>
+                          <Button size="sm" variant="outline" className="h-7 border-emerald-500/30 text-xs text-emerald-200">定位历史回放</Button>
+                        </Link>
+                      ) : <span className="text-[11px] text-slate-500">暂无关联回放</span>}
+                      {selectedAuditRecord.orderIntentId ? (
+                        <Link href={`/audit?order_intent_id=${selectedAuditRecord.orderIntentId}`}>
+                          <Button size="sm" variant="outline" className="h-7 border-fuchsia-500/30 text-xs text-fuchsia-200">查看 OrderIntent</Button>
+                        </Link>
+                      ) : <span className="text-[11px] text-slate-500">暂无关联 OrderIntent</span>}
+                    </div>
+                    <details className="rounded-xl border border-white/10 bg-slate-950/50 p-3">
+                      <summary className="cursor-pointer text-sm font-semibold text-white">完整 JSON</summary>
+                      <pre className="mt-3 max-h-[520px] overflow-auto rounded-lg bg-black/40 p-3 text-[11px] leading-5 text-slate-400">
+                        {JSON.stringify(selectedAuditRecord, null, 2)}
+                      </pre>
+                    </details>
+                  </div>
+                ) : (
+                  <div className="mt-4 rounded-xl border border-white/10 bg-slate-950/40 p-6 text-center text-sm text-slate-500">
+                    暂无数据。
+                  </div>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
         <Card className="border-cyan-400/20 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.14),transparent_34%),rgba(255,255,255,0.04)]">
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
@@ -1286,7 +1723,7 @@ export default function AuditPage() {
                 const execution = nestedObject(details, "execution");
                 const side = readString(intent.side, "NO_ACTION");
                 const decisionId = readNumber(intent.decision_id || decision.id);
-                const riskAllowed = typeof risk.allowed === "boolean" ? risk.allowed : null;
+                const riskAllowed = typeof risk.passed === "boolean" ? risk.passed : typeof risk.allowed === "boolean" ? risk.allowed : null;
                 return (
                   <div key={row.id} className="rounded-2xl border border-white/10 bg-black/20 p-4">
                     <div className="flex items-start justify-between gap-3">
@@ -1386,5 +1823,13 @@ export default function AuditPage() {
         )}
       </main>
     </div>
+  );
+}
+
+export default function AuditPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><p className="text-muted-foreground">Loading audit page...</p></div>}>
+      <AuditPageContent />
+    </Suspense>
   );
 }

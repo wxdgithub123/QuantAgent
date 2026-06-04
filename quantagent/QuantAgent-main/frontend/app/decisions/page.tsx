@@ -125,15 +125,23 @@ interface OrderIntentResult {
   message?: string;
   data_lineage?: Record<string, string>;
   intent?: {
+    id?: string;
     intent_id?: string;
     decision_id?: number;
     symbol?: string;
+    action?: string;
     direction?: string;
     side?: string | null;
+    positionRatio?: number;
     position_pct?: number;
+    quantity?: number | null;
     confidence?: number;
+    validUntil?: string;
     valid_until?: string;
+    reason?: string;
     trigger_reason?: string;
+    sourceDecisionId?: number | null;
+    createdAt?: string;
     exchange_id?: string;
     order_type?: string;
     status?: string;
@@ -147,8 +155,20 @@ interface OrderIntentResult {
   };
   risk_preview?: {
     allowed?: boolean;
+    passed?: boolean;
     rule?: string;
     reason?: string;
+    blockedReason?: string | null;
+    checkedRules?: Array<{
+      ruleName?: string;
+      rule_name?: string;
+      currentValue?: string | number | null;
+      current_value?: string | number | null;
+      limitValue?: string | number | null;
+      limit_value?: string | number | null;
+      passed?: boolean;
+      message?: string;
+    }>;
     checked_at?: string;
   };
   execution?: {
@@ -186,6 +206,40 @@ const VOTE_COLORS: Record<string, string> = {
   bearish: "#fb7185",
   neutral: "#94a3b8",
 };
+const FRIENDLY_DATA_UNAVAILABLE = "数据暂不可用，已展示缓存数据 / 暂无数据。";
+
+function sanitizeFetchError(error: unknown, fallback = FRIENDLY_DATA_UNAVAILABLE) {
+  const raw = error instanceof Error ? error.message : String(error || "");
+  const lower = raw.toLowerCase();
+  if (
+    !raw ||
+    lower.includes("failed to fetch") ||
+    lower.includes("network") ||
+    lower.includes("timeout") ||
+    lower.includes("abort") ||
+    lower.includes("econnrefused") ||
+    lower.includes("http 5")
+  ) {
+    return fallback;
+  }
+  return raw.length > 120 ? fallback : raw;
+}
+
+async function fetchJsonWithTimeout<T>(url: string, options: RequestInit = {}, timeoutMs = 12000): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: options.signal ?? controller.signal });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = typeof data?.detail === "string" ? data.detail : typeof data?.error === "string" ? data.error : `HTTP ${response.status}`;
+      throw new Error(detail);
+    }
+    return data as T;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 function formatPercent(value?: number) {
   if (typeof value !== "number" || Number.isNaN(value)) return "--";
@@ -379,22 +433,20 @@ export default function DecisionsPage() {
     try {
       const params = new URLSearchParams({ limit: "50" });
       if (filterSymbol) params.set("symbol", filterSymbol);
-      const res = await fetch(`/api/v1/coordination/history?${params}`);
-      if (res.ok) {
-        const d = await res.json();
-        setDecisions(d.data || []);
-        setError("");
-      }
+      const d = await fetchJsonWithTimeout<{ data?: DecisionRow[] }>(`/api/v1/coordination/history?${params}`, { cache: "no-store" }, 12000);
+      setDecisions(Array.isArray(d.data) ? d.data : []);
+      setError("");
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      setDecisions([]);
+      setError(sanitizeFetchError(e));
     }
   }, [filterSymbol]);
 
   const fetchStats = useCallback(async () => {
     try {
-      const res = await fetch("/api/v1/coordination/stats");
-      if (res.ok) setStats(await res.json());
+      setStats(await fetchJsonWithTimeout<Stats>("/api/v1/coordination/stats", { cache: "no-store" }, 12000));
     } catch {
+      setStats(null);
       // Stats are helpful, but the history table can still render without them.
     }
   }, []);
@@ -403,9 +455,7 @@ export default function DecisionsPage() {
     try {
       const params = new URLSearchParams({ limit: "6" });
       if (filterSymbol) params.set("symbol", filterSymbol);
-      const res = await fetch(`/api/v1/execution/order-intents/latest?${params}`, { cache: "no-store" });
-      if (!res.ok) return;
-      const data = await res.json();
+      const data = await fetchJsonWithTimeout<{ data?: OrderIntentAuditRow[] }>(`/api/v1/execution/order-intents/latest?${params}`, { cache: "no-store" }, 12000);
       setIntentAudits(Array.isArray(data?.data) ? data.data : []);
     } catch {
       setIntentAudits([]);
@@ -414,9 +464,7 @@ export default function DecisionsPage() {
 
   const fetchSymbolOptions = useCallback(async () => {
     try {
-      const res = await fetch("/api/v1/market/backfill/status", { cache: "no-store" });
-      if (!res.ok) return;
-      const data = await res.json();
+      const data = await fetchJsonWithTimeout<{ intervals?: BackfillStatusRow[] }>("/api/v1/market/backfill/status", { cache: "no-store" }, 12000);
       const rows = Array.isArray(data?.intervals) ? data.intervals : [];
       setSymbolOptions(buildSymbolOptions(rows));
     } catch {
@@ -425,7 +473,7 @@ export default function DecisionsPage() {
   }, []);
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([fetchDecisions(), fetchStats(), fetchSymbolOptions(), fetchIntentAudits()]);
+    await Promise.allSettled([fetchDecisions(), fetchStats(), fetchSymbolOptions(), fetchIntentAudits()]);
   }, [fetchDecisions, fetchStats, fetchSymbolOptions, fetchIntentAudits]);
 
   const runFullDecision = useCallback(async () => {
@@ -434,15 +482,11 @@ export default function DecisionsPage() {
     setError("");
     try {
       const params = new URLSearchParams({ interval: "1h", fast: String(runFast) });
-      const res = await fetch(`/api/v1/market/coordinate/${symbol}?${params.toString()}`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.detail || data?.error || `协调分析失败: ${res.status}`);
-      }
+      await fetchJsonWithTimeout(`/api/v1/market/coordinate/${symbol}?${params.toString()}`, { cache: "no-store" }, 60000);
       await refreshAll();
       setExpandedId(null);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(sanitizeFetchError(e, "数据暂不可用，暂时无法生成新的交易建议。请稍后刷新或检查后端服务。"));
     } finally {
       setRunning(false);
     }
@@ -454,7 +498,7 @@ export default function DecisionsPage() {
     setNativeError("");
     setNativeResult(null);
     try {
-      const res = await fetch("/api/tradingagents-native/analyze", {
+      const data = await fetchJsonWithTimeout<NativeTradingAgentsResult>("/api/tradingagents-native/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -463,14 +507,13 @@ export default function DecisionsPage() {
           trade_date: nativeTradeDate || undefined,
           selected_analysts: NATIVE_TRADINGAGENTS_ANALYSTS,
         }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data?.status === "error") {
-        throw new Error(data?.error || data?.detail?.detail || data?.detail || `原版实验运行失败: ${res.status}`);
+      }, 90000);
+      if (data?.status === "error") {
+        throw new Error(data?.error || "原版 TradingAgentsGraph 实验运行失败");
       }
       setNativeResult(data);
     } catch (e: unknown) {
-      setNativeError(e instanceof Error ? e.message : String(e));
+      setNativeError(sanitizeFetchError(e, "数据暂不可用，原版 TradingAgentsGraph 实验入口暂时无法运行。"));
     } finally {
       setNativeRunning(false);
     }
@@ -480,19 +523,18 @@ export default function DecisionsPage() {
     setIntentLoading((prev) => ({ ...prev, [decisionId]: mode }));
     setIntentError((prev) => ({ ...prev, [decisionId]: "" }));
     try {
-      const res = await fetch(`/api/v1/execution/order-intents/${mode}`, {
+      const data = await fetchJsonWithTimeout<OrderIntentResult>(`/api/v1/execution/order-intents/${mode}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ decision_id: decisionId, exchange_id: "okx" }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.detail || data?.error || `OrderIntent ${mode === "preview" ? "预览" : "执行"}失败: ${res.status}`);
-      }
+      }, 30000);
       setIntentResults((prev) => ({ ...prev, [decisionId]: data }));
-      await Promise.all([fetchIntentAudits(), fetchStats()]);
+      await Promise.allSettled([fetchIntentAudits(), fetchStats()]);
     } catch (e: unknown) {
-      setIntentError((prev) => ({ ...prev, [decisionId]: e instanceof Error ? e.message : String(e) }));
+      setIntentError((prev) => ({
+        ...prev,
+        [decisionId]: sanitizeFetchError(e, "数据暂不可用，暂时无法生成或执行 OrderIntent。请稍后刷新。"),
+      }));
     } finally {
       setIntentLoading((prev) => ({ ...prev, [decisionId]: undefined }));
     }
@@ -522,7 +564,7 @@ export default function DecisionsPage() {
     }));
 
   return (
-    <div className="min-h-screen bg-[#071026] text-slate-100">
+    <div className="min-h-screen bg-background text-foreground">
       <AppTopNav
         activeSection="decisions"
         title="决策中心"
@@ -809,10 +851,17 @@ export default function DecisionsPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {decisions.length === 0 ? (
+                    {loading ? (
                       <TableRow className="border-white/10">
                         <TableCell colSpan={8} className="py-12 text-center text-sm text-slate-400">
-                          暂无建议记录。点击上方“生成交易建议”后，这里会出现结果。
+                          <RefreshCw className="mr-2 inline h-4 w-4 animate-spin" />
+                          正在读取决策记录...
+                        </TableCell>
+                      </TableRow>
+                    ) : decisions.length === 0 ? (
+                      <TableRow className="border-white/10">
+                        <TableCell colSpan={8} className="py-12 text-center text-sm text-slate-400">
+                          {error ? FRIENDLY_DATA_UNAVAILABLE : "暂无建议记录。点击上方“生成交易建议”后，这里会出现结果。"}
                         </TableCell>
                       </TableRow>
                     ) : (
@@ -824,6 +873,22 @@ export default function DecisionsPage() {
                         const intentBusy = intentLoading[decision.id];
                         const intentErrorMessage = intentError[decision.id];
                         const canExecuteIntent = intentResult?.status === "READY";
+                        const intent = intentResult?.intent;
+                        const intentId = intent?.id || intent?.intent_id || "--";
+                        const intentAction = intent?.action || (intent?.side ? String(intent.side).toUpperCase() : "HOLD");
+                        const intentPositionRatio =
+                          typeof intent?.positionRatio === "number" ? intent.positionRatio : intent?.position_pct;
+                        const intentValidUntil = intent?.validUntil || intent?.valid_until;
+                        const sourceDecisionId = intent?.sourceDecisionId ?? intent?.decision_id ?? decision.id;
+                        const riskPassed =
+                          typeof intentResult?.risk_preview?.passed === "boolean"
+                            ? intentResult.risk_preview.passed
+                            : intentResult?.risk_preview?.allowed;
+                        const riskBlockedReason =
+                          intentResult?.risk_preview?.blockedReason ||
+                          intentResult?.risk_preview?.reason ||
+                          intentResult?.risk_preview?.rule ||
+                          "--";
                         return (
                           <Fragment key={decision.id}>
                             <TableRow
@@ -862,7 +927,7 @@ export default function DecisionsPage() {
                                     onClick={(event) => event.stopPropagation()}
                                     className="text-cyan-200 hover:text-cyan-100"
                                   >
-                                    审计详情
+                                    查看详情
                                   </Link>
                                   <Link
                                     href={researchSnapshotHref(decision.symbol, "1h", decision.timestamp)}
@@ -905,7 +970,7 @@ export default function DecisionsPage() {
                                               variant="outline"
                                               className="h-8 border-white/10 bg-white/5 text-xs text-slate-100 hover:bg-white/10"
                                             >
-                                              打开审计详情
+                                              查看决策详情
                                             </Button>
                                           </Link>
                                           <Link href={researchSnapshotHref(decision.symbol, "1h", decision.timestamp)}>
@@ -955,10 +1020,12 @@ export default function DecisionsPage() {
                                               </Badge>
                                             </div>
                                             <div className="mt-3 space-y-1 text-xs leading-5 text-slate-300">
-                                              <p>方向：<span className="font-mono text-white">{intentResult.intent?.side || "NO_ACTION"}</span></p>
-                                              <p>交易对：<span className="font-mono text-white">{intentResult.intent?.symbol || decision.symbol}</span></p>
-                                              <p>仓位比例：<span className="font-mono text-white">{formatPercent(intentResult.intent?.position_pct)}</span></p>
-                                              <p>有效期：{intentResult.intent?.valid_until ? new Date(intentResult.intent.valid_until).toLocaleString() : "--"}</p>
+                                              <p>意图编号：<span className="font-mono text-white">{intentId}</span></p>
+                                              <p>动作：<span className="font-mono text-white">{intentAction}</span></p>
+                                              <p>方向：<span className="font-mono text-white">{intent?.side || "flat"}</span></p>
+                                              <p>仓位比例：<span className="font-mono text-white">{formatPercent(intentPositionRatio)}</span></p>
+                                              <p>来源决策：<span className="font-mono text-white">{sourceDecisionId}</span></p>
+                                              <p>有效期：{intentValidUntil ? new Date(intentValidUntil).toLocaleString() : "--"}</p>
                                             </div>
                                           </div>
                                           <div className="rounded-xl border border-white/10 bg-slate-950/45 p-3">
@@ -966,15 +1033,15 @@ export default function DecisionsPage() {
                                             <div className="mt-3 space-y-1 text-xs leading-5 text-slate-300">
                                               <p>参考价格：<span className="font-mono text-white">{formatMoney(intentResult.price)}</span></p>
                                               <p>目标名义金额：<span className="font-mono text-white">{formatMoney(intentResult.sizing?.target_notional)}</span></p>
-                                              <p>下单数量：<span className="font-mono text-white">{formatMoney(intentResult.sizing?.quantity)}</span></p>
+                                              <p>下单数量：<span className="font-mono text-white">{formatMoney(intentResult.sizing?.quantity ?? intent?.quantity ?? undefined)}</span></p>
                                               <p>模拟盘权益：<span className="font-mono text-white">{formatMoney(intentResult.sizing?.total_equity)}</span></p>
                                             </div>
                                           </div>
                                           <div className="rounded-xl border border-white/10 bg-slate-950/45 p-3">
                                             <p className="text-xs text-slate-400">风控与审计</p>
                                             <div className="mt-3 space-y-1 text-xs leading-5 text-slate-300">
-                                              <p>RiskGuard：<span className={intentResult.risk_preview?.allowed ? "text-emerald-300" : "text-rose-300"}>{intentResult.risk_preview ? (intentResult.risk_preview.allowed ? "通过" : "拦截") : "--"}</span></p>
-                                              <p>规则：<span className="font-mono text-white">{intentResult.risk_preview?.rule || "--"}</span></p>
+                                              <p>RiskGuard：<span className={riskPassed ? "text-emerald-300" : "text-rose-300"}>{intentResult.risk_preview ? (riskPassed ? "通过" : "拦截") : "--"}</span></p>
+                                              <p>原因：<span className="font-mono text-white">{riskBlockedReason}</span></p>
                                               <p>执行：<span className="font-mono text-white">{intentResult.execution?.status || "--"}</span></p>
                                               <p>审计：ORDER_INTENT_* 已写入 audit_logs</p>
                                             </div>
@@ -1226,8 +1293,8 @@ export default function DecisionsPage() {
                         </Badge>
                       </div>
                       <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-400">
-                        <p>方向：<span className="font-mono text-slate-200">{row.details?.intent?.side || "NO_ACTION"}</span></p>
-                        <p>仓位：<span className="font-mono text-slate-200">{formatPercent(row.details?.intent?.position_pct)}</span></p>
+                        <p>方向：<span className="font-mono text-slate-200">{row.details?.intent?.side || "flat"}</span></p>
+                        <p>仓位：<span className="font-mono text-slate-200">{formatPercent(row.details?.intent?.positionRatio ?? row.details?.intent?.position_pct)}</span></p>
                         <p>价格：<span className="font-mono text-slate-200">{formatMoney(row.details?.price)}</span></p>
                         <p>数量：<span className="font-mono text-slate-200">{formatMoney(row.details?.sizing?.quantity)}</span></p>
                       </div>
@@ -1242,10 +1309,9 @@ export default function DecisionsPage() {
           </div>
         </div>
 
-        {loading && !stats && (
-          <div className="flex items-center justify-center py-20 text-sm text-slate-400">
-            <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-            加载中...
+        {!loading && !stats && decisions.length === 0 && (
+          <div className="flex items-center justify-center py-8 text-xs text-slate-500">
+            统计卡片暂无数据，页面不会使用模拟数据补位。
           </div>
         )}
       </main>

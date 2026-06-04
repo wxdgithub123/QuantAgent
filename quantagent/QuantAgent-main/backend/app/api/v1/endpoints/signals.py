@@ -5,14 +5,264 @@ from typing import Any, Dict, List, Optional
 
 from datetime import datetime
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from app.services.database import get_db
+from app.services.research_assets import (
+    FACTOR_BLUEPRINTS,
+    FACTOR_CATEGORY_ORDER,
+    category_sort_key,
+    factor_blueprint,
+    infer_availability_status,
+    infer_missing_rate,
+    merge_unique,
+    signal_related_factor_names,
+    strategies_using_factor,
+    strategy_asset_base,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _iso(value: Any) -> Optional[str]:
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _metric_number(metrics: Any, *keys: str) -> Optional[float]:
+    if not isinstance(metrics, dict):
+        return None
+    for key in keys:
+        value = metrics.get(key)
+        number = _safe_float(value)
+        if number is not None:
+            return number
+    return None
+
+
+def _extract_related_value(payload: Any, *keys: str) -> Optional[Any]:
+    if isinstance(payload, dict):
+        for key in keys:
+            if payload.get(key) not in (None, ""):
+                return payload.get(key)
+        for value in payload.values():
+            found = _extract_related_value(value, *keys)
+            if found not in (None, ""):
+                return found
+    if isinstance(payload, list):
+        for item in payload:
+            found = _extract_related_value(item, *keys)
+            if found not in (None, ""):
+                return found
+    return None
+
+
+async def _load_backtest_stats(session: Any) -> Dict[str, Dict[str, Any]]:
+    stats: Dict[str, Dict[str, Any]] = {}
+    r = await session.execute(text("""
+SELECT id, strategy_type, metrics, created_at
+FROM backtest_results
+ORDER BY created_at DESC
+LIMIT 5000
+"""))
+    for row in r.fetchall():
+        strategy_type = row[1] or "unknown"
+        metrics = row[2] or {}
+        item = stats.setdefault(strategy_type, {
+            "count": 0,
+            "agentAuditedCount": 0,
+            "latestBacktestAt": None,
+            "bestBacktestReturn": None,
+            "maxDrawdown": None,
+            "ids": [],
+        })
+        item["count"] += 1
+        item["ids"].append(row[0])
+        item["latestBacktestAt"] = item["latestBacktestAt"] or _iso(row[3])
+        execution_mode = metrics.get("executionMode") or metrics.get("execution_mode")
+        if execution_mode == "agent_audited":
+            item["agentAuditedCount"] += 1
+        total_return = _metric_number(metrics, "totalReturn", "total_return", "total_return_pct")
+        if total_return is not None:
+            current_best = item.get("bestBacktestReturn")
+            item["bestBacktestReturn"] = total_return if current_best is None else max(current_best, total_return)
+        max_drawdown = _metric_number(metrics, "maxDrawdown", "max_drawdown", "max_drawdown_pct")
+        if max_drawdown is not None:
+            current_dd = item.get("maxDrawdown")
+            item["maxDrawdown"] = max_drawdown if current_dd is None else min(current_dd, max_drawdown)
+    return stats
+
+
+async def _load_strategy_signal_stats(session: Any) -> Dict[str, Dict[str, Any]]:
+    stats: Dict[str, Dict[str, Any]] = {}
+    r = await session.execute(text("""
+SELECT source_strategy, signal_type, COUNT(*) AS cnt, MAX(timestamp) AS latest_timestamp
+FROM signal_events
+GROUP BY source_strategy, signal_type
+"""))
+    for row in r.fetchall():
+        strategy = row[0] or "unknown"
+        item = stats.setdefault(strategy, {"count": 0, "signalTypes": {}, "latestSignalAt": None})
+        item["count"] += int(row[2] or 0)
+        item["signalTypes"][row[1] or "UNKNOWN"] = int(row[2] or 0)
+        latest = _iso(row[3])
+        if latest and not item["latestSignalAt"]:
+            item["latestSignalAt"] = latest
+    return stats
+
+
+async def _build_factor_catalog(session: Any) -> List[Dict[str, Any]]:
+    definitions: Dict[str, Dict[str, Any]] = {}
+    r = await session.execute(text("""
+SELECT factor_name, display_name, category, family, description, calculation,
+       upstream_data, provider_hint, unit, default_interval
+FROM factor_definitions
+WHERE is_active IS TRUE
+"""))
+    for row in r.fetchall():
+        name = str(row[0] or "").lower()
+        definitions[name] = {
+            "factor_name": name,
+            "display_name": row[1],
+            "category": row[2],
+            "family": row[3],
+            "description": row[4],
+            "calculation": row[5],
+            "upstream_data": row[6],
+            "provider_hint": row[7],
+            "unit": row[8],
+            "default_interval": row[9],
+        }
+
+    observed: Dict[str, Dict[str, Any]] = {}
+    r = await session.execute(text("""
+SELECT factor_name, COUNT(*) AS snapshot_count, COUNT(DISTINCT symbol) AS symbol_count,
+       MAX(timestamp) AS latest_timestamp, MAX(available_time) AS latest_available_time,
+       STRING_AGG(DISTINCT COALESCE(provider, '未记录'), ', ') AS providers,
+       STRING_AGG(DISTINCT COALESCE(data_source, '未记录'), ', ') AS data_sources
+FROM factor_snapshots
+GROUP BY factor_name
+"""))
+    for row in r.fetchall():
+        name = str(row[0] or "").lower()
+        observed[name] = {
+            "snapshotCount": int(row[1] or 0),
+            "symbolCount": int(row[2] or 0),
+            "latestUpdateTime": _iso(row[3]),
+            "latestAvailableTime": _iso(row[4]),
+            "providers": [item.strip() for item in (row[5] or "").split(",") if item.strip()],
+            "dataSources": [item.strip() for item in (row[6] or "").split(",") if item.strip()],
+        }
+
+    latest_values: Dict[str, Dict[str, Any]] = {}
+    r = await session.execute(text("""
+SELECT DISTINCT ON (factor_name)
+       factor_name, factor_value, timestamp, available_time, provider, data_source, source_version
+FROM factor_snapshots
+ORDER BY factor_name, timestamp DESC
+"""))
+    for row in r.fetchall():
+        name = str(row[0] or "").lower()
+        latest_values[name] = {
+            "latestValue": row[1],
+            "latestUpdateTime": _iso(row[2]),
+            "latestAvailableTime": _iso(row[3]),
+            "provider": row[4],
+            "dataSource": row[5],
+            "sourceVersion": row[6],
+        }
+
+    signal_usage: Dict[str, Dict[str, Any]] = {}
+    r = await session.execute(text("""
+SELECT f.factor_name, COUNT(*) AS signal_count, MAX(se.timestamp) AS latest_signal_at,
+       ARRAY_AGG(DISTINCT se.source_strategy) AS strategies
+FROM signal_events se
+CROSS JOIN LATERAL jsonb_object_keys(se.factors) AS f(factor_name)
+GROUP BY f.factor_name
+"""))
+    for row in r.fetchall():
+        name = str(row[0] or "").lower()
+        signal_usage[name] = {
+            "signalCount": int(row[1] or 0),
+            "latestSignalAt": _iso(row[2]),
+            "strategies": sorted(item for item in (row[3] or []) if item),
+        }
+
+    backtest_stats = await _load_backtest_stats(session)
+    factor_names = set(FACTOR_BLUEPRINTS.keys()) | set(definitions.keys()) | set(observed.keys()) | set(signal_usage.keys())
+    items: List[Dict[str, Any]] = []
+
+    for name in factor_names:
+        blueprint = factor_blueprint(name, definitions.get(name))
+        obs = observed.get(name, {})
+        latest = latest_values.get(name, {})
+        usage = signal_usage.get(name, {})
+        used_strategies = merge_unique(strategies_using_factor(name), usage.get("strategies", []))
+        used_in_backtests = sum(int(backtest_stats.get(strategy, {}).get("count", 0)) for strategy in used_strategies)
+        used_in_agent = sum(int(backtest_stats.get(strategy, {}).get("agentAuditedCount", 0)) for strategy in used_strategies)
+        snapshot_count = int(obs.get("snapshotCount", 0))
+        latest_value = latest.get("latestValue")
+        status = infer_availability_status(snapshot_count, latest_value, bool(blueprint.get("supportsPIT")))
+        providers = obs.get("providers") or ([latest.get("provider")] if latest.get("provider") else [])
+        data_sources = obs.get("dataSources") or ([latest.get("dataSource")] if latest.get("dataSource") else [])
+        item = {
+            **blueprint,
+            "availabilityStatus": status,
+            "missingRate": infer_missing_rate(status),
+            "latestValue": latest_value,
+            "latestUpdateTime": latest.get("latestUpdateTime") or obs.get("latestUpdateTime"),
+            "latestAvailableTime": latest.get("latestAvailableTime") or obs.get("latestAvailableTime"),
+            "providers": providers,
+            "observedDataSources": data_sources,
+            "sourceVersion": latest.get("sourceVersion"),
+            "snapshotCount": snapshot_count,
+            "symbolCount": int(obs.get("symbolCount", 0)),
+            "usedBySignals": usage.get("strategies", []),
+            "signalCount": int(usage.get("signalCount", 0)),
+            "latestSignalAt": usage.get("latestSignalAt"),
+            "usedByStrategies": used_strategies,
+            "usedInBacktests": used_in_backtests,
+            "usedInAgentAudited": used_in_agent,
+            "ic": None,
+            "winRate": None,
+            "contribution": None,
+        }
+        items.append(item)
+
+    return sorted(items, key=lambda item: (category_sort_key(item["category"]), item["factorName"]))
+
+
+def _build_strategy_asset(
+    strategy_id: str,
+    template: Optional[Dict[str, Any]],
+    backtest_stats: Dict[str, Dict[str, Any]],
+    signal_stats: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    base = strategy_asset_base(strategy_id, template)
+    bt = backtest_stats.get(strategy_id, {})
+    signals = signal_stats.get(strategy_id, {})
+    return {
+        **base,
+        "triggerSignals": sorted((signals.get("signalTypes") or {}).keys()) or base["triggerSignals"],
+        "signalCount": int(signals.get("count", 0)),
+        "latestSignalAt": signals.get("latestSignalAt"),
+        "recentBacktestCount": int(bt.get("count", 0)),
+        "bestBacktestReturn": bt.get("bestBacktestReturn"),
+        "maxDrawdown": bt.get("maxDrawdown"),
+        "latestBacktestAt": bt.get("latestBacktestAt"),
+        "backtestIds": bt.get("ids", [])[:20],
+    }
 
 
 class SignalPipelineRunRequest(BaseModel):
@@ -265,6 +515,169 @@ ORDER BY fd.sort_order, fd.factor_name
         return {"data": [], "total": 0, "error": str(e)}
 
 
+@router.get("/factor-catalog")
+async def get_factor_catalog(
+    category: Optional[str] = Query(None, description="因子分类"),
+    availabilityStatus: Optional[str] = Query(None, description="available / partial / unavailable"),
+    q: Optional[str] = Query(None, description="Search factorName/displayName"),
+    usedInBacktests: bool = Query(False),
+    usedInAgentAudited: bool = Query(False),
+) -> Dict[str, Any]:
+    """Research asset catalog for factors, including availability and reverse links."""
+    try:
+        async with get_db() as session:
+            items = await _build_factor_catalog(session)
+            if category and category != "all":
+                items = [item for item in items if item.get("category") == category]
+            if availabilityStatus and availabilityStatus != "all":
+                items = [item for item in items if item.get("availabilityStatus") == availabilityStatus]
+            if q:
+                needle = q.strip().lower()
+                items = [
+                    item for item in items
+                    if needle in str(item.get("factorName", "")).lower()
+                    or needle in str(item.get("displayName", "")).lower()
+                ]
+            if usedInBacktests:
+                items = [item for item in items if int(item.get("usedInBacktests") or 0) > 0]
+            if usedInAgentAudited:
+                items = [item for item in items if int(item.get("usedInAgentAudited") or 0) > 0]
+
+            return {
+                "data": items,
+                "total": len(items),
+                "categories": FACTOR_CATEGORY_ORDER,
+                "availabilityStatuses": ["available", "partial", "unavailable"],
+            }
+    except Exception as e:
+        logger.error(f"Failed to fetch factor catalog: {e}", exc_info=True)
+        return {"data": [], "total": 0, "error": str(e)}
+
+
+@router.get("/factors/{factor_name}/detail")
+async def get_factor_detail(factor_name: str) -> Dict[str, Any]:
+    """Factor detail with reverse links to strategies, signals, and backtests."""
+    name = factor_name.strip().lower()
+    try:
+        async with get_db() as session:
+            catalog = await _build_factor_catalog(session)
+            item = next((factor for factor in catalog if factor.get("factorName") == name), None)
+            if not item:
+                item = factor_blueprint(name)
+
+            snapshots_result = await session.execute(text("""
+SELECT id, symbol, timestamp, factor_value, interval, provider, data_source, source_version, available_time, as_of_time
+FROM factor_snapshots
+WHERE LOWER(factor_name) = :factor_name
+ORDER BY timestamp DESC
+LIMIT 20
+"""), {"factor_name": name})
+            recent_snapshots = [
+                {
+                    "id": row[0],
+                    "symbol": row[1],
+                    "timestamp": _iso(row[2]),
+                    "value": row[3],
+                    "interval": row[4],
+                    "provider": row[5],
+                    "dataSource": row[6],
+                    "sourceVersion": row[7],
+                    "availableTime": _iso(row[8]),
+                    "asOfTime": _iso(row[9]),
+                }
+                for row in snapshots_result.fetchall()
+            ]
+
+            signals_result = await session.execute(text("""
+SELECT id, symbol, timestamp, signal_type, confidence, source_strategy, strategy_id
+FROM signal_events
+WHERE factors ? :factor_name
+ORDER BY timestamp DESC
+LIMIT 20
+"""), {"factor_name": name})
+            recent_signals = [
+                {
+                    "signalId": row[0],
+                    "symbol": row[1],
+                    "triggeredAt": _iso(row[2]),
+                    "signalType": row[3],
+                    "confidence": row[4],
+                    "sourceStrategy": row[5],
+                    "strategyId": row[6],
+                }
+                for row in signals_result.fetchall()
+            ]
+
+            return {
+                **item,
+                "recentSnapshots": recent_snapshots,
+                "recentSignals": recent_signals,
+                "lastBacktestAt": item.get("latestBacktestAt"),
+                "lastSignalAt": item.get("latestSignalAt"),
+                "participatesInAgentAudited": int(item.get("usedInAgentAudited") or 0) > 0,
+            }
+    except Exception as e:
+        logger.error(f"Failed to fetch factor detail: {e}", exc_info=True)
+        return {"factorName": name, "recentSnapshots": [], "recentSignals": [], "error": str(e)}
+
+
+@router.get("/strategies")
+async def get_strategy_assets() -> Dict[str, Any]:
+    """List strategy research assets with factor usage and recent backtest stats."""
+    try:
+        from app.services.strategy_templates import get_all_templates_meta
+
+        async with get_db() as session:
+            backtest_stats = await _load_backtest_stats(session)
+            signal_stats = await _load_strategy_signal_stats(session)
+            templates = {item["id"]: item for item in get_all_templates_meta(include_all=True)}
+            strategy_ids = sorted(set(templates.keys()) | set(backtest_stats.keys()) | set(signal_stats.keys()))
+            rows = [
+                _build_strategy_asset(strategy_id, templates.get(strategy_id), backtest_stats, signal_stats)
+                for strategy_id in strategy_ids
+            ]
+            return {"data": rows, "total": len(rows)}
+    except Exception as e:
+        logger.error(f"Failed to fetch strategy assets: {e}", exc_info=True)
+        return {"data": [], "total": 0, "error": str(e)}
+
+
+@router.get("/strategies/{strategy_type}/detail")
+async def get_strategy_detail(strategy_type: str) -> Dict[str, Any]:
+    """Strategy detail with used factors and signal/backtest linkage."""
+    strategy_id = strategy_type.strip()
+    try:
+        from app.services.strategy_templates import get_all_templates_meta
+
+        async with get_db() as session:
+            backtest_stats = await _load_backtest_stats(session)
+            signal_stats = await _load_strategy_signal_stats(session)
+            templates = {item["id"]: item for item in get_all_templates_meta(include_all=True)}
+            asset = _build_strategy_asset(strategy_id, templates.get(strategy_id), backtest_stats, signal_stats)
+
+            signals_result = await session.execute(text("""
+SELECT id, symbol, timestamp, signal_type, confidence
+FROM signal_events
+WHERE source_strategy = :strategy_id
+ORDER BY timestamp DESC
+LIMIT 20
+"""), {"strategy_id": strategy_id})
+            asset["recentSignals"] = [
+                {
+                    "signalId": row[0],
+                    "symbol": row[1],
+                    "triggeredAt": _iso(row[2]),
+                    "signalType": row[3],
+                    "confidence": row[4],
+                }
+                for row in signals_result.fetchall()
+            ]
+            return asset
+    except Exception as e:
+        logger.error(f"Failed to fetch strategy detail: {e}", exc_info=True)
+        return {"strategyId": strategy_id, "usedFactors": [], "recentSignals": [], "error": str(e)}
+
+
 @router.get("/factors/{symbol}/{factor_name}/series")
 async def get_factor_series(
     symbol: str,
@@ -354,6 +767,136 @@ ORDER BY timestamp DESC LIMIT :limit OFFSET :offset"""
     except Exception as e:
         logger.error(f"Failed to fetch events: {e}")
         return {"data": [], "total": 0, "error": str(e)}
+
+
+@router.get("/events/{signal_id}/detail")
+async def get_signal_event_detail(signal_id: int) -> Dict[str, Any]:
+    """SignalEvent detail with factor evidence and downstream linkage."""
+    try:
+        async with get_db() as session:
+            result = await session.execute(text("""
+SELECT id, symbol, timestamp, event_time, available_time, as_of_time,
+       signal_type, signal_value, confidence, source_strategy, strategy_id,
+       factors, extra_data, interval, provider, data_source, source_version, schema_version
+FROM signal_events
+WHERE id = :signal_id
+"""), {"signal_id": signal_id})
+            row = result.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail=f"SignalEvent {signal_id} not found")
+
+            factors = row[11] or {}
+            related_factors = signal_related_factor_names(factors)
+            source_strategy = row[9] or ""
+
+            decision_rows = await session.execute(text("""
+SELECT id, final_signal, confidence, timestamp, created_at
+FROM coordination_history
+WHERE input_snapshot_ids::text LIKE :needle
+ORDER BY created_at DESC
+LIMIT 10
+"""), {"needle": f"%{signal_id}%"})
+            decisions = [
+                {
+                    "decisionId": drow[0],
+                    "finalSignal": drow[1],
+                    "confidence": drow[2],
+                    "asOfTime": _iso(drow[3]),
+                    "createdAt": _iso(drow[4]),
+                }
+                for drow in decision_rows.fetchall()
+            ]
+
+            audit_rows_result = await session.execute(text("""
+SELECT id, action, resource, details, created_at
+FROM audit_logs
+WHERE details::text LIKE :needle
+ORDER BY created_at DESC
+LIMIT 30
+"""), {"needle": f"%{signal_id}%"})
+            audit_rows = audit_rows_result.fetchall()
+            audits = [
+                {
+                    "auditId": arow[0],
+                    "eventType": arow[1],
+                    "symbol": arow[2],
+                    "createdAt": _iso(arow[4]),
+                }
+                for arow in audit_rows
+            ]
+
+            backtest_rows = await session.execute(text("""
+SELECT id, strategy_type, symbol, interval, created_at, metrics
+FROM backtest_results
+WHERE trades_summary::text LIKE :needle OR metrics::text LIKE :needle
+ORDER BY created_at DESC
+LIMIT 20
+"""), {"needle": f"%{signal_id}%"})
+            backtests = [
+                {
+                    "backtestId": brow[0],
+                    "strategyType": brow[1],
+                    "symbol": brow[2],
+                    "interval": brow[3],
+                    "createdAt": _iso(brow[4]),
+                    "executionMode": (brow[5] or {}).get("executionMode") or (brow[5] or {}).get("execution_mode"),
+                }
+                for brow in backtest_rows.fetchall()
+            ]
+
+            related_order_intent_id = None
+            related_order_id = None
+            related_replay_session_id = None
+            for arow in audit_rows:
+                details = arow[3] or {}
+                related_order_intent_id = related_order_intent_id or _extract_related_value(
+                    details, "orderIntentId", "order_intent_id", "relatedOrderIntentId", "client_order_id"
+                )
+                related_order_id = related_order_id or _extract_related_value(
+                    details, "orderId", "order_id", "relatedOrderId"
+                )
+                related_replay_session_id = related_replay_session_id or _extract_related_value(
+                    details, "replaySessionId", "replay_session_id"
+                )
+
+            return {
+                "signalId": row[0],
+                "symbol": row[1],
+                "signalType": row[6],
+                "strength": row[7],
+                "confidence": row[8],
+                "triggeredAt": _iso(row[2]),
+                "eventTime": _iso(row[3]),
+                "availableTime": _iso(row[4]),
+                "asOfTime": _iso(row[5]),
+                "sourceStrategy": source_strategy,
+                "strategyId": row[10],
+                "relatedFactors": related_factors,
+                "factorValues": factors,
+                "triggerCondition": f"{source_strategy or 'strategy'} 根据 {', '.join(related_factors[:8]) or '暂无因子'} 触发 {row[6]} 信号",
+                "explanation": f"该信号由 {source_strategy or '未知策略'} 生成，触发时已保存因子快照引用，后续可继续追踪到决策、交易意图、回测和审计。",
+                "whetherTriggeredAgent": bool(decisions or any((bt.get("executionMode") == "agent_audited") for bt in backtests)),
+                "relatedDecisionId": decisions[0]["decisionId"] if decisions else None,
+                "relatedOrderIntentId": related_order_intent_id,
+                "relatedOrderId": related_order_id,
+                "relatedBacktestId": backtests[0]["backtestId"] if backtests else None,
+                "relatedReplaySessionId": related_replay_session_id,
+                "relatedAuditIds": [item["auditId"] for item in audits],
+                "relatedDecisions": decisions,
+                "relatedBacktests": backtests,
+                "relatedAudits": audits,
+                "extraData": row[12] or {},
+                "interval": row[13],
+                "provider": row[14],
+                "dataSource": row[15],
+                "sourceVersion": row[16],
+                "schemaVersion": row[17],
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch signal event detail: {e}", exc_info=True)
+        return {"signalId": signal_id, "relatedFactors": [], "relatedAuditIds": [], "error": str(e)}
 
 
 @router.get("/summary")

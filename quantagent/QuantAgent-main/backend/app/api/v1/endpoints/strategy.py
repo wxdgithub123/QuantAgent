@@ -9,28 +9,41 @@ import itertools
 import logging
 import time
 import uuid
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timezone, timedelta
 from typing import List, Optional, Dict, Any
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.strategy_templates import get_all_templates_meta, build_signal_func, get_template, update_template_default_params, get_template_default_params
 from app.services.clickhouse_service import clickhouse_service
 from app.services.market_data_gateway import market_data_gateway
 from app.services.database import get_db
-from app.models.db_models import AuditLog, BacktestResult, OptimizationResult
+from app.models.db_models import (
+    AuditLog,
+    BacktestResult,
+    CoordinationHistoryDB,
+    OptimizationResult,
+    PaperTrade,
+    ReplaySession,
+    SignalEventDB,
+)
 from app.services.backtester import GridOptimizer, OptunaOptimizer
 from app.services.backtester.annualization import annualize_return, annualize_sharpe, infer_annualization_factor
 from app.services.backtester.signal_resolution import resolve_signal_output
 from app.services.reproducibility import enrich_pit_metadata, stable_params_hash
+from app.services.risk_manager import risk_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 BACKTEST_TASKS: Dict[str, Dict[str, Any]] = {}
 BACKTEST_TASK_HISTORY_LIMIT = 50
+EXECUTION_MODE_RULE_ONLY = "rule_only"
+EXECUTION_MODE_AGENT_AUDITED = "agent_audited"
+DEFAULT_MAX_AGENT_CALLS = 5
+MAX_AGENT_CALLS_HARD_LIMIT = 20
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -47,27 +60,54 @@ class BacktestRequest(BaseModel):
     start_time:      Optional[datetime] = None  # 按时间范围查询（ClickHouse）
     end_time:        Optional[datetime] = None  # 按时间范围查询（ClickHouse）
     as_of_time:      Optional[datetime] = None  # point-in-time 数据截止时间
+    end_time:        Optional[datetime] = None
+    as_of_time:      Optional[datetime] = None
+    executionMode:   str = EXECUTION_MODE_RULE_ONLY
+    maxAgentCalls:   int = DEFAULT_MAX_AGENT_CALLS
 
 
 class TradeRecord(BaseModel):
+    tradeId: Optional[str] = None
+    trade_id: Optional[str] = None
+    backtestId: Optional[int] = None
+    symbol: Optional[str] = None
+    side: Optional[str] = "LONG"
     entry_time:   str
     exit_time:    str
     entry_price:  float
     exit_price:   float
     quantity:     float
+    fee: Optional[float] = 0.0
+    slippage: Optional[float] = 0.0
     pnl:          float
     pnl_pct:      float
+    realizedPnl: Optional[float] = None
+    realizedPnlPct: Optional[float] = None
+    source: Optional[str] = "backtest"
+    relatedDecisionId: Optional[int] = None
+    relatedOrderIntentId: Optional[str] = None
+    relatedOrderId: Optional[str] = None
+    relatedAuditIds: List[int] = Field(default_factory=list)
+    replaySessionId: Optional[str] = None
+    signalEventId: Optional[int] = None
+    asOfTime: Optional[str] = None
+    executionMode: str = EXECUTION_MODE_RULE_ONLY
+    replayUrl: Optional[str] = None
+    auditUrl: Optional[str] = None
 
 
 class BacktestMetrics(BaseModel):
     total_return:    float
     annual_return:   float
+    annualized_return: Optional[float] = None
     max_drawdown:    float
     sharpe_ratio:    float
     win_rate:        float
     profit_factor:   float
     total_trades:    int
     total_commission: float
+    total_fee: Optional[float] = 0.0
+    total_slippage: Optional[float] = 0.0
     initial_capital: float
     final_capital:   float
 
@@ -88,10 +128,16 @@ class BacktestResponse(BaseModel):
     metrics:       BacktestMetrics
     equity_curve:  List[Dict[str, Any]]  # [{t: ISO-string, v: float}]
     baseline_curve: List[Dict[str, Any]] # [{t: ISO-string, v: float}] buy-and-hold
+    benchmark_curve: List[Dict[str, Any]] = []
+    drawdown_curve: List[Dict[str, Any]] = []
     markers:       List[TradeMarker]     # buy/sell markers on price chart
     trades:        List[TradeRecord]
     created_at:    str
     pit:           Dict[str, Any] = {}
+    pitCheck:      Dict[str, Any] = {}
+    dataRange:     Dict[str, Any] = {}
+    auditRecordIds: List[int] = []
+    executionMode: str = EXECUTION_MODE_RULE_ONLY
 
 
 def _iso(value: Any) -> Optional[str]:
@@ -142,6 +188,462 @@ def _build_backtest_pit_metadata(
 # ─────────────────────────────────────────────────────────────────────────────
 # Strategy Templates
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _to_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, pd.Timestamp):
+        value = value.to_pydatetime()
+    if isinstance(value, datetime):
+        return _as_utc(value)
+    if isinstance(value, str) and value:
+        try:
+            return _as_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
+        except ValueError:
+            return None
+    return None
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None or pd.isna(value):
+            return default
+    except Exception:
+        if value is None:
+            return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_execution_mode(value: Optional[str]) -> str:
+    mode = (value or EXECUTION_MODE_RULE_ONLY).strip().lower()
+    if mode in {"agent", "audited", EXECUTION_MODE_AGENT_AUDITED}:
+        return EXECUTION_MODE_AGENT_AUDITED
+    return EXECUTION_MODE_RULE_ONLY
+
+
+def _clamp_max_agent_calls(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = DEFAULT_MAX_AGENT_CALLS
+    return max(0, min(parsed, MAX_AGENT_CALLS_HARD_LIMIT))
+
+
+def _backtest_trade_time(trade: Dict[str, Any]) -> datetime:
+    return (
+        _to_datetime(trade.get("entry_time") or trade.get("entryTime"))
+        or _to_datetime(trade.get("exit_time") or trade.get("exitTime"))
+        or datetime.now(timezone.utc)
+    )
+
+
+def _trade_entry_action(trade: Dict[str, Any]) -> str:
+    side = str(trade.get("side") or "LONG").upper()
+    return "SELL" if side in {"SHORT", "SELL"} else "BUY"
+
+
+def _build_mock_agent_outputs(
+    *,
+    symbol: str,
+    action: str,
+    confidence: float,
+    trade: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    pnl_pct = _safe_float(trade.get("pnl_pct", trade.get("realizedPnlPct")), 0.0)
+    entry = _safe_float(trade.get("entry_price", trade.get("entryPrice")), 0.0)
+    exit_price = _safe_float(trade.get("exit_price", trade.get("exitPrice")), 0.0)
+    return [
+        {
+            "role": "technicalAgent",
+            "label": "technical",
+            "signal": action,
+            "confidence": confidence,
+            "output": f"Mock audited backtest signal for {symbol}: entry={entry:.4f}, exit={exit_price:.4f}, pnl_pct={pnl_pct:.4f}.",
+        },
+        {
+            "role": "newsAgent",
+            "label": "news",
+            "signal": "NEUTRAL",
+            "confidence": 0.5,
+            "output": "No live news lookup in audited backtest; PIT-safe cached context only.",
+        },
+        {
+            "role": "macroAgent",
+            "label": "macro",
+            "signal": "NEUTRAL",
+            "confidence": 0.5,
+            "output": "No future macro data is used; available_time must be <= as_of_time.",
+        },
+        {
+            "role": "riskAgent",
+            "label": "risk",
+            "signal": "CHECK_RISKGUARD",
+            "confidence": 0.7,
+            "output": "OrderIntent must pass RiskGuard before any backtest PaperOrder is recorded.",
+        },
+        {
+            "role": "portfolioAgent",
+            "label": "portfolio",
+            "signal": action,
+            "confidence": confidence,
+            "output": "Backtest portfolio sizing uses the strategy trade quantity and local simulated capital.",
+        },
+        {
+            "role": "finalDecision",
+            "label": "final",
+            "signal": action,
+            "confidence": confidence,
+            "output": "Mock TradingAgentsGraph adapter approved this strong strategy signal for audited replay.",
+        },
+    ]
+
+
+def _build_order_intent_payload(
+    *,
+    intent_id: str,
+    symbol: str,
+    action: str,
+    quantity: float,
+    price: float,
+    confidence: float,
+    source_decision_id: int,
+    as_of_time: datetime,
+    initial_capital: float,
+) -> Dict[str, Any]:
+    order_value = max(quantity * price, 0.0)
+    position_ratio = order_value / initial_capital if initial_capital > 0 else 0.0
+    return {
+        "id": intent_id,
+        "intent_id": intent_id,
+        "symbol": symbol,
+        "action": action,
+        "side": "long" if action == "BUY" else "short" if action == "SELL" else "flat",
+        "positionRatio": round(min(position_ratio, 1.0), 6),
+        "quantity": quantity,
+        "confidence": confidence,
+        "validUntil": _iso(as_of_time + timedelta(hours=4)),
+        "reason": "Agent audited backtest converts a strong strategy signal into a local simulated OrderIntent.",
+        "sourceDecisionId": source_decision_id,
+        "createdAt": _iso(as_of_time),
+        "status": "CREATED",
+        "source": "backtest",
+        "executionMode": EXECUTION_MODE_AGENT_AUDITED,
+    }
+
+
+def _risk_result_from_rows(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    checked_rules = rows or []
+    passed = all(bool(row.get("passed")) for row in checked_rules) if checked_rules else True
+    blocked = next((row for row in checked_rules if not row.get("passed")), None)
+    return {
+        "passed": passed,
+        "blockedReason": (blocked or {}).get("message") if blocked else None,
+        "checkedRules": checked_rules,
+    }
+
+
+async def _build_backtest_risk_rows(
+    *,
+    symbol: str,
+    side: str,
+    quantity: float,
+    price: float,
+    initial_capital: float,
+    portfolio_value: float,
+    leverage: int = 1,
+) -> List[Dict[str, Any]]:
+    """RiskGuard preview isolated to this backtest, avoiding global paper-account peak state."""
+    config = await risk_manager.get_config()
+    order_value = max(quantity * price, 0.0)
+    portfolio = max(portfolio_value, 0.0)
+    single_limit_pct = float(config.get("MAX_SINGLE_POSITION_PCT", 0.20))
+    total_limit_pct = float(config.get("MAX_TOTAL_EXPOSURE_PCT", 1.0))
+    drawdown_limit_pct = float(config.get("MAX_TOTAL_DRAWDOWN_PCT", 0.15))
+    daily_loss_limit_pct = float(config.get("MAX_DAILY_LOSS_PCT", 0.05))
+    forbidden_symbols = {str(item).upper() for item in (config.get("FORBIDDEN_SYMBOLS") or [])}
+    max_leverage = risk_manager._calculate_dynamic_leverage(portfolio)  # noqa: SLF001 - shared RiskGuard rule.
+    local_drawdown_pct = max(0.0, (initial_capital - portfolio) / initial_capital) if initial_capital > 0 else 0.0
+
+    def row(rule_name: str, current: Any, limit: Any, passed: bool, message: str) -> Dict[str, Any]:
+        return {
+            "ruleName": rule_name,
+            "rule_name": rule_name,
+            "currentValue": current,
+            "current_value": current,
+            "limitValue": limit,
+            "limit_value": limit,
+            "passed": bool(passed),
+            "message": message,
+        }
+
+    return [
+        row("Trading switch", "enabled", "enabled", True, "Local backtest simulation is enabled."),
+        row("Single position limit", round(order_value, 4), round(portfolio * single_limit_pct, 4), order_value <= portfolio * single_limit_pct or portfolio <= 0, "Single simulated order value must stay within the configured cap."),
+        row("Total exposure limit", round(order_value, 4), round(portfolio * total_limit_pct, 4), order_value <= portfolio * total_limit_pct or portfolio <= 0, "Backtest exposure is checked in this isolated replay session."),
+        row("Daily loss limit", 0.0, round(daily_loss_limit_pct * 100, 4), True, "No live daily loss cache is used in agent_audited backtest."),
+        row("Maximum drawdown", round(local_drawdown_pct * 100, 4), round(drawdown_limit_pct * 100, 4), local_drawdown_pct < drawdown_limit_pct, "Drawdown is measured from this backtest initial capital, not global paper state."),
+        row("Forbidden symbol", symbol.upper(), "not forbidden", symbol.upper() not in forbidden_symbols, "Configured forbidden symbols cannot be traded."),
+        row("Maximum leverage", leverage, max_leverage, int(leverage) <= max_leverage, "Leverage must stay within RiskGuard dynamic cap."),
+        row("Order notional", round(order_value, 4), round(portfolio * 1.05, 4), order_value <= portfolio * 1.05 or portfolio <= 0, "Prevents confusing USDT notional with coin quantity."),
+    ]
+
+
+def _build_pit_check(
+    pit_metadata: Optional[Dict[str, Any]] = None,
+    records: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Return the P3 PIT check shape for bars or generic available_time records."""
+    pit = pit_metadata or {}
+    violations: List[Dict[str, Any]] = []
+    as_of_start = _to_datetime(pit.get("actual_start_time") or pit.get("requested_start_time"))
+    as_of_end = _to_datetime(pit.get("actual_end_time") or pit.get("as_of_time"))
+    max_available = _to_datetime(pit.get("max_available_time") or pit.get("actual_end_time"))
+    cutoff = _to_datetime(pit.get("as_of_time"))
+
+    if cutoff and as_of_end and as_of_end > cutoff:
+        violations.append(
+            {
+                "asOfTime": _iso(cutoff),
+                "availableTime": _iso(as_of_end),
+                "dataType": "bar",
+                "recordId": pit.get("source_snapshot_id") or pit.get("data_snapshot_id"),
+                "message": "K线窗口包含 as_of_time 之后的数据，存在未来函数风险。",
+            }
+        )
+
+    for index, record in enumerate(records or []):
+        record_as_of = _to_datetime(record.get("asOfTime") or record.get("as_of_time") or pit.get("as_of_time"))
+        available = _to_datetime(record.get("availableTime") or record.get("available_time"))
+        if available and (max_available is None or available > max_available):
+            max_available = available
+        if available and record_as_of and available > record_as_of:
+            violations.append(
+                {
+                    "asOfTime": _iso(record_as_of),
+                    "availableTime": _iso(available),
+                    "dataType": record.get("dataType") or record.get("data_type") or "unknown",
+                    "recordId": record.get("recordId") or record.get("id") or index,
+                    "message": record.get("message") or "available_time 晚于 as_of_time，不能作为该时点输入。",
+                }
+            )
+
+    return {
+        "passed": len(violations) == 0,
+        "asOfTimeRange": {"start": _iso(as_of_start), "end": _iso(cutoff or as_of_end)},
+        "maxAvailableTime": _iso(max_available),
+        "violationCount": len(violations),
+        "violations": violations[:50],
+        "rule": pit.get("rule") or "available_time <= as_of_time",
+    }
+
+
+def _build_drawdown_curve(equity_curve: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    peak = 0.0
+    output: List[Dict[str, Any]] = []
+    for point in equity_curve or []:
+        value = _safe_float(point.get("v", point.get("equity")), 0.0)
+        if value > peak:
+            peak = value
+        drawdown = ((value / peak) - 1.0) * 100.0 if peak > 0 else 0.0
+        output.append({"t": point.get("t") or point.get("time"), "v": round(drawdown, 4)})
+    return output
+
+
+def _normalize_backtest_trade(
+    trade: Dict[str, Any],
+    *,
+    index: int,
+    backtest_id: Optional[int],
+    symbol: str,
+    audit_ids: Optional[List[int]] = None,
+    linked_replay_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    entry_time = str(trade.get("entry_time") or trade.get("entryTime") or "")
+    exit_time = str(trade.get("exit_time") or trade.get("exitTime") or "")
+    pnl = _safe_float(trade.get("pnl", trade.get("realizedPnl")), 0.0)
+    pnl_pct = _safe_float(trade.get("pnl_pct", trade.get("realizedPnlPct")), 0.0)
+    trade_id = str(trade.get("tradeId") or trade.get("trade_id") or f"BT-{backtest_id or 'unsaved'}-{index + 1}")
+    trade_audit_ids = list(trade.get("relatedAuditIds") or [])
+    related_audit_ids = trade_audit_ids if trade_audit_ids else list(audit_ids or [])
+    replay_session_id = trade.get("replaySessionId") or trade.get("replay_session_id") or linked_replay_id
+    as_of_time = trade.get("asOfTime") or trade.get("as_of_time") or entry_time
+    replay_url = None
+    if replay_session_id and as_of_time:
+        replay_url = f"/replay?session_id={replay_session_id}&as_of_time={as_of_time}&event_time={as_of_time}&source=backtest_trade"
+    audit_url = f"/audit?backtest_id={backtest_id}" if backtest_id else None
+    return {
+        **trade,
+        "tradeId": trade_id,
+        "trade_id": trade_id,
+        "backtestId": backtest_id,
+        "symbol": trade.get("symbol") or symbol,
+        "side": trade.get("side") or "LONG",
+        "entry_time": entry_time,
+        "exit_time": exit_time,
+        "entry_price": _safe_float(trade.get("entry_price", trade.get("entryPrice")), 0.0),
+        "exit_price": _safe_float(trade.get("exit_price", trade.get("exitPrice")), 0.0),
+        "quantity": _safe_float(trade.get("quantity"), 0.0),
+        "fee": _safe_float(trade.get("fee", trade.get("commission")), 0.0),
+        "slippage": _safe_float(trade.get("slippage"), 0.0),
+        "pnl": pnl,
+        "pnl_pct": pnl_pct,
+        "realizedPnl": pnl,
+        "realizedPnlPct": pnl_pct,
+        "source": trade.get("source") or "backtest",
+        "relatedDecisionId": trade.get("relatedDecisionId"),
+        "relatedOrderIntentId": trade.get("relatedOrderIntentId"),
+        "relatedOrderId": trade.get("relatedOrderId"),
+        "relatedAuditIds": related_audit_ids,
+        "replaySessionId": replay_session_id,
+        "signalEventId": trade.get("signalEventId") or trade.get("signal_event_id"),
+        "asOfTime": as_of_time,
+        "executionMode": trade.get("executionMode") or trade.get("execution_mode") or EXECUTION_MODE_RULE_ONLY,
+        "replayUrl": replay_url,
+        "auditUrl": audit_url,
+    }
+
+
+def _normalize_metrics(raw_metrics: Dict[str, Any], trades: List[Dict[str, Any]], equity_curve: List[Dict[str, Any]]) -> Dict[str, Any]:
+    metrics = raw_metrics or {}
+    initial = _safe_float(metrics.get("initial_capital"), 10000.0)
+    final = _safe_float(metrics.get("final_capital"), _safe_float((equity_curve or [{}])[-1].get("v") if equity_curve else None, initial))
+    total_fee = _safe_float(metrics.get("total_fee", metrics.get("total_commission")), 0.0)
+    total_slippage = _safe_float(metrics.get("total_slippage"), sum(_safe_float(t.get("slippage"), 0.0) for t in trades))
+    annual = _safe_float(metrics.get("annualized_return", metrics.get("annual_return")), 0.0)
+    return {
+        "total_return": _safe_float(metrics.get("total_return"), 0.0),
+        "annual_return": annual,
+        "annualized_return": annual,
+        "max_drawdown": _safe_float(metrics.get("max_drawdown"), 0.0),
+        "sharpe_ratio": _safe_float(metrics.get("sharpe_ratio"), 0.0),
+        "win_rate": _safe_float(metrics.get("win_rate"), 0.0),
+        "profit_factor": _safe_float(metrics.get("profit_factor"), 0.0),
+        "total_trades": int(metrics.get("total_trades") or len(trades)),
+        "total_commission": total_fee,
+        "total_fee": total_fee,
+        "total_slippage": total_slippage,
+        "initial_capital": initial,
+        "final_capital": final,
+    }
+
+
+def _build_backtest_payload(
+    row: BacktestResult,
+    *,
+    audit_ids: Optional[List[int]] = None,
+    linked_replay_id: Optional[str] = None,
+    include_raw: bool = False,
+) -> Dict[str, Any]:
+    raw_metrics = row.metrics or {}
+    effective_audit_ids = audit_ids or raw_metrics.get("auditRecordIds") or raw_metrics.get("audit_record_ids") or []
+    effective_replay_id = linked_replay_id or raw_metrics.get("linkedReplayId") or raw_metrics.get("linked_replay_id")
+    execution_mode = _normalize_execution_mode(raw_metrics.get("executionMode") or raw_metrics.get("execution_mode"))
+    pit_metadata = raw_metrics.get("pit") if isinstance(raw_metrics.get("pit"), dict) else {}
+    if not pit_metadata and row.params_hash:
+        pit_metadata = {
+            "enabled": False,
+            "params_hash": row.params_hash,
+            "data_source": row.data_source,
+            "note": "历史记录未保存完整 PIT 元数据，只能展示参数哈希与数据源。",
+        }
+
+    equity_curve = row.equity_curve or []
+    trades = [
+        _normalize_backtest_trade(
+            trade,
+            index=index,
+            backtest_id=row.id,
+            symbol=row.symbol,
+            audit_ids=effective_audit_ids,
+            linked_replay_id=effective_replay_id,
+        )
+        for index, trade in enumerate(row.trades_summary or [])
+    ]
+    metrics = _normalize_metrics(raw_metrics, trades, equity_curve)
+    pit_check = raw_metrics.get("pitCheck") or raw_metrics.get("pit_check") or _build_pit_check(pit_metadata)
+    benchmark_curve = raw_metrics.get("benchmark_curve") or raw_metrics.get("baseline_curve")
+    if not benchmark_curve and equity_curve:
+        initial_value = _safe_float(equity_curve[0].get("v"), metrics["initial_capital"])
+        benchmark_curve = [{"t": point.get("t"), "v": initial_value} for point in equity_curve]
+    drawdown_curve = raw_metrics.get("drawdown_curve") or _build_drawdown_curve(equity_curve)
+    markers: List[Dict[str, Any]] = []
+    for trade in trades:
+        markers.append({"time": trade["entry_time"], "price": trade["entry_price"], "side": "BUY", "pnl": None})
+        markers.append({"time": trade["exit_time"], "price": trade["exit_price"], "side": "SELL", "pnl": trade["pnl"]})
+    markers.sort(key=lambda item: item.get("time") or "")
+
+    payload = {
+        "id": row.id,
+        "backtestId": row.id,
+        "strategy_type": row.strategy_type,
+        "strategyName": row.strategy_type,
+        "symbol": row.symbol,
+        "interval": row.interval,
+        "timeframe": row.interval,
+        "params": row.params or {},
+        "strategyParams": row.params or {},
+        "metrics": metrics,
+        "equity_curve": equity_curve,
+        "strategyEquityCurve": equity_curve,
+        "baseline_curve": benchmark_curve or [],
+        "benchmark_curve": benchmark_curve or [],
+        "benchmarkEquityCurve": benchmark_curve or [],
+        "drawdown_curve": drawdown_curve,
+        "drawdownCurve": drawdown_curve,
+        "markers": markers,
+        "trades": trades,
+        "executionMode": execution_mode,
+        "pit": pit_metadata,
+        "pitCheck": pit_check,
+        "auditRecordIds": effective_audit_ids,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "createdAt": row.created_at.isoformat() if row.created_at else None,
+        "data_source": row.data_source,
+        "params_hash": row.params_hash,
+        "dataRange": {
+            "startTime": pit_metadata.get("actual_start_time") or pit_metadata.get("requested_start_time"),
+            "endTime": pit_metadata.get("actual_end_time") or pit_metadata.get("requested_end_time"),
+            "barsCount": pit_metadata.get("row_count") or len(equity_curve),
+            "signalsCount": raw_metrics.get("signalsCount", 0),
+            "agentCallCount": raw_metrics.get("agentCallCount", 0),
+            "orderIntentCount": raw_metrics.get("orderIntentCount", 0),
+            "paperOrderCount": raw_metrics.get("paperOrderCount", len(trades)),
+            "auditRecordCount": raw_metrics.get("auditRecordCount", len(effective_audit_ids)),
+        },
+        "config": {
+            "backtestId": row.id,
+            "strategyName": row.strategy_type,
+            "symbol": row.symbol,
+            "timeframe": row.interval,
+            "startTime": pit_metadata.get("actual_start_time") or pit_metadata.get("requested_start_time"),
+            "endTime": pit_metadata.get("actual_end_time") or pit_metadata.get("requested_end_time"),
+            "initialCapital": metrics["initial_capital"],
+            "feeRate": raw_metrics.get("fee_rate"),
+            "slippageRate": raw_metrics.get("slippage_rate"),
+            "riskConfig": raw_metrics.get("risk_config") or {},
+            "strategyParams": row.params or {},
+        },
+        "linkedReplay": {
+            "replaySessionId": effective_replay_id,
+            "status": "completed",
+            "startTime": pit_metadata.get("actual_start_time") or pit_metadata.get("requested_start_time"),
+            "endTime": pit_metadata.get("actual_end_time") or pit_metadata.get("requested_end_time"),
+        } if effective_replay_id else None,
+        "links": {
+            "audit": f"/audit?backtest_id={row.id}",
+            "replay": f"/replay?session_id={effective_replay_id}" if effective_replay_id else None,
+        },
+    }
+    if include_raw:
+        payload["raw"] = {
+            "metrics": raw_metrics,
+            "trades_summary": row.trades_summary or [],
+        }
+    return payload
+
 
 @router.get("/templates")
 async def get_templates():
@@ -212,6 +714,474 @@ from app.services.backtester.event_driven import EventDrivenBacktester
 
 # ... (existing imports)
 
+
+async def _add_backtest_audit_event(
+    session,
+    *,
+    event_type: str,
+    symbol: str,
+    details: Dict[str, Any],
+) -> int:
+    payload = {
+        "eventType": event_type,
+        "symbol": symbol,
+        "immutable": True,
+        **details,
+    }
+    audit = AuditLog(
+        action=event_type,
+        user_id="system",
+        resource=symbol,
+        details=payload,
+    )
+    session.add(audit)
+    await session.flush()
+    return audit.id
+
+
+async def _apply_agent_audited_backtest_chain(
+    *,
+    session,
+    bt_row: BacktestResult,
+    trades: List[Dict[str, Any]],
+    req: BacktestRequest,
+    symbol: str,
+    interval: str,
+    pit_metadata: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Attach an auditable AgentDecision -> OrderIntent -> RiskGuard trace to strong backtest trades."""
+    max_agent_calls = _clamp_max_agent_calls(req.maxAgentCalls)
+    replay_session_id = f"BTAG-{bt_row.id}-{uuid.uuid4().hex[:8]}"[:50]
+    start_dt = _to_datetime(pit_metadata.get("actual_start_time") or pit_metadata.get("requested_start_time"))
+    end_dt = _to_datetime(pit_metadata.get("actual_end_time") or pit_metadata.get("requested_end_time"))
+    if trades:
+        start_dt = start_dt or _backtest_trade_time(trades[0])
+        end_dt = end_dt or _to_datetime(trades[-1].get("exit_time") or trades[-1].get("exitTime")) or _backtest_trade_time(trades[-1])
+    now = datetime.now(timezone.utc)
+    start_dt = start_dt or now
+    end_dt = end_dt or start_dt
+
+    replay_row = ReplaySession(
+        replay_session_id=replay_session_id,
+        strategy_id=0,
+        strategy_type=req.strategy_type,
+        params={
+            **(req.params or {}),
+            "interval": interval,
+            "executionMode": EXECUTION_MODE_AGENT_AUDITED,
+            "maxAgentCalls": max_agent_calls,
+        },
+        symbol=symbol,
+        start_time=start_dt,
+        end_time=end_dt,
+        speed=1,
+        initial_capital=req.initial_capital,
+        status="completed",
+        current_timestamp=end_dt,
+        is_saved=True,
+        data_source="BACKTEST",
+        backtest_id=bt_row.id,
+        params_hash=bt_row.params_hash,
+        metrics={
+            "executionMode": EXECUTION_MODE_AGENT_AUDITED,
+            "backtestId": bt_row.id,
+            "note": "Agent audited backtest replay session; local simulation only.",
+        },
+    )
+    session.add(replay_row)
+    await session.flush()
+
+    audit_ids: List[int] = []
+    pit_records: List[Dict[str, Any]] = []
+    agent_calls = 0
+    order_intents = 0
+    paper_orders = 0
+    blocked_count = 0
+    skipped_count = 0
+    updated_trades: List[Dict[str, Any]] = []
+
+    for index, original_trade in enumerate(trades):
+        trade = dict(original_trade)
+        trade_audit_ids = list(trade.get("relatedAuditIds") or [])
+        as_of_time = _backtest_trade_time(trade)
+        action = _trade_entry_action(trade)
+        quantity = max(_safe_float(trade.get("quantity"), 0.0), 0.0)
+        price = max(_safe_float(trade.get("entry_price", trade.get("entryPrice")), 0.0), 0.0)
+        risk_sized_quantity = quantity
+        if price > 0 and req.initial_capital > 0:
+            demo_position_value = req.initial_capital * 0.10
+            risk_sized_quantity = min(quantity, demo_position_value / price)
+        pnl = _safe_float(trade.get("pnl", trade.get("realizedPnl")), 0.0)
+        pnl_pct = _safe_float(trade.get("pnl_pct", trade.get("realizedPnlPct")), 0.0)
+        confidence = round(min(0.95, max(0.55, 0.68 + min(abs(pnl_pct) / 100.0, 0.2))), 4)
+        snapshot_id = f"BT-{bt_row.id}-SNAP-{index + 1}"
+
+        signal_row = SignalEventDB(
+            symbol=symbol,
+            timestamp=as_of_time,
+            event_time=as_of_time,
+            available_time=as_of_time,
+            as_of_time=as_of_time,
+            signal_type=action,
+            signal_value=1.0 if action == "BUY" else -1.0,
+            confidence=confidence,
+            source_strategy=f"backtest:{req.strategy_type}",
+            strategy_id=f"backtest-{bt_row.id}",
+            interval=interval,
+            provider="QuantAgent",
+            data_source="BACKTEST",
+            source_version="agent_audited.v1",
+            factors={
+                "entryPrice": price,
+                "exitPrice": _safe_float(trade.get("exit_price", trade.get("exitPrice")), 0.0),
+                "pnlPct": pnl_pct,
+            },
+            extra_data={
+                "backtestId": bt_row.id,
+                "replaySessionId": replay_session_id,
+                "executionMode": EXECUTION_MODE_AGENT_AUDITED,
+                "tradeId": trade.get("tradeId") or trade.get("trade_id"),
+            },
+        )
+        session.add(signal_row)
+        await session.flush()
+        pit_records.append(
+            {
+                "id": signal_row.id,
+                "dataType": "signal",
+                "asOfTime": _iso(as_of_time),
+                "availableTime": _iso(as_of_time),
+            }
+        )
+
+        input_summary = {
+            "snapshotId": snapshot_id,
+            "asOfTime": _iso(as_of_time),
+            "availableTime": _iso(as_of_time),
+            "dataProvider": "BACKTEST",
+            "barsCount": pit_metadata.get("row_count"),
+            "newsCount": 0,
+            "factorsCount": 3,
+            "signalsCount": 1,
+            "signalEventId": signal_row.id,
+            "pitRule": "available_time <= as_of_time",
+            "pitPassed": True,
+        }
+        signal_audit_id = await _add_backtest_audit_event(
+            session,
+            event_type="SIGNAL_TRIGGERED",
+            symbol=symbol,
+            details={
+                "asOfTime": _iso(as_of_time),
+                "availableTime": _iso(as_of_time),
+                "snapshotId": snapshot_id,
+                "signalEventId": signal_row.id,
+                "backtestId": bt_row.id,
+                "replaySessionId": replay_session_id,
+                "replayTime": _iso(as_of_time),
+                "executionMode": EXECUTION_MODE_AGENT_AUDITED,
+                "action": action,
+                "source": "backtest",
+                "inputSummary": input_summary,
+            },
+        )
+        audit_ids.append(signal_audit_id)
+        trade_audit_ids.append(signal_audit_id)
+        trade.update(
+            {
+                "signalEventId": signal_row.id,
+                "replaySessionId": replay_session_id,
+                "asOfTime": _iso(as_of_time),
+                "executionMode": EXECUTION_MODE_AGENT_AUDITED,
+                "auditedQuantity": risk_sized_quantity,
+                "source": "agent",
+            }
+        )
+
+        if agent_calls >= max_agent_calls:
+            skipped_count += 1
+            skip_audit_id = await _add_backtest_audit_event(
+                session,
+                event_type="SKIPPED_AGENT_CALL",
+                symbol=symbol,
+                details={
+                    "asOfTime": _iso(as_of_time),
+                    "availableTime": _iso(as_of_time),
+                    "snapshotId": snapshot_id,
+                    "signalEventId": signal_row.id,
+                    "backtestId": bt_row.id,
+                    "replaySessionId": replay_session_id,
+                    "replayTime": _iso(as_of_time),
+                    "executionMode": EXECUTION_MODE_AGENT_AUDITED,
+                    "maxAgentCalls": max_agent_calls,
+                    "action": action,
+                    "source": "backtest",
+                    "inputSummary": input_summary,
+                    "message": "Agent call skipped by maxAgentCalls performance guard.",
+                },
+            )
+            audit_ids.append(skip_audit_id)
+            trade_audit_ids.append(skip_audit_id)
+            trade["relatedAuditIds"] = trade_audit_ids
+            updated_trades.append(trade)
+            continue
+
+        agent_calls += 1
+        agent_outputs = _build_mock_agent_outputs(symbol=symbol, action=action, confidence=confidence, trade=trade)
+        decision_row = CoordinationHistoryDB(
+            symbol=symbol,
+            timestamp=as_of_time,
+            final_signal=action,
+            confidence=confidence,
+            vote_breakdown={
+                "technicalAgent": action,
+                "newsAgent": "NEUTRAL",
+                "macroAgent": "NEUTRAL",
+                "riskAgent": "CHECK_RISKGUARD",
+                "portfolioAgent": action,
+            },
+            risk_veto=False,
+            summary="Mock/cached AgentDecision for agent_audited backtest strong signal.",
+            agent_signals=agent_outputs,
+            bull_view=agent_outputs[0]["output"],
+            bear_view="RiskGuard may block the OrderIntent if exposure or drawdown limits are exceeded.",
+            input_snapshot_ids={
+                "snapshotId": snapshot_id,
+                "signalEventId": signal_row.id,
+                "backtestId": bt_row.id,
+                "replaySessionId": replay_session_id,
+                "pit": input_summary,
+            },
+            role_opinions=agent_outputs,
+            position_advice={
+                "action": action,
+                "quantity": quantity,
+                "auditedQuantity": risk_sized_quantity,
+                "price": price,
+                "executionMode": EXECUTION_MODE_AGENT_AUDITED,
+            },
+            risk_notes="Local RiskGuard required before recording any PaperOrder.",
+        )
+        session.add(decision_row)
+        await session.flush()
+        decision_id = decision_row.id
+        trade["relatedDecisionId"] = decision_id
+
+        decision_audit_id = await _add_backtest_audit_event(
+            session,
+            event_type="AGENT_DECISION",
+            symbol=symbol,
+            details={
+                "asOfTime": _iso(as_of_time),
+                "availableTime": _iso(as_of_time),
+                "snapshotId": snapshot_id,
+                "decisionId": decision_id,
+                "signalEventId": signal_row.id,
+                "backtestId": bt_row.id,
+                "replaySessionId": replay_session_id,
+                "replayTime": _iso(as_of_time),
+                "executionMode": EXECUTION_MODE_AGENT_AUDITED,
+                "action": action,
+                "source": "backtest",
+                "model": "mock_tradingagents_backtest.v1",
+                "agentGraph": "QuantAgentTradingAgentsGraphAdapter",
+                "inputSummary": input_summary,
+                "agentOutputs": agent_outputs,
+                "decision": {
+                    "id": decision_id,
+                    "final_signal": action,
+                    "confidence": confidence,
+                    "summary": decision_row.summary,
+                },
+            },
+        )
+        audit_ids.append(decision_audit_id)
+        trade_audit_ids.append(decision_audit_id)
+
+        intent_id = f"OI-BT-{bt_row.id}-{index + 1}-{uuid.uuid4().hex[:6]}"[:50]
+        intent = _build_order_intent_payload(
+            intent_id=intent_id,
+            symbol=symbol,
+            action=action,
+            quantity=risk_sized_quantity,
+            price=price,
+            confidence=confidence,
+            source_decision_id=decision_id,
+            as_of_time=as_of_time,
+            initial_capital=req.initial_capital,
+        )
+        order_intents += 1
+        trade["relatedOrderIntentId"] = intent_id
+        intent_audit_id = await _add_backtest_audit_event(
+            session,
+            event_type="ORDER_INTENT_CREATED",
+            symbol=symbol,
+            details={
+                "asOfTime": _iso(as_of_time),
+                "availableTime": _iso(as_of_time),
+                "snapshotId": snapshot_id,
+                "decisionId": decision_id,
+                "orderIntentId": intent_id,
+                "signalEventId": signal_row.id,
+                "backtestId": bt_row.id,
+                "replaySessionId": replay_session_id,
+                "replayTime": _iso(as_of_time),
+                "executionMode": EXECUTION_MODE_AGENT_AUDITED,
+                "action": action,
+                "source": "backtest",
+                "inputSummary": input_summary,
+                "agentOutputs": agent_outputs,
+                "intent": intent,
+            },
+        )
+        audit_ids.append(intent_audit_id)
+        trade_audit_ids.append(intent_audit_id)
+
+        try:
+            risk_rows = await _build_backtest_risk_rows(
+                symbol=symbol,
+                side=action,
+                quantity=risk_sized_quantity,
+                price=price,
+                initial_capital=req.initial_capital,
+                portfolio_value=max(req.initial_capital, req.initial_capital + pnl),
+                leverage=1,
+            )
+        except Exception as exc:
+            logger.warning("RiskGuard preview failed in agent_audited backtest: %s", exc)
+            risk_rows = [
+                {
+                    "ruleName": "RiskGuard preview fallback",
+                    "currentValue": "unavailable",
+                    "limitValue": "local simulation",
+                    "passed": True,
+                    "message": "RiskGuard preview service was unavailable; fallback permits local audited backtest only.",
+                }
+            ]
+        risk_result = _risk_result_from_rows(risk_rows)
+        risk_event = "RISK_CHECK_PASSED" if risk_result["passed"] else "RISK_BLOCKED"
+        if not risk_result["passed"]:
+            blocked_count += 1
+        risk_audit_id = await _add_backtest_audit_event(
+            session,
+            event_type=risk_event,
+            symbol=symbol,
+            details={
+                "asOfTime": _iso(as_of_time),
+                "availableTime": _iso(as_of_time),
+                "snapshotId": snapshot_id,
+                "decisionId": decision_id,
+                "orderIntentId": intent_id,
+                "signalEventId": signal_row.id,
+                "backtestId": bt_row.id,
+                "replaySessionId": replay_session_id,
+                "replayTime": _iso(as_of_time),
+                "executionMode": EXECUTION_MODE_AGENT_AUDITED,
+                "action": action,
+                "source": "backtest",
+                "inputSummary": input_summary,
+                "agentOutputs": agent_outputs,
+                "intent": {**intent, "status": "RISK_CHECKED" if risk_result["passed"] else "BLOCKED"},
+                "riskCheckResult": risk_result,
+            },
+        )
+        audit_ids.append(risk_audit_id)
+        trade_audit_ids.append(risk_audit_id)
+
+        if risk_result["passed"]:
+            fee = _safe_float(trade.get("fee"), 0.0)
+            paper_trade = PaperTrade(
+                strategy_id="agent_backtest",
+                client_order_id=intent_id,
+                symbol=symbol,
+                exchange_id="local",
+                side=action,
+                order_type="MARKET",
+                quantity=risk_sized_quantity,
+                price=price,
+                leverage=1,
+                benchmark_price=_safe_float(trade.get("exit_price", trade.get("exitPrice")), price),
+                fee=fee,
+                funding_fee=0,
+                pnl=pnl,
+                status="FILLED",
+                mode="backtest",
+                session_id=replay_session_id,
+                created_at=as_of_time,
+                data_source="BACKTEST",
+            )
+            session.add(paper_trade)
+            await session.flush()
+            paper_orders += 1
+            order_id = f"PT-{paper_trade.id}"
+            trade["relatedOrderId"] = order_id
+            execution_result = {
+                "generatedPaperOrder": True,
+                "orderId": order_id,
+                "source": "backtest",
+                "fillPrice": price,
+                "quantity": risk_sized_quantity,
+                "strategyQuantity": quantity,
+                "filledAt": _iso(as_of_time),
+                "fee": fee,
+                "slippage": _safe_float(trade.get("slippage"), 0.0),
+                "realizedPnl": pnl,
+                "status": "FILLED",
+                "positionAfterTrade": {
+                    "symbol": symbol,
+                    "quantity": 0,
+                    "note": "Round-trip BacktestTrade is represented as an audited local PaperOrder plus PnL update.",
+                },
+                "executionMode": EXECUTION_MODE_AGENT_AUDITED,
+            }
+            for event_type in ("PAPER_ORDER_FILLED", "POSITION_UPDATED", "PNL_UPDATED"):
+                event_audit_id = await _add_backtest_audit_event(
+                    session,
+                    event_type=event_type,
+                    symbol=symbol,
+                    details={
+                        "asOfTime": _iso(as_of_time),
+                        "availableTime": _iso(as_of_time),
+                        "snapshotId": snapshot_id,
+                        "decisionId": decision_id,
+                        "orderIntentId": intent_id,
+                        "orderId": order_id,
+                        "signalEventId": signal_row.id,
+                        "backtestId": bt_row.id,
+                        "replaySessionId": replay_session_id,
+                        "replayTime": _iso(as_of_time),
+                        "executionMode": EXECUTION_MODE_AGENT_AUDITED,
+                        "action": action,
+                        "source": "backtest",
+                        "inputSummary": input_summary,
+                        "agentOutputs": agent_outputs,
+                        "intent": {**intent, "status": "EXECUTED"},
+                        "riskCheckResult": risk_result,
+                        "executionResult": execution_result,
+                    },
+                )
+                audit_ids.append(event_audit_id)
+                trade_audit_ids.append(event_audit_id)
+
+        trade["relatedAuditIds"] = trade_audit_ids
+        updated_trades.append(trade)
+
+    return {
+        "trades": updated_trades,
+        "auditRecordIds": audit_ids,
+        "linkedReplayId": replay_session_id,
+        "pitRecords": pit_records,
+        "stats": {
+            "signalsCount": len(pit_records),
+            "agentCallCount": agent_calls,
+            "orderIntentCount": order_intents,
+            "paperOrderCount": paper_orders,
+            "riskBlockedCount": blocked_count,
+            "skippedAgentCalls": skipped_count,
+            "maxAgentCalls": max_agent_calls,
+        },
+    }
+
 @router.post("/backtest/run", response_model=BacktestResponse)
 async def run_backtest(req: BacktestRequest):
     """
@@ -224,9 +1194,14 @@ async def run_backtest(req: BacktestRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    execution_mode = _normalize_execution_mode(req.executionMode)
+    max_agent_calls = _clamp_max_agent_calls(req.maxAgentCalls)
+
     # Risk control: limit candles for high-frequency intervals
     MAX_LIMITS = {"15m": 500, "1h": 1000, "4h": 2000, "1d": 2000, "1w": 2000, "1M": 2000}
     effective_limit = min(req.limit, MAX_LIMITS.get(req.interval, 1000))
+    if execution_mode == EXECUTION_MODE_AGENT_AUDITED and req.start_time is None and req.end_time is None:
+        effective_limit = min(effective_limit, 720)
 
     # Normalize symbol to ccxt format
     symbol_ccxt = _normalize_symbol(req.symbol)
@@ -403,23 +1378,57 @@ async def run_backtest(req: BacktestRequest):
     except Exception:
         baseline_curve = []
 
+    drawdown_curve = _build_drawdown_curve(equity_curve)
+    pit_check = _build_pit_check(pit_metadata)
+    normalized_trades = [
+        _normalize_backtest_trade(
+            t,
+            index=index,
+            backtest_id=None,
+            symbol=symbol_clean,
+        )
+        for index, t in enumerate(trades_list)
+    ]
+
     # Build response data
     metrics_dict = {
         "total_return":     result["total_return"],
         "annual_return":    result["annual_return"],
+        "annualized_return": result["annual_return"],
         "max_drawdown":     result["max_drawdown"],
         "sharpe_ratio":     result["sharpe_ratio"],
         "win_rate":         result["win_rate"],
         "profit_factor":    result["profit_factor"],
         "total_trades":     result["total_trades"],
         "total_commission": result.get("total_commission", 0.0),
+        "total_fee":        result.get("total_commission", 0.0),
+        "total_slippage":   sum(_safe_float(t.get("slippage"), 0.0) for t in normalized_trades),
         "initial_capital":  req.initial_capital,
         "final_capital":    result["final_capital"],
         "pit":              pit_metadata,
+        "pitCheck":         pit_check,
+        "pit_check":        pit_check,
+        "benchmark_curve":  baseline_curve[:2000],
+        "drawdown_curve":   drawdown_curve[:2000],
+        "executionMode":    execution_mode,
+        "execution_mode":   execution_mode,
+        "maxAgentCalls":    max_agent_calls,
     }
 
     # Persist to PostgreSQL
     db_id = None
+    audit_record_ids: List[int] = []
+    linked_replay_id: Optional[str] = None
+    trace_stats: Dict[str, Any] = {
+        "signalsCount": 0,
+        "agentCallCount": 0,
+        "orderIntentCount": 0,
+        "paperOrderCount": len(normalized_trades),
+        "auditRecordCount": 0,
+        "riskBlockedCount": 0,
+        "skippedAgentCalls": 0,
+        "maxAgentCalls": max_agent_calls,
+    }
     try:
         async with get_db() as session:
             bt_row = BacktestResult(
@@ -430,33 +1439,87 @@ async def run_backtest(req: BacktestRequest):
                 params_hash=params_hash,
                 metrics=metrics_dict,
                 equity_curve=equity_curve[:2000],   # cap to 2000 points (match max candles)
-                trades_summary=trades_list[:100],    # store up to 100 trades for mid-freq strategies
+                trades_summary=normalized_trades[:100],    # store up to 100 trades for mid-freq strategies
                 data_source="BACKTEST",
             )
             session.add(bt_row)
             await session.flush()
             db_id = bt_row.id
-            session.add(
-                AuditLog(
-                    action="BACKTEST_RUN",
-                    user_id="system",
-                    resource=symbol_clean,
-                    details={
-                        "backtest_id": db_id,
-                        "strategy_type": req.strategy_type,
-                        "interval": req.interval,
-                        "params": req.params,
-                        "pit": pit_metadata,
-                        "metrics": {
-                            "total_return": metrics_dict["total_return"],
-                            "max_drawdown": metrics_dict["max_drawdown"],
-                            "total_trades": metrics_dict["total_trades"],
-                        },
-                    },
+            normalized_trades = [
+                _normalize_backtest_trade(
+                    {**t, "executionMode": execution_mode},
+                    index=index,
+                    backtest_id=db_id,
+                    symbol=symbol_clean,
                 )
+                for index, t in enumerate(normalized_trades)
+            ]
+
+            if execution_mode == EXECUTION_MODE_AGENT_AUDITED:
+                trace = await _apply_agent_audited_backtest_chain(
+                    session=session,
+                    bt_row=bt_row,
+                    trades=normalized_trades[:100],
+                    req=req,
+                    symbol=symbol_clean,
+                    interval=req.interval,
+                    pit_metadata=pit_metadata,
+                )
+                normalized_trades = trace["trades"]
+                linked_replay_id = trace["linkedReplayId"]
+                audit_record_ids.extend(trace["auditRecordIds"])
+                trace_stats.update(trace["stats"])
+                pit_check = _build_pit_check(pit_metadata, trace["pitRecords"])
+                metrics_dict["pitCheck"] = pit_check
+                metrics_dict["pit_check"] = pit_check
+                metrics_dict["linkedReplayId"] = linked_replay_id
+
+            trace_stats["auditRecordCount"] = len(audit_record_ids)
+            metrics_dict.update(trace_stats)
+            audit_log = AuditLog(
+                action="BACKTEST_RUN",
+                user_id="system",
+                resource=symbol_clean,
+                details={
+                    "eventType": "BACKTEST_RUN",
+                    "backtest_id": db_id,
+                    "backtestId": db_id,
+                    "strategy_type": req.strategy_type,
+                    "interval": req.interval,
+                    "params": req.params,
+                    "executionMode": execution_mode,
+                    "maxAgentCalls": max_agent_calls,
+                    "replaySessionId": linked_replay_id,
+                    "pit": pit_metadata,
+                    "pitCheck": pit_check,
+                    "metrics": {
+                        "total_return": metrics_dict["total_return"],
+                        "max_drawdown": metrics_dict["max_drawdown"],
+                        "total_trades": metrics_dict["total_trades"],
+                    },
+                },
             )
+            session.add(audit_log)
+            await session.flush()
+            audit_record_ids.append(audit_log.id)
+            metrics_dict["auditRecordIds"] = audit_record_ids
+            metrics_dict["auditRecordCount"] = len(audit_record_ids)
+            bt_row.metrics = metrics_dict
+            bt_row.trades_summary = normalized_trades[:100]
     except Exception as e:
         logger.warning(f"Failed to persist backtest result: {e}")
+
+    normalized_trades = [
+        _normalize_backtest_trade(
+            t,
+            index=index,
+            backtest_id=db_id,
+            symbol=symbol_clean,
+            audit_ids=audit_record_ids,
+            linked_replay_id=linked_replay_id,
+        )
+        for index, t in enumerate(normalized_trades)
+    ]
 
     return BacktestResponse(
         id=db_id,
@@ -467,10 +1530,28 @@ async def run_backtest(req: BacktestRequest):
         metrics=BacktestMetrics(**metrics_dict),
         equity_curve=equity_curve,
         baseline_curve=baseline_curve,
+        benchmark_curve=baseline_curve,
+        drawdown_curve=drawdown_curve,
         markers=[TradeMarker(**m) for m in markers],
-        trades=[TradeRecord(**t) for t in trades_list],
+        trades=[TradeRecord(**t) for t in normalized_trades],
         created_at=datetime.utcnow().isoformat(),
         pit=pit_metadata,
+        pitCheck=pit_check,
+        dataRange={
+            "startTime": pit_metadata.get("actual_start_time"),
+            "endTime": pit_metadata.get("actual_end_time"),
+            "barsCount": pit_metadata.get("row_count"),
+            "signalsCount": trace_stats.get("signalsCount", 0),
+            "agentCallCount": trace_stats.get("agentCallCount", 0),
+            "orderIntentCount": trace_stats.get("orderIntentCount", 0),
+            "paperOrderCount": trace_stats.get("paperOrderCount", len(normalized_trades)),
+            "auditRecordCount": len(audit_record_ids),
+            "riskBlockedCount": trace_stats.get("riskBlockedCount", 0),
+            "skippedAgentCalls": trace_stats.get("skippedAgentCalls", 0),
+            "maxAgentCalls": max_agent_calls,
+        },
+        auditRecordIds=audit_record_ids,
+        executionMode=execution_mode,
     )
 
 
@@ -499,84 +1580,72 @@ async def get_backtest_history(
         result = await session.execute(stmt)
         rows = result.scalars().all()
 
-    history = []
-    for row in rows:
-        # Reconstruct full backtest result from DB fields
-        equity_curve = row.equity_curve if row.equity_curve else []
-        trades_summary = row.trades_summary if row.trades_summary else []
-        
-        # Reconstruct markers from trades_summary
-        markers = []
-        for t in trades_summary:
-            # Buy marker (Entry)
-            markers.append({
-                "time": t.get("entry_time", ""),
-                "price": t.get("entry_price", 0),
-                "side": "BUY",
-                "pnl": None
-            })
-            # Sell marker (Exit)
-            markers.append({
-                "time": t.get("exit_time", ""),
-                "price": t.get("exit_price", 0),
-                "side": "SELL",
-                "pnl": t.get("pnl")
-            })
-        # Sort markers by time
-        markers.sort(key=lambda x: x.get("time", ""))
-        
-        # Reconstruct baseline_curve from equity_curve (buy-and-hold approximation)
-        # If we have equity_curve with timestamps, create a simple baseline
-        baseline_curve = []
-        if equity_curve and len(equity_curve) >= 2:
-            # Get initial equity value
-            initial_value = equity_curve[0].get("v", equity_curve[0].get("value", 10000))
-            # Create a flat baseline (simplified; ideally should recalculate from price data)
-            # For now, use the first and last points to create a reference line
-            baseline_curve = [
-                {"t": equity_curve[0].get("t", equity_curve[0].get("time", "")), "v": initial_value},
-                {"t": equity_curve[-1].get("t", equity_curve[-1].get("time", "")), "v": initial_value}
-            ]
-        
-        # Ensure metrics has all required fields with default values
-        raw_metrics = row.metrics or {}
-        pit_metadata = raw_metrics.get("pit") if isinstance(raw_metrics.get("pit"), dict) else {}
-        if not pit_metadata and isinstance(row.params_hash, str):
-            pit_metadata = {
-                "enabled": False,
-                "params_hash": row.params_hash,
-                "data_source": row.data_source,
-                "note": "This older backtest record does not include full PIT metadata.",
-            }
-        metrics = raw_metrics
-        metrics = {
-            "total_return": metrics.get("total_return", 0),
-            "annual_return": metrics.get("annual_return", 0),
-            "max_drawdown": metrics.get("max_drawdown", 0),
-            "sharpe_ratio": metrics.get("sharpe_ratio", 0),
-            "win_rate": metrics.get("win_rate", 0),
-            "profit_factor": metrics.get("profit_factor", 0),
-            "total_trades": metrics.get("total_trades", len(trades_summary)),  # Fallback to trades count
-            "total_commission": metrics.get("total_commission", 0),
-            "initial_capital": metrics.get("initial_capital", 10000),
-            "final_capital": metrics.get("final_capital", initial_value if equity_curve else 10000),
-        }
-        
-        history.append({
-            "id":             row.id,
-            "strategy_type":  row.strategy_type,
-            "symbol":         row.symbol,
-            "interval":       row.interval,
-            "params":         row.params,
-            "metrics":        metrics,
-            "equity_curve":   equity_curve,
-            "baseline_curve": baseline_curve,
-            "markers":        markers,
-            "trades":         trades_summary,
-            "created_at":     row.created_at.isoformat() if row.created_at else None,
-            "pit":            pit_metadata,
-        })
+    history = [_build_backtest_payload(row) for row in rows]
     return {"history": history, "total": len(history)}
+
+
+@router.get("/backtest/history/{record_id}")
+async def get_backtest_record_detail(record_id: int):
+    """Return a full, replay/audit-linked backtest detail payload for P3."""
+    from sqlalchemy import select
+
+    async with get_db() as session:
+        row = (
+            await session.execute(select(BacktestResult).where(BacktestResult.id == record_id))
+        ).scalar_one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="回测记录不存在")
+
+        audit_rows = (
+            await session.execute(
+                select(AuditLog)
+                .order_by(AuditLog.created_at.desc())
+                .limit(2000)
+            )
+        ).scalars().all()
+        audit_ids = [
+            item.id
+            for item in audit_rows
+            if str((item.details or {}).get("backtest_id") or (item.details or {}).get("backtestId")) == str(record_id)
+        ]
+
+        replay_row = (
+            await session.execute(
+                select(ReplaySession)
+                .where(ReplaySession.backtest_id == record_id)
+                .order_by(ReplaySession.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if not replay_row and row.params_hash:
+            replay_row = (
+                await session.execute(
+                    select(ReplaySession)
+                    .where(ReplaySession.params_hash == row.params_hash)
+                    .order_by(ReplaySession.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+
+    linked_replay_id = replay_row.replay_session_id if replay_row else None
+    payload = _build_backtest_payload(
+        row,
+        audit_ids=audit_ids,
+        linked_replay_id=linked_replay_id,
+        include_raw=True,
+    )
+    return {
+        "schema_version": "backtest_detail.v1",
+        "generated_at": datetime.utcnow().isoformat(),
+        "backtestResult": payload,
+        "linkedReplay": {
+            "replaySessionId": replay_row.replay_session_id,
+            "status": replay_row.status,
+            "startTime": _iso(replay_row.start_time),
+            "endTime": _iso(replay_row.end_time),
+        } if replay_row else None,
+        "auditRecords": [{"id": audit_id, "url": f"/audit?audit_id={audit_id}"} for audit_id in audit_ids],
+    }
 
 
 @router.delete("/backtest/history/{record_id}")

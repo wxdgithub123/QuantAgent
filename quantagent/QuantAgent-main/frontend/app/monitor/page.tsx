@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { AppTopNav } from "@/components/navigation/AppTopNav";
 import {
   Activity,
   ArrowLeft,
@@ -171,52 +172,24 @@ export default function MonitorPage() {
   const coverage = overview?.market_coverage;
 
   return (
-    <div className="min-h-screen bg-[#071019] text-slate-100">
-      <header className="sticky top-0 z-40 border-b border-white/10 bg-[#071019]/85 backdrop-blur-xl">
-        <div className="container mx-auto flex items-center justify-between gap-4 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <Link href="/dashboard" className="rounded-xl border border-white/10 bg-white/5 p-2 text-slate-300 transition hover:bg-white/10 hover:text-white">
-              <ArrowLeft className="h-4 w-4" />
-            </Link>
-            <div>
-              <h1 className="text-lg font-semibold text-white">系统状态监控</h1>
-              <p className="text-xs text-slate-500">按 PRD 10.6 查看前端页面、后端接口和真实数据状态</p>
-            </div>
-          </div>
-
-          <nav className="hidden items-center gap-1 lg:flex">
-            {NAV_LINKS.map((item) => {
-              const Icon = item.icon;
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={cn(
-                    "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition",
-                    item.active
-                      ? "border border-cyan-400/30 bg-cyan-500/15 text-cyan-100"
-                      : "text-slate-300 hover:bg-white/10 hover:text-white",
-                  )}
-                >
-                  <Icon className="h-4 w-4" />
-                  {item.label}
-                </Link>
-              );
-            })}
-          </nav>
-
+    <div className="min-h-screen bg-background text-foreground">
+      <AppTopNav
+        activeSection="monitor"
+        title="系统状态"
+        subtitle="服务健康、数据链路与缓存诊断"
+        rightSlot={
           <Button
             size="sm"
             variant="outline"
-            className="border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"
+            className="border-border"
             onClick={() => void refresh()}
             disabled={loading}
           >
             <RefreshCw className={cn("mr-2 h-4 w-4", loading && "animate-spin")} />
             刷新
           </Button>
-        </div>
-      </header>
+        }
+      />
 
       <main className="container mx-auto space-y-6 px-4 py-6">
         <section className="overflow-hidden rounded-3xl border border-cyan-400/20 bg-[radial-gradient(circle_at_10%_10%,rgba(34,211,238,0.2),transparent_32%),radial-gradient(circle_at_80%_20%,rgba(16,185,129,0.16),transparent_30%),linear-gradient(135deg,rgba(15,23,42,0.98),rgba(2,6,23,0.98))] p-6 shadow-2xl">

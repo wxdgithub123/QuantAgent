@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { Suspense, useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { CompositionCompareChart } from "@/components/charts/CompositionCompareChart";
 import { WfeCompareChart } from "@/components/charts/WfeCompareChart";
 import { ParamStabilityChart } from "@/components/charts/ParamStabilityChart";
@@ -44,12 +45,15 @@ interface Template {
 interface BacktestMetrics {
   total_return: number;
   annual_return: number;
+  annualized_return?: number;
   max_drawdown: number;
   sharpe_ratio: number;
   win_rate: number;
   profit_factor: number;
   total_trades: number;
   total_commission: number;
+  total_fee?: number;
+  total_slippage?: number;
   initial_capital: number;
   final_capital: number;
 }
@@ -76,14 +80,49 @@ interface PitMetadata {
   upstream_note?: string;
 }
 
+interface PitCheck {
+  passed?: boolean;
+  asOfTimeRange?: { start?: string | null; end?: string | null };
+  maxAvailableTime?: string | null;
+  violationCount?: number;
+  violations?: Array<{
+    asOfTime?: string | null;
+    availableTime?: string | null;
+    dataType?: string;
+    recordId?: string | number | null;
+    message?: string;
+  }>;
+  rule?: string;
+}
+
 interface TradeRecord {
+  tradeId?: string;
+  trade_id?: string;
+  backtestId?: number | null;
+  symbol?: string;
+  side?: string;
   entry_time: string;
   exit_time: string;
   entry_price: number;
   exit_price: number;
   quantity: number;
+  fee?: number;
+  slippage?: number;
   pnl: number;
   pnl_pct: number;
+  realizedPnl?: number;
+  realizedPnlPct?: number;
+  source?: "strategy" | "agent" | "backtest" | string;
+  relatedDecisionId?: number | null;
+  relatedOrderIntentId?: string | null;
+  relatedOrderId?: string | null;
+  relatedAuditIds?: number[];
+  replaySessionId?: string | null;
+  signalEventId?: number | null;
+  asOfTime?: string | null;
+  executionMode?: "rule_only" | "agent_audited" | string;
+  replayUrl?: string | null;
+  auditUrl?: string | null;
 }
 
 interface TradeMarker {
@@ -103,10 +142,18 @@ interface BacktestResult {
   metrics: BacktestMetrics;
   equity_curve: { t: string; v: number }[];
   baseline_curve: { t: string; v: number }[];
+  benchmark_curve?: { t: string; v: number }[];
+  drawdown_curve?: { t: string; v: number }[];
   markers: TradeMarker[];
   trades: TradeRecord[];
   created_at: string;
   pit?: PitMetadata;
+  pitCheck?: PitCheck;
+  dataRange?: Record<string, any>;
+  auditRecordIds?: number[];
+  executionMode?: "rule_only" | "agent_audited" | string;
+  linkedReplay?: { replaySessionId?: string; status?: string; startTime?: string; endTime?: string } | null;
+  links?: { audit?: string | null; replay?: string | null };
 }
 
 interface OptimizeResultFull {
@@ -235,6 +282,53 @@ function describeDataSource(source?: string | null) {
   if (source === "market_data_gateway") return "行情网关实时/近实时读取";
   if (source === "market_data_gateway:fallback") return "行情网关备用读取";
   return source;
+}
+
+function friendlyBacktestError(value: unknown, fallback = "数据暂不可用，已展示缓存数据 / 暂无数据。") {
+  const raw = typeof value === "string" ? value : value instanceof Error ? value.message : "";
+  if (!raw) return fallback;
+  if (/failed to fetch|ECONNREFUSED|HTTP 500|Internal Server Error/i.test(raw)) return fallback;
+  return raw;
+}
+
+function formatMoney(value?: number | null) {
+  const n = Number(value ?? 0);
+  return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "暂无数据";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function getPitCheck(result?: BacktestResult | null): PitCheck {
+  return result?.pitCheck || {
+    passed: true,
+    asOfTimeRange: { start: result?.pit?.actual_start_time, end: result?.pit?.as_of_time || result?.pit?.actual_end_time },
+    maxAvailableTime: result?.pit?.actual_end_time || null,
+    violationCount: 0,
+    violations: [],
+    rule: result?.pit?.rule || "available_time <= as_of_time",
+  };
+}
+
+function auditHrefForBacktest(result?: BacktestResult | null, trade?: TradeRecord) {
+  const auditId = trade?.relatedAuditIds?.[0];
+  if (auditId) return `/audit?audit_id=${auditId}`;
+  if (result?.id) return `/audit?backtest_id=${result.id}`;
+  return null;
+}
+
+function executionModeLabel(mode?: string | null) {
+  return mode === "agent_audited" ? "Agent 审计回测" : "普通规则回测";
+}
+
+function executionModeDescription(mode?: string | null) {
+  if (mode === "agent_audited") {
+    return "当前为 Agent 审计回测，每笔被审计交易均经过 AgentDecision、OrderIntent、RiskGuard、PaperOrder 和 AuditRecord 链路；超过 maxAgentCalls 的强信号会记录为 SKIPPED_AGENT_CALL。";
+  }
+  return "当前为普通规则回测，交易由策略规则生成，速度快；不保证每笔交易都有 AgentDecision / OrderIntent 审计链。";
 }
 
 function MetricsComparisonTable({
@@ -805,7 +899,8 @@ function DeleteConfirmDialog({
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
-export default function BacktestPage() {
+function BacktestPageContent() {
+  const searchParams = useSearchParams();
   // Templates
   const [templates, setTemplates]       = useState<Template[]>([]);
   const [selectedType, setSelectedType] = useState<string>("ma");
@@ -816,6 +911,8 @@ export default function BacktestPage() {
   const [interval, setIntervalVal]          = useState("1d");
   const [limit, setLimit]                   = useState(500);
   const [initialCapital, setInitialCapital] = useState(10000);
+  const [executionMode, setExecutionMode] = useState<"rule_only" | "agent_audited">("rule_only");
+  const [maxAgentCalls, setMaxAgentCalls] = useState(5);
 
   // Date range (optional)
   const [startTime, setStartTime] = useState<string>('');
@@ -830,6 +927,9 @@ export default function BacktestPage() {
   // History
   const [history, setHistory]   = useState<any[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<any>(null); // Record to delete
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [copyMessage, setCopyMessage] = useState("");
 
   // Composition Mode
   const [backtestMode, setBacktestMode] = useState<"single" | "composition" | "wfa" | "optimize">("single");
@@ -865,6 +965,38 @@ export default function BacktestPage() {
   const [batchSubmitting, setBatchSubmitting] = useState(false);
   const [batchTask, setBatchTask] = useState<BacktestTask | null>(null);
   const [batchError, setBatchError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!running) return;
+    const timer = setTimeout(() => {
+      setRunning(false);
+      setError("数据暂不可用，已展示缓存数据 / 暂无数据。");
+    }, 120000);
+    return () => clearTimeout(timer);
+  }, [running]);
+
+  useEffect(() => {
+    if (!compositionRunning && !wfaRunning && !optRunning && !batchSubmitting) return;
+    const timer = setTimeout(() => {
+      if (compositionRunning) {
+        setCompositionRunning(false);
+        setCompositionError("数据暂不可用，已展示缓存数据 / 暂无数据。");
+      }
+      if (wfaRunning) {
+        setWfaRunning(false);
+        setWfaError("数据暂不可用，已展示缓存数据 / 暂无数据。");
+      }
+      if (optRunning) {
+        setOptRunning(false);
+        setOptError("数据暂不可用，已展示缓存数据 / 暂无数据。");
+      }
+      if (batchSubmitting) {
+        setBatchSubmitting(false);
+        setBatchError("数据暂不可用，已展示缓存数据 / 暂无数据。");
+      }
+    }, 120000);
+    return () => clearTimeout(timer);
+  }, [batchSubmitting, compositionRunning, optRunning, wfaRunning]);
 
   // ── Build param_ranges from optParamRanges config ─────────────────────────
   const buildParamRanges = (): Record<string, number[]> => {
@@ -1242,14 +1374,14 @@ export default function BacktestPage() {
             setTimeout(pollSession, 2000);
           }
         } catch (e) {
-          setWfaError("轮询状态时发生网络错误: " + String(e));
+          setWfaError("数据暂不可用，已展示缓存数据 / 暂无数据。");
           setWfaRunning(false);
         }
       };
       
       setTimeout(pollSession, 2000);
     } catch (e) {
-      setWfaError("网络错误: " + String(e));
+      setWfaError("数据暂不可用，已展示缓存数据 / 暂无数据。");
       setWfaRunning(false);
     }
   };
@@ -1294,12 +1426,41 @@ export default function BacktestPage() {
 
   // Fetch history
   const fetchHistory = useCallback(() => {
-    fetch("/api/v1/strategy/backtest/history?limit=50").then(r => r.json()).then(d => {
+    fetch("/api/v1/strategy/backtest/history?limit=50").then(async r => {
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || "历史回测记录读取失败");
       setHistory(d.history || []);
-    }).catch(() => {});
+    }).catch((err) => {
+      setError(friendlyBacktestError(err, "数据暂不可用，暂无历史回测记录。"));
+    });
   }, []);
 
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
+
+  const loadBacktestDetail = useCallback(async (recordId: number) => {
+    setDetailLoading(true);
+    setDetailError(null);
+    setCopyMessage("");
+    try {
+      const res = await fetch(`/api/v1/strategy/backtest/history/${recordId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "回测详情读取失败");
+      const detail = data.backtestResult as BacktestResult;
+      detail.linkedReplay = data.linkedReplay || null;
+      setResult(detail);
+    } catch (err) {
+      setDetailError(friendlyBacktestError(err, "数据暂不可用，暂无回测详情。"));
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const id = Number(searchParams.get("backtest_id"));
+    if (Number.isFinite(id) && id > 0 && result?.id !== id) {
+      void loadBacktestDetail(id);
+    }
+  }, [loadBacktestDetail, result?.id, searchParams]);
 
   // Launch Paper Bot state
   const [launchTarget, setLaunchTarget] = useState<any>(null);
@@ -1336,7 +1497,7 @@ export default function BacktestPage() {
         }, 2000);
       }
     } catch (e) {
-      setLaunchResult({ error: "网络错误，创建失败" });
+      setLaunchResult({ error: "数据暂不可用，已展示缓存数据 / 暂无数据。" });
     } finally {
       setLaunchLoading(false);
     }
@@ -1366,7 +1527,7 @@ export default function BacktestPage() {
         setError(data.detail || "删除失败");
       }
     } catch (e) {
-      setError("网络错误，删除失败");
+      setError("数据暂不可用，已展示缓存数据 / 暂无数据。");
     } finally {
       setDeleteTarget(null);
     }
@@ -1408,6 +1569,8 @@ export default function BacktestPage() {
         limit,
         initial_capital: initialCapital,
         params:          paramValues,
+        executionMode,
+        maxAgentCalls,
       };
       // Add date range if both are specified
       if (startTime && endTime) {
@@ -1423,18 +1586,29 @@ export default function BacktestPage() {
         body: JSON.stringify(requestBody),
       });
       const data = await res.json();
-      if (!res.ok) { setError(data.detail || "回测失败"); return; }
+      if (!res.ok) { setError(friendlyBacktestError(data.detail, "回测失败，数据暂不可用。")); return; }
       setResult(data);
+      setDetailError(null);
       fetchHistory();
       
       // Auto-save params to database for sync across pages
       autoSaveParams(selectedType, paramValues);
     } catch (e) {
-      setError("网络错误，请检查后端连接");
+      setError(friendlyBacktestError(e));
     } finally {
       setRunning(false);
     }
   };
+
+  const copyBacktestJson = useCallback(async () => {
+    if (!result) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(result, null, 2));
+      setCopyMessage("已复制回测结果 JSON");
+    } catch {
+      setCopyMessage("复制失败，可以手动展开 JSON 后复制");
+    }
+  }, [result]);
 
   // Composition backtest handler
   const handleCompositionRun = async () => {
@@ -1468,9 +1642,8 @@ export default function BacktestPage() {
       setCompositionResult(data);
     } catch (e) {
       // Log detailed error for debugging
-      const errorMessage = e instanceof Error ? e.message : String(e);
-      console.error("Composition run error:", errorMessage);
-      setCompositionError(`网络错误: ${errorMessage}`);
+      console.error("Composition run error:", e);
+      setCompositionError("数据暂不可用，已展示缓存数据 / 暂无数据。");
     } finally {
       setCompositionRunning(false);
     }
@@ -1478,6 +1651,9 @@ export default function BacktestPage() {
 
   const m = result?.metrics;
   const resultAsOfTime = getResultAsOfTime(result);
+  const pitCheck = getPitCheck(result);
+  const benchmarkData = result?.benchmark_curve || result?.baseline_curve || [];
+  const drawdownData = result?.drawdown_curve || [];
 
   return (
     <div className="min-h-screen bg-background">
@@ -1584,6 +1760,57 @@ export default function BacktestPage() {
                 <p>如果只在“日期范围”里填结束时间，K 线窗口会按该范围裁剪；如果额外填写“数据截止时间”，后端会强制不使用截止时间之后的 K 线。</p>
               </CardContent>
             </Card>
+            <Card className={executionMode === "agent_audited" ? "border-emerald-500/25 bg-emerald-500/5" : "border-slate-500/20 bg-slate-500/5"}>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-foreground text-sm flex items-center gap-2">
+                  <Server className="h-4 w-4 text-emerald-300" />
+                  回测执行模式
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setExecutionMode("rule_only")}
+                    className={`rounded-xl border px-3 py-2 text-left text-xs transition ${
+                      executionMode === "rule_only"
+                        ? "border-blue-400/50 bg-blue-500/15 text-blue-100"
+                        : "border-white/10 bg-secondary/40 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <p className="font-medium">普通规则回测</p>
+                    <p className="mt-1 opacity-70">快，不强制生成 Agent 链路</p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExecutionMode("agent_audited")}
+                    className={`rounded-xl border px-3 py-2 text-left text-xs transition ${
+                      executionMode === "agent_audited"
+                        ? "border-emerald-400/50 bg-emerald-500/15 text-emerald-100"
+                        : "border-white/10 bg-secondary/40 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <p className="font-medium">Agent 审计回测</p>
+                    <p className="mt-1 opacity-70">强信号补齐决策到审计链路</p>
+                  </button>
+                </div>
+                <p className="text-xs text-muted-foreground">{executionModeDescription(executionMode)}</p>
+                {executionMode === "agent_audited" && (
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">maxAgentCalls（本次最多审计多少笔强信号交易）</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={20}
+                      value={maxAgentCalls}
+                      onChange={(event) => setMaxAgentCalls(Math.max(0, Math.min(20, Number(event.target.value) || 0)))}
+                      className="h-9 rounded-xl border-white/10 bg-background/60 text-xs"
+                    />
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             {/* Strategy Selection */}
             <Card className="bg-card border-border/50">
               <CardHeader className="pb-3">
@@ -1704,6 +1931,27 @@ export default function BacktestPage() {
 
           {/* ── Right: Results ── */}
           <div className="lg:col-span-2 space-y-6">
+            {detailLoading && (
+              <Card className="border-cyan-500/20 bg-cyan-500/5">
+                <CardContent className="flex items-center gap-3 p-4 text-sm text-cyan-100">
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  正在读取完整回测详情、PIT 检查、交易明细和关联审计...
+                </CardContent>
+              </Card>
+            )}
+
+            {detailError && (
+              <Card className="border-amber-500/25 bg-amber-500/10">
+                <CardContent className="flex items-start gap-3 p-4 text-sm text-amber-100">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <div>
+                    <p className="font-medium">回测详情暂不可用</p>
+                    <p className="mt-1 text-xs text-amber-100/80">{detailError}</p>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             {!result ? (
               <div className="flex flex-col items-center justify-center min-h-[400px] text-muted-foreground space-y-4">
                 <div className="w-20 h-20 bg-secondary/50 rounded-2xl flex items-center justify-center border border-border/50">
@@ -1742,6 +1990,34 @@ export default function BacktestPage() {
                   </div>
                 </div>
 
+                <Card className={result.executionMode === "agent_audited" ? "border-emerald-500/25 bg-emerald-500/5" : "border-blue-500/20 bg-blue-500/5"}>
+                  <CardContent className="grid gap-3 p-4 text-xs md:grid-cols-[1.2fr_0.8fr_0.8fr]">
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">executionMode</p>
+                      <p className="mt-1 text-sm font-medium text-foreground">{executionModeLabel(result.executionMode)}</p>
+                      <p className="mt-1 text-muted-foreground">{executionModeDescription(result.executionMode)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Agent 审计调用</p>
+                      <p className="mt-1 text-sm text-foreground">
+                        {result.dataRange?.agentCallCount ?? 0} / {result.dataRange?.maxAgentCalls ?? "未设置"}
+                      </p>
+                      <p className="mt-1 text-muted-foreground">跳过：{result.dataRange?.skippedAgentCalls ?? 0}，风控拦截：{result.dataRange?.riskBlockedCount ?? 0}</p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">关联回放</p>
+                      <p className="mt-1 font-mono text-foreground">{result.linkedReplay?.replaySessionId || "暂无关联记录"}</p>
+                      {result.links?.replay ? (
+                        <Link href={result.links.replay} className="mt-1 inline-block text-emerald-300 hover:text-emerald-200">
+                          打开历史回放
+                        </Link>
+                      ) : (
+                        <p className="mt-1 text-muted-foreground">普通模式可能没有独立回放会话</p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
                 <Card className="border-cyan-500/20 bg-cyan-500/5">
                   <CardContent className="grid gap-3 p-4 text-xs md:grid-cols-4">
                     <div>
@@ -1773,6 +2049,50 @@ export default function BacktestPage() {
                   </CardContent>
                 </Card>
 
+                <Card className={pitCheck.passed && !pitCheck.violationCount ? "border-emerald-500/20 bg-emerald-500/5" : "border-amber-500/30 bg-amber-500/10"}>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="flex items-center gap-2 text-sm text-foreground">
+                      {pitCheck.passed && !pitCheck.violationCount ? <CheckCircle2 className="h-4 w-4 text-emerald-400" /> : <AlertTriangle className="h-4 w-4 text-amber-300" />}
+                      PIT 检查结果
+                      <Badge className={pitCheck.passed && !pitCheck.violationCount ? "border-emerald-400/30 bg-emerald-500/15 text-emerald-300" : "border-amber-400/30 bg-amber-500/15 text-amber-200"}>
+                        {pitCheck.passed && !pitCheck.violationCount ? "通过" : "发现未来函数风险"}
+                      </Badge>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3 text-xs text-muted-foreground">
+                    <div className="grid gap-3 md:grid-cols-4">
+                      <div>
+                        <p>规则</p>
+                        <p className="mt-1 font-mono text-foreground">{pitCheck.rule || "available_time <= as_of_time"}</p>
+                      </div>
+                      <div>
+                        <p>as_of_time 范围</p>
+                        <p className="mt-1 text-foreground">{formatDateTime(pitCheck.asOfTimeRange?.start)} → {formatDateTime(pitCheck.asOfTimeRange?.end)}</p>
+                      </div>
+                      <div>
+                        <p>max available_time</p>
+                        <p className="mt-1 text-foreground">{formatDateTime(pitCheck.maxAvailableTime)}</p>
+                      </div>
+                      <div>
+                        <p>违规数量</p>
+                        <p className={pitCheck.violationCount ? "mt-1 font-bold text-amber-300" : "mt-1 font-bold text-emerald-300"}>{pitCheck.violationCount ?? 0}</p>
+                      </div>
+                    </div>
+                    {(pitCheck.violationCount ?? 0) > 0 && (
+                      <div className="max-h-36 overflow-auto rounded-xl border border-amber-400/20 bg-black/20">
+                        {(pitCheck.violations || []).slice(0, 5).map((item, index) => (
+                          <div key={`${item.recordId}-${index}`} className="border-b border-white/10 px-3 py-2 last:border-0">
+                            <p className="text-amber-100">{item.message || "available_time 晚于 as_of_time"}</p>
+                            <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                              {item.dataType || "unknown"} · asOf={formatDateTime(item.asOfTime)} · available={formatDateTime(item.availableTime)}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
                 {/* Metrics Grid */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <MetricCard
@@ -1782,8 +2102,8 @@ export default function BacktestPage() {
                   />
                   <MetricCard
                     label="年化收益率"
-                    value={`${(m!.annual_return ?? 0) >= 0 ? "+" : ""}${(m!.annual_return ?? 0).toFixed(2)}%`}
-                    positive={(m!.annual_return ?? 0) >= 0}
+                    value={`${(m!.annualized_return ?? m!.annual_return ?? 0) >= 0 ? "+" : ""}${(m!.annualized_return ?? m!.annual_return ?? 0).toFixed(2)}%`}
+                    positive={(m!.annualized_return ?? m!.annual_return ?? 0) >= 0}
                   />
                   <MetricCard
                     label="最大回撤"
@@ -1798,9 +2118,9 @@ export default function BacktestPage() {
                     sub={(m!.sharpe_ratio ?? 0) >= 2 ? "优秀" : (m!.sharpe_ratio ?? 0) >= 1 ? "良好" : (m!.sharpe_ratio ?? 0) >= 0.5 ? "一般" : "较差"}
                   />
                   <MetricCard
-                    label="信息比率"
-                    value="待接入"
-                    sub="需要稳定基准收益序列"
+                    label="手续费合计"
+                    value={formatMoney(m!.total_fee ?? m!.total_commission ?? 0)}
+                    sub="来自回测成交成本"
                   />
                   <MetricCard label="胜率" value={`${(m!.win_rate ?? 0).toFixed(1)}%`} positive={(m!.win_rate ?? 0) >= 50} />
                   <MetricCard label="盈亏比" value={(m!.profit_factor ?? 0) >= 999 ? "∞" : (m!.profit_factor ?? 0).toFixed(2)} positive={(m!.profit_factor ?? 0) >= 1.5} />
@@ -1810,6 +2130,11 @@ export default function BacktestPage() {
                     value={`$${(m!.final_capital ?? m!.initial_capital ?? 10000).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
                     positive={(m!.final_capital ?? m!.initial_capital ?? 10000) >= (m!.initial_capital ?? 10000)}
                     sub={`初始 $${(m!.initial_capital ?? 10000).toLocaleString()}`}
+                  />
+                  <MetricCard
+                    label="滑点合计"
+                    value={formatMoney(m!.total_slippage ?? 0)}
+                    sub="无滑点字段时显示 0"
                   />
                 </div>
 
@@ -1825,15 +2150,60 @@ export default function BacktestPage() {
                   <CardContent className="p-0 pb-2">
                     <EquityCurveChart
                       data={result.equity_curve || []}
-                      baselineData={result.baseline_curve ?? []}
+                      baselineData={benchmarkData}
                       markers={result.markers ?? []}
                       initialCapital={m!.initial_capital}
                     />
                   </CardContent>
                 </Card>
 
+                <Card className="bg-card border-border/50">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-foreground text-sm flex items-center gap-2">
+                      <TrendingDown className="w-4 h-4 text-rose-400" />
+                      回撤曲线
+                      <span className="text-xs font-normal text-muted-foreground ml-1">({drawdownData.length} 个数据点)</span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-0 pb-2">
+                    {drawdownData.length ? (
+                      <EquityCurveChart
+                        data={drawdownData}
+                        baselineData={[]}
+                        markers={[]}
+                        initialCapital={0}
+                        height={220}
+                      />
+                    ) : (
+                      <div className="px-4 py-8 text-center text-sm text-muted-foreground">曲线暂无数据。</div>
+                    )}
+                  </CardContent>
+                </Card>
+
                 {/* Launch Paper Bot Button */}
-                <div className="flex items-center justify-end gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {result.links?.replay || result.linkedReplay?.replaySessionId ? (
+                    <Link href={result.links?.replay || `/replay?session_id=${result.linkedReplay?.replaySessionId}`}>
+                      <Button variant="outline" className="h-8 text-xs border-indigo-500/30 text-indigo-300 hover:bg-indigo-500/10">
+                        跳转历史回放
+                      </Button>
+                    </Link>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">暂无关联回放记录</span>
+                  )}
+                  <Link href={auditHrefForBacktest(result) || "/audit"}>
+                    <Button variant="outline" className="h-8 text-xs border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10">
+                      查看关联审计
+                    </Button>
+                  </Link>
+                  <Button
+                    variant="outline"
+                    onClick={() => void copyBacktestJson()}
+                    className="h-8 text-xs border-white/10 text-foreground hover:bg-secondary"
+                  >
+                    复制回测结果 JSON
+                  </Button>
+                  {copyMessage && <span className="text-xs text-emerald-300">{copyMessage}</span>}
                   <Button
                     onClick={() => handleLaunchPaperBot(result)}
                     className="h-8 text-xs bg-green-600 hover:bg-green-500 text-white"
@@ -1843,56 +2213,84 @@ export default function BacktestPage() {
                   </Button>
                 </div>
 
-                {/* Trade List */}
-                {(result.trades || []).length > 0 && (
-                  <Card className="bg-card border-border/50">
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-foreground text-sm flex items-center gap-2">
-                        <Clock className="w-4 h-4 text-purple-400" />
-                        交易记录
-                        <span className="text-xs font-normal text-muted-foreground">（前 {Math.min((result.trades || []).length, 20)} 笔，共 {(result.trades || []).length} 笔）</span>
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-0 pb-2">
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-xs">
-                          <thead>
+                <Card className="bg-card border-border/50">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-foreground text-sm flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-purple-400" />
+                      交易明细
+                      <span className="text-xs font-normal text-muted-foreground">（前 {Math.min((result.trades || []).length, 30)} 笔，共 {(result.trades || []).length} 笔）</span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-0 pb-2">
+                    {(result.trades || []).length === 0 ? (
+                      <div className="px-4 py-8 text-center text-sm text-muted-foreground">本次回测未触发交易，但 PIT 检查和基础数据统计仍已展示。</div>
+                    ) : (
+                      <div className="max-h-[420px] overflow-auto">
+                        <table className="w-full min-w-[1180px] text-xs">
+                          <thead className="sticky top-0 bg-card">
                             <tr className="border-b border-border">
-                              {["建仓时间", "平仓时间", "建仓价", "平仓价", "数量", "盈亏", "盈亏%", "回看"].map(h => (
+                              {["tradeId", "symbol", "side", "entryTime", "entryPrice", "exitTime", "exitPrice", "quantity", "fee", "slippage", "realizedPnl", "realizedPnlPct", "source", "关联ID", "跳转"].map(h => (
                                 <th key={h} className="px-3 py-2 text-left text-muted-foreground font-medium">{h}</th>
                               ))}
                             </tr>
                           </thead>
                           <tbody>
-                            {(result.trades || []).slice(0, 20).map((t, i) => (
-                              <tr key={i} className="border-b border-border/50 hover:bg-secondary/30 transition-colors">
-                                <td className="px-3 py-2 text-muted-foreground font-mono">{t.entry_time.slice(0, 16)}</td>
-                                <td className="px-3 py-2 text-muted-foreground font-mono">{t.exit_time.slice(0, 16)}</td>
-                                <td className="px-3 py-2 text-foreground/80 font-mono">${Number(t.entry_price).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                                <td className="px-3 py-2 text-foreground/80 font-mono">${Number(t.exit_price).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                                <td className="px-3 py-2 text-muted-foreground font-mono">{Number(t.quantity).toFixed(6)}</td>
-                                <td className={`px-3 py-2 font-mono font-bold ${t.pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
-                                  {t.pnl >= 0 ? "+" : ""}${Number(t.pnl).toFixed(2)}
-                                </td>
-                                <td className={`px-3 py-2 font-mono ${t.pnl_pct >= 0 ? "text-green-400" : "text-red-400"}`}>
-                                  {t.pnl_pct >= 0 ? "+" : ""}{Number(t.pnl_pct).toFixed(2)}%
-                                </td>
-                                <td className="px-3 py-2">
-                                  <Link
-                                    href={researchSnapshotHref(result.symbol, result.interval, t.entry_time || resultAsOfTime)}
-                                    className="text-cyan-300 hover:text-cyan-200"
-                                  >
-                                    建仓上下文
-                                  </Link>
-                                </td>
-                              </tr>
-                            ))}
+                            {(result.trades || []).slice(0, 30).map((t, i) => {
+                              const auditHref = auditHrefForBacktest(result, t);
+                              return (
+                                <tr key={t.tradeId || i} className="border-b border-border/50 hover:bg-secondary/30 transition-colors">
+                                  <td className="px-3 py-2 font-mono text-muted-foreground">
+                                    <div>{t.tradeId || t.trade_id || `trade-${i + 1}`}</div>
+                                    <div className="mt-1 text-[10px] text-emerald-300">{executionModeLabel(t.executionMode || result.executionMode)}</div>
+                                  </td>
+                                  <td className="px-3 py-2 font-mono text-foreground/80">{t.symbol || result.symbol}</td>
+                                  <td className="px-3 py-2 font-mono text-foreground/80">{t.side || "LONG"}</td>
+                                  <td className="px-3 py-2 text-muted-foreground font-mono">{formatDateTime(t.entry_time)}</td>
+                                  <td className="px-3 py-2 text-foreground/80 font-mono">{formatMoney(t.entry_price)}</td>
+                                  <td className="px-3 py-2 text-muted-foreground font-mono">{formatDateTime(t.exit_time)}</td>
+                                  <td className="px-3 py-2 text-foreground/80 font-mono">{formatMoney(t.exit_price)}</td>
+                                  <td className="px-3 py-2 text-muted-foreground font-mono">{Number(t.quantity).toFixed(6)}</td>
+                                  <td className="px-3 py-2 text-muted-foreground font-mono">{formatMoney(t.fee ?? 0)}</td>
+                                  <td className="px-3 py-2 text-muted-foreground font-mono">{formatMoney(t.slippage ?? 0)}</td>
+                                  <td className={`px-3 py-2 font-mono font-bold ${Number(t.realizedPnl ?? t.pnl) >= 0 ? "text-green-400" : "text-red-400"}`}>
+                                    {Number(t.realizedPnl ?? t.pnl) >= 0 ? "+" : ""}{formatMoney(t.realizedPnl ?? t.pnl)}
+                                  </td>
+                                  <td className={`px-3 py-2 font-mono ${Number(t.realizedPnlPct ?? t.pnl_pct) >= 0 ? "text-green-400" : "text-red-400"}`}>
+                                    {Number(t.realizedPnlPct ?? t.pnl_pct) >= 0 ? "+" : ""}{Number(t.realizedPnlPct ?? t.pnl_pct).toFixed(2)}%
+                                  </td>
+                                  <td className="px-3 py-2 text-muted-foreground">{t.source || "backtest"}</td>
+                                  <td className="px-3 py-2 text-[11px] text-muted-foreground">
+                                    <div>signal: {t.signalEventId ?? "暂无关联记录"}</div>
+                                    <div>order: {t.relatedOrderId || "暂无关联记录"}</div>
+                                    <div>replay: {t.replaySessionId || "暂无关联记录"}</div>
+                                    <div>asOf: {t.asOfTime ? formatDateTime(t.asOfTime) : "暂无关联记录"}</div>
+                                    <div>decision: {t.relatedDecisionId ?? "暂无关联记录"}</div>
+                                    <div>intent: {t.relatedOrderIntentId || "暂无关联记录"}</div>
+                                    <div>audit: {t.relatedAuditIds?.length ? t.relatedAuditIds.join(", ") : "暂无关联记录"}</div>
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <div className="flex flex-col gap-1">
+                                      {t.replayUrl ? (
+                                        <Link href={t.replayUrl} className="text-indigo-300 hover:text-indigo-200">查看当时回放</Link>
+                                      ) : (
+                                        <span className="text-muted-foreground">暂无关联回放</span>
+                                      )}
+                                      {auditHref ? (
+                                        <Link href={auditHref} className="text-cyan-300 hover:text-cyan-200">查看审计</Link>
+                                      ) : (
+                                        <span className="text-muted-foreground">暂无关联审计</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
-                    </CardContent>
-                  </Card>
-                )}
+                    )}
+                  </CardContent>
+                </Card>
               </>
             )}
 
@@ -1911,7 +2309,7 @@ export default function BacktestPage() {
                     const ret = h.metrics?.total_return ?? 0;
                     return (
                       <div key={i} className="flex items-center justify-between p-3 bg-secondary/50 rounded-xl border border-border/50 hover:border-slate-600/50 transition-colors group">
-                        <div className="flex items-center gap-3 flex-1 cursor-pointer" onClick={() => setResult(h as any)}>
+                        <div className="flex items-center gap-3 flex-1 cursor-pointer" onClick={() => h.id ? void loadBacktestDetail(h.id) : setResult(h as any)}>
                           <Badge
                             variant="outline"
                             className="text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20"
@@ -1934,6 +2332,14 @@ export default function BacktestPage() {
                           >
                             回看
                           </Link>
+                          {h.id && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); void loadBacktestDetail(h.id); }}
+                              className="text-[10px] text-indigo-300 hover:text-indigo-200"
+                            >
+                              查看详情
+                            </button>
+                          )}
                           <button
                             onClick={(e) => { e.stopPropagation(); setDeleteTarget(h); }}
                             className="p-1.5 rounded-lg text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors opacity-0 group-hover:opacity-100"
@@ -3218,6 +3624,14 @@ export default function BacktestPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function BacktestPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><p className="text-muted-foreground">Loading...</p></div>}>
+      <BacktestPageContent />
+    </Suspense>
   );
 }
 

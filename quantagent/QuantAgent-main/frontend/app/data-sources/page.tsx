@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { AppTopNav } from "@/components/navigation/AppTopNav";
 import {
   Activity,
   Archive,
@@ -110,13 +111,21 @@ function readNumber(source: unknown, path: string[], fallback = 0) {
 }
 
 async function fetchJson(url: string): Promise<unknown> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
   try {
-    const response = await fetch(url, { cache: "no-store" });
+    const response = await fetch(url, { cache: "no-store", signal: controller.signal });
     if (!response.ok) return null;
     return (await response.json()) as unknown;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
+}
+
+function friendlyDataError() {
+  return "数据暂不可用，已展示缓存数据 / 暂无数据。";
 }
 
 function toBackfillRows(value: unknown): BackfillRow[] {
@@ -363,7 +372,7 @@ export default function DataSourcesPage() {
       setAction({
         loading: false,
         message: "",
-        error: error instanceof Error ? error.message : String(error),
+        error: friendlyDataError(),
       });
     }
   }, [refresh]);
@@ -396,7 +405,7 @@ export default function DataSourcesPage() {
         ...current,
         loading: false,
         message: "",
-        error: error instanceof Error ? error.message : String(error),
+        error: friendlyDataError(),
       }));
     }
   }, [providerTest.fallbackExchange, providerTest.provider, refresh]);
@@ -484,24 +493,17 @@ export default function DataSourcesPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm">
-        <div className="container mx-auto flex items-center justify-between px-4 py-4">
-          <div>
-            <Link href="/dashboard" className="mb-2 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-              <ArrowLeft className="h-3.5 w-3.5" />
-              返回仪表盘
-            </Link>
-            <h1 className="text-xl font-bold text-foreground">数据源工作台</h1>
-            <p className="text-xs text-muted-foreground">
-              按数据入口拆清楚：加密行情、股票行情、新闻快讯、宏观数据分别在哪里看、由谁提供、当前是否可用。
-            </p>
-          </div>
+      <AppTopNav
+        activeSection="data-sources"
+        title="数据源工作台"
+        subtitle="行情接入、数据标准化与存储监控"
+        rightSlot={
           <Button size="sm" variant="outline" className="border-border" onClick={refresh} disabled={loading}>
             <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", loading && "animate-spin")} />
             刷新
           </Button>
-        </div>
-      </header>
+        }
+      />
 
       <main className="container mx-auto space-y-6 px-4 py-6">
         <section className="overflow-hidden rounded-3xl border border-border/70 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-5 shadow-2xl shadow-black/20">

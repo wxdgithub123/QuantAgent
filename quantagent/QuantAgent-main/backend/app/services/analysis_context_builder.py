@@ -174,7 +174,8 @@ class AnalysisContextBuilder:
                 result = await session.execute(text("""
                     SELECT id, timestamp, available_time, signal_type, signal_value,
                            confidence, source_strategy, strategy_id, factors,
-                           provider, data_source, source_version, schema_version
+                           provider, data_source, source_version, schema_version,
+                           extra_data
                     FROM signal_events
                     WHERE symbol = :symbol
                       AND (:interval = '' OR interval = :interval OR extra_data->>'interval' = :interval)
@@ -206,6 +207,7 @@ class AnalysisContextBuilder:
                         "data_source": row[10],
                         "source_version": row[11],
                         "schema_version": row[12],
+                        "extra_data": row[13] or {},
                     })
                     versions[str(row[0])] = {
                         "provider": row[9],

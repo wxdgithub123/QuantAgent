@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
-import Link from "next/link";
+import { AppTopNav } from "@/components/navigation/AppTopNav";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -253,44 +253,9 @@ function StrategyMonitorContent() {
   }, [sessionId]); // Re-fetch when sessionId changes
 
   return (
-    <div className="min-h-screen bg-[#0a0e1a] text-slate-100">
+    <div className="min-h-screen bg-background text-foreground">
       {/* ── Header ── */}
-      <header className="sticky top-0 z-40 border-b border-slate-800/60 bg-[#0a0e1a]/95 backdrop-blur-md">
-        <div className="container mx-auto px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
-              <Target className="w-4 h-4 text-white" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-slate-100">动态策略监控</h1>
-              <p className="text-[10px] text-slate-400">实时维度打分 & 仓位权重分配</p>
-            </div>
-          </div>
-
-          <nav className="hidden md:flex items-center gap-1">
-            <Link href="/dashboard" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
-              <LayoutDashboard className="w-4 h-4" /> 仪表盘
-            </Link>
-            <Link href="/backtest" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
-              <BarChart2 className="w-4 h-4" /> 回测
-            </Link>
-            <Link href="/strategies" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
-              <BookOpen className="w-4 h-4" /> 策略库
-            </Link>
-            <span className="px-3 py-1.5 text-sm text-blue-400 bg-blue-500/10 rounded-lg border border-blue-500/20 font-medium flex items-center gap-1.5">
-              <Activity className="w-4 h-4" /> 监控大盘
-            </span>
-            <Link href="/terminal" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5">
-              <Terminal className="w-4 h-4" /> 终端
-            </Link>
-            <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-cyan-400 hover:text-cyan-100 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-1.5">
-              <Server className="w-4 h-4" /> Hummingbot
-            </Link>
-            <Link href="/signals" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5"><Layers className="w-4 h-4" /> 因子/信号</Link>
-            <Link href="/decisions" className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-all flex items-center gap-1.5"><Brain className="w-4 h-4" /> 决策中心</Link>
-          </nav>
-        </div>
-      </header>
+      <AppTopNav activeSection="strategies-monitor" title="策略监控" subtitle="实时维度打分与仓位权重分配" />
 
       <main className="container mx-auto px-4 py-6 space-y-6">
         {/* ── Config Toolbar ── */}

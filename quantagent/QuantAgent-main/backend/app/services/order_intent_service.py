@@ -65,21 +65,19 @@ class OrderIntentService:
         decision = await self._load_decision(decision_id)
         intent_obj = self._build_intent(decision, exchange_id=exchange_id, position_pct=position_pct)
         preview = await self._preview(decision, intent_obj, exchange_id)
-        intent = preview["intent"]
         if preview["status"] == "NO_ACTION":
             return preview
         if preview["status"] == "BLOCKED":
-            await self._audit("ORDER_INTENT_BLOCKED", OrderIntent(**intent), preview)
             return preview
 
-        client_order_id = intent["intent_id"]
+        client_order_id = intent_obj.intent_id
         try:
             execution = await paper_trading_service.create_order(
-                symbol=intent["symbol"],
-                side=intent["side"],
+                symbol=intent_obj.symbol,
+                side=str(intent_obj.side),
                 quantity=preview["sizing"]["quantity"],
                 price=preview["price"],
-                order_type=intent["order_type"],
+                order_type=intent_obj.order_type,
                 benchmark_price=preview["price"],
                 client_order_id=client_order_id,
                 strategy_id="tradingagents",
@@ -94,7 +92,7 @@ class OrderIntentService:
                 "order_id": execution.get("order_id"),
                 "execution": execution,
             }
-            await self._audit("ORDER_INTENT_EXECUTED", OrderIntent(**intent), result)
+            await self._audit("PAPER_ORDER_FILLED", intent_obj, result)
             return result
         except ValueError as exc:
             result = {
@@ -104,7 +102,91 @@ class OrderIntentService:
                 "order_id": None,
                 "execution": None,
             }
-            await self._audit("ORDER_INTENT_BLOCKED", OrderIntent(**intent), result)
+            await self._audit("PAPER_ORDER_REJECTED", intent_obj, result)
+            return result
+
+    async def execute_manual_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        order_type: str = "MARKET",
+        exchange_id: str = "okx",
+    ) -> Dict[str, Any]:
+        """Wrap a manual paper order in OrderIntent -> RiskGuard -> PaperOrder."""
+        normalized_side = side.upper()
+        intent = OrderIntent(
+            intent_id=f"OI-MANUAL-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
+            decision_id=0,
+            symbol=symbol.upper(),
+            direction="long" if normalized_side == "BUY" else "short",
+            side=normalized_side,
+            position_pct=0.0,
+            confidence=1.0,
+            valid_until=(datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+            trigger_reason="用户在本地模拟盘手动下单",
+            source="manual",
+            exchange_id=exchange_id,
+            order_type=order_type,
+            status="CREATED",
+        )
+        sizing = {
+            "total_equity": None,
+            "target_notional": round(float(quantity) * float(price), 8),
+            "quantity": float(quantity),
+            "position_pct": None,
+        }
+        risk_preview = await self._risk_preview(intent, price, quantity)
+        await self._audit("ORDER_INTENT_CREATED", intent, {"price": price, "sizing": sizing})
+        preview = {
+            "status": "RISK_CHECKED" if risk_preview["allowed"] else "BLOCKED",
+            "message": "手动 OrderIntent 已通过风控，准备进入本地模拟成交。" if risk_preview["allowed"] else "手动 OrderIntent 已生成，但当前风控不允许执行。",
+            "data_lineage": self._data_lineage(exchange_id),
+            "intent": self._intent_api(intent, quantity=quantity),
+            "price": price,
+            "sizing": sizing,
+            "risk_preview": risk_preview,
+            "passed": risk_preview["allowed"],
+            "blockedReason": risk_preview.get("reason"),
+        }
+        await self._audit("RISK_CHECK_PASSED" if risk_preview["allowed"] else "RISK_BLOCKED", intent, preview)
+        if not risk_preview["allowed"]:
+            return preview
+
+        try:
+            execution = await paper_trading_service.create_order(
+                symbol=intent.symbol,
+                side=normalized_side,
+                quantity=quantity,
+                price=price,
+                order_type=order_type,
+                benchmark_price=price,
+                client_order_id=intent.intent_id,
+                strategy_id="manual",
+                mode="paper",
+                exchange_id=exchange_id,
+            )
+            result = {
+                **preview,
+                "status": execution.get("status", "EXECUTED"),
+                "message": "手动 OrderIntent 已通过风控并完成本地模拟成交。",
+                "order_id": execution.get("order_id"),
+                "execution": execution,
+            }
+            await self._audit("PAPER_ORDER_FILLED", intent, result)
+            return result
+        except ValueError as exc:
+            result = {
+                **preview,
+                "status": "BLOCKED",
+                "message": str(exc),
+                "blockedReason": str(exc),
+                "order_id": None,
+                "execution": None,
+            }
+            await self._audit("PAPER_ORDER_REJECTED", intent, result)
             return result
 
     async def _preview(
@@ -114,12 +196,12 @@ class OrderIntentService:
         exchange_id: str,
     ) -> Dict[str, Any]:
         if intent.side is None:
-            await self._audit("ORDER_INTENT_NOOP", intent, {"decision": self._decision_audit_payload(decision)})
+            await self._audit("HOLD_RECORDED", intent, {"decision": self._decision_audit_payload(decision)})
             return {
                 "status": "NO_ACTION",
                 "message": "该决策为观望/空仓，不生成模拟盘订单。",
                 "data_lineage": self._data_lineage(exchange_id),
-                "intent": asdict(intent),
+                "intent": self._intent_api(intent),
                 "decision": self._decision_summary(decision),
             }
 
@@ -128,7 +210,17 @@ class OrderIntentService:
         risk_preview = await self._risk_preview(intent, price, sizing["quantity"])
 
         await self._audit(
-            "ORDER_INTENT_PREVIEW",
+            "ORDER_INTENT_CREATED",
+            intent,
+            {
+                "decision": self._decision_audit_payload(decision),
+                "price": price,
+                "sizing": sizing,
+                "risk_preview": risk_preview,
+            },
+        )
+        await self._audit(
+            "RISK_CHECK_PASSED" if risk_preview["allowed"] else "RISK_BLOCKED",
             intent,
             {
                 "decision": self._decision_audit_payload(decision),
@@ -141,7 +233,7 @@ class OrderIntentService:
             "status": "READY" if risk_preview["allowed"] else "BLOCKED",
             "message": "OrderIntent 已生成，等待手动执行。" if risk_preview["allowed"] else "OrderIntent 已生成，但当前风控不允许执行。",
             "data_lineage": self._data_lineage(exchange_id),
-            "intent": asdict(intent),
+            "intent": self._intent_api(intent, quantity=sizing["quantity"]),
             "price": price,
             "sizing": sizing,
             "risk_preview": risk_preview,
@@ -252,6 +344,40 @@ class OrderIntentService:
             "audit_stream": "audit_logs ORDER_INTENT_*",
         }
 
+    @staticmethod
+    def _intent_api(intent: OrderIntent, *, quantity: Optional[float] = None) -> Dict[str, Any]:
+        action = "HOLD" if intent.side is None else str(intent.side).upper()
+        status_map = {
+            "READY": "CREATED",
+            "NO_ACTION": "CREATED",
+            "BLOCKED": "BLOCKED",
+            "CREATED": "CREATED",
+            "RISK_CHECKED": "RISK_CHECKED",
+            "EXECUTED": "EXECUTED",
+            "CANCELLED": "CANCELLED",
+        }
+        return {
+            "id": intent.intent_id,
+            "intent_id": intent.intent_id,
+            "symbol": intent.symbol,
+            "action": action,
+            "side": intent.direction,
+            "positionRatio": intent.position_pct,
+            "position_pct": intent.position_pct,
+            "quantity": quantity,
+            "confidence": intent.confidence,
+            "validUntil": intent.valid_until,
+            "valid_until": intent.valid_until,
+            "reason": intent.trigger_reason,
+            "sourceDecisionId": intent.decision_id if intent.decision_id else None,
+            "decision_id": intent.decision_id if intent.decision_id else None,
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "status": status_map.get(intent.status, intent.status),
+            "source": intent.source,
+            "exchange_id": intent.exchange_id,
+            "order_type": intent.order_type,
+        }
+
     async def _get_price(self, symbol: str, exchange_id: str) -> float:
         price = await market_data_gateway.get_price(
             symbol,
@@ -289,6 +415,16 @@ class OrderIntentService:
             )
             from app.services.risk_manager import risk_manager
 
+            checked_rules = await risk_manager.preview_order_rules(
+                symbol=intent.symbol,
+                side=str(intent.side),
+                quantity=quantity,
+                price=price,
+                current_balance=available_balance,
+                current_positions=current_positions,
+                total_portfolio_value=total_portfolio,
+                leverage=1,
+            )
             risk_result = await risk_manager.check_order(
                 symbol=intent.symbol,
                 side=str(intent.side),
@@ -302,16 +438,26 @@ class OrderIntentService:
             )
             return {
                 "allowed": bool(risk_result.allowed),
+                "passed": bool(risk_result.allowed),
                 "rule": risk_result.rule,
                 "reason": risk_result.reason,
+                "blockedReason": risk_result.reason or None,
+                "blocked_reason": risk_result.reason or None,
+                "checkedRules": checked_rules,
+                "checked_rules": checked_rules,
                 "checked_at": datetime.now(timezone.utc).isoformat(),
             }
         except Exception as exc:
             logger.warning("Risk preview failed for %s: %s", intent.intent_id, exc)
             return {
                 "allowed": False,
+                "passed": False,
                 "rule": "RISK_PREVIEW_ERROR",
                 "reason": str(exc),
+                "blockedReason": str(exc),
+                "blocked_reason": str(exc),
+                "checkedRules": [],
+                "checked_rules": [],
                 "checked_at": datetime.now(timezone.utc).isoformat(),
             }
 
@@ -323,7 +469,8 @@ class OrderIntentService:
             details={
                 "stage": "prd_stage_2_execution",
                 "data_lineage": self._data_lineage(intent.exchange_id),
-                "intent": asdict(intent),
+                "intent": self._intent_api(intent),
+                "internal_intent": asdict(intent),
                 **details,
             },
             ip_address="internal",

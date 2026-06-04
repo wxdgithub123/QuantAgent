@@ -58,6 +58,34 @@ class PaperTradingService:
         """Get current time (real or simulated)"""
         return self.simulated_time or datetime.now(timezone.utc)
 
+    @staticmethod
+    def _source_from_trade(trade: Optional[PaperTrade], mode: str = "paper") -> str:
+        if mode in {"backtest", "historical_replay"}:
+            return "backtest"
+        if not trade:
+            return "manual"
+        strategy = (trade.strategy_id or "").lower()
+        client_order_id = trade.client_order_id or ""
+        if strategy in {"tradingagents", "agent"}:
+            return "agent"
+        if strategy == "manual":
+            return "manual"
+        if client_order_id.startswith("OI-") and not client_order_id.startswith("OI-MANUAL-"):
+            return "agent"
+        return "manual"
+
+    @staticmethod
+    def _decision_id_from_order_intent(order_intent_id: Optional[str]) -> Optional[int]:
+        if not order_intent_id or not order_intent_id.startswith("OI-"):
+            return None
+        parts = order_intent_id.split("-")
+        if len(parts) < 2 or parts[1].upper() == "MANUAL":
+            return None
+        try:
+            return int(parts[1])
+        except ValueError:
+            return None
+
     # ─────────────────────────────────────────────────────────────
     # Account Balance
     # ─────────────────────────────────────────────────────────────
@@ -214,6 +242,24 @@ class PaperTradingService:
         # Collect all symbols from positions
         symbols = [row.symbol for row in rows]
 
+        latest_trade_by_symbol: Dict[str, PaperTrade] = {}
+        if symbols:
+            async with get_db() as session:
+                trade_stmt = (
+                    select(PaperTrade)
+                    .where(PaperTrade.symbol.in_(symbols))
+                    .where(PaperTrade.exchange_id == exchange_id)
+                    .order_by(PaperTrade.created_at.desc())
+                )
+                if session_id:
+                    trade_stmt = trade_stmt.where(PaperTrade.session_id == session_id)
+                else:
+                    trade_stmt = trade_stmt.where(PaperTrade.session_id.is_(None))
+                trade_result = await session.execute(trade_stmt)
+                for trade in trade_result.scalars().all():
+                    if trade.symbol not in latest_trade_by_symbol:
+                        latest_trade_by_symbol[trade.symbol] = trade
+
         # If no current_prices provided, try to get real-time prices
         prices_to_use = current_prices or {}
         if not current_prices and symbols:
@@ -247,21 +293,37 @@ class PaperTradingService:
                 if avg > 0
                 else 0.0
             )
+            latest_trade = latest_trade_by_symbol.get(symbol)
+            related_intent_id = latest_trade.client_order_id if latest_trade else None
+            related_decision_id = self._decision_id_from_order_intent(related_intent_id)
+            source = self._source_from_trade(latest_trade, mode=latest_trade.mode if latest_trade else "paper")
+            risk_status = "warning" if row.liquidation_price else "normal"
 
             positions.append(
                 {
                     "symbol": symbol,
-                    "side": "LONG" if qty > 0 else "SHORT",
+                    "side": "long" if qty > 0 else "short",
                     "quantity": qty,
                     "avg_price": avg,
+                    "avgEntryPrice": avg,
                     "leverage": row.leverage,
                     "liquidation_price": float(row.liquidation_price)
                     if row.liquidation_price
                     else None,
                     "mark_price": mark_price,
+                    "markPrice": mark_price,
                     "pnl": round(pnl, 4),
+                    "unrealizedPnl": round(pnl, 4),
                     "pnl_pct": round(pnl_pct, 4),
+                    "unrealizedPnlPct": round(pnl_pct, 4),
+                    "source": source,
+                    "relatedDecisionId": related_decision_id,
+                    "relatedOrderIntentId": related_intent_id,
+                    "riskStatus": risk_status,
                     "updated_at": row.updated_at.isoformat()
+                    if row.updated_at
+                    else None,
+                    "updatedAt": row.updated_at.isoformat()
                     if row.updated_at
                     else None,
                 }
@@ -431,8 +493,10 @@ class PaperTradingService:
                 f"可能存在数量单位错误（如把 USDT 当成币种数量传入）。"
             )
 
-        # 历史回放模式下跳过复杂风控检查（如宏观风险、单仓上限等），以保证回测逻辑顺利执行
-        if mode != "historical_replay":
+        # All local simulated execution paths must pass RiskGuard before fill.
+        # This includes manual paper trading, Agent-driven intents, backtests,
+        # and historical replay. Real exchange order placement is not used here.
+        if mode in {"paper", "backtest", "historical_replay"}:
             risk_result = await risk_manager.check_order(
                 symbol=symbol,
                 side=side,
@@ -902,20 +966,40 @@ class PaperTradingService:
 
         orders = []
         for row in rows:
+            order_id = f"PT-{row.id}"
+            related_intent_id = row.client_order_id
+            related_decision_id = self._decision_id_from_order_intent(related_intent_id)
+            benchmark = float(row.benchmark_price) if row.benchmark_price else None
+            fill_price = float(row.price)
+            slippage = (
+                round((fill_price - benchmark) / benchmark, 8)
+                if benchmark and benchmark > 0
+                else 0.0
+            )
+            filled_at = row.created_at.isoformat() if row.created_at and row.status == "FILLED" else None
+            created_at = row.created_at.isoformat() if row.created_at else None
+            source = self._source_from_trade(row, mode=row.mode)
             orders.append(
                 {
-                    "order_id": f"PT-{row.id}",
+                    "order_id": order_id,
+                    "orderId": order_id,
+                    "source": source,
                     "symbol": row.symbol,
                     "side": row.side,
                     "order_type": row.order_type,
                     "quantity": float(row.quantity),
                     "price": float(row.price),
+                    "fillPrice": fill_price,
                     "fee": float(row.fee),
                     "pnl": float(row.pnl) if row.pnl is not None else None,
+                    "realizedPnl": float(row.pnl) if row.pnl is not None else None,
+                    "slippage": slippage,
                     "status": row.status,
-                    "created_at": row.created_at.isoformat()
-                    if row.created_at
-                    else None,
+                    "created_at": created_at,
+                    "createdAt": created_at,
+                    "filledAt": filled_at,
+                    "relatedDecisionId": related_decision_id,
+                    "relatedOrderIntentId": related_intent_id,
                 }
             )
 

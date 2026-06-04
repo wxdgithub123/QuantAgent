@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
@@ -114,6 +114,26 @@ def _snapshot_count(snapshot: Dict[str, Any], *keys: str) -> int:
     return 0
 
 
+def _int_ids(value: Any, limit: int = 50) -> List[int]:
+    if not isinstance(value, list):
+        return []
+    out: List[int] = []
+    for item in value:
+        try:
+            out.append(int(item))
+        except (TypeError, ValueError):
+            continue
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _in_clause(prefix: str, values: List[int]) -> tuple[str, Dict[str, int]]:
+    params = {f"{prefix}{index}": value for index, value in enumerate(values)}
+    placeholders = ", ".join(f":{key}" for key in params)
+    return placeholders or "NULL", params
+
+
 def _decision_payload(row: Any) -> Dict[str, Any]:
     return {
         "id": row["id"],
@@ -132,6 +152,134 @@ def _decision_payload(row: Any) -> Dict[str, Any]:
         "position_advice": _repair_json(_safe_dict(row["position_advice"])),
         "risk_notes": _repair_text(row["risk_notes"] or ""),
         "created_at": _iso(row["created_at"]),
+    }
+
+
+AUDIT_EVENT_TYPES = {
+    "AGENT_DECISION",
+    "ORDER_INTENT_CREATED",
+    "RISK_CHECK_PASSED",
+    "RISK_BLOCKED",
+    "PAPER_ORDER_FILLED",
+    "PAPER_ORDER_REJECTED",
+    "POSITION_UPDATED",
+    "PNL_UPDATED",
+    "HOLD_RECORDED",
+}
+
+
+def _nested_dict(source: Dict[str, Any], *keys: str) -> Dict[str, Any]:
+    current: Any = source
+    for key in keys:
+        if not isinstance(current, dict):
+            return {}
+        current = current.get(key)
+    return current if isinstance(current, dict) else {}
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _audit_record_payload(row: Any) -> Dict[str, Any]:
+    details = _repair_json(_safe_dict(row["details"]))
+    intent = _safe_dict(details.get("intent"))
+    decision = _safe_dict(details.get("decision"))
+    risk = _safe_dict(details.get("riskCheckResult") or details.get("risk_preview"))
+    execution = _safe_dict(details.get("executionResult") or details.get("execution"))
+
+    legacy_event_map = {
+        "ORDER_INTENT_NOOP": "HOLD_RECORDED",
+        "ORDER_INTENT_PREVIEW": "ORDER_INTENT_CREATED",
+        "ORDER_INTENT_RISK_CHECKED": "RISK_CHECK_PASSED",
+        "ORDER_INTENT_BLOCKED": "RISK_BLOCKED",
+        "ORDER_INTENT_EXECUTED": "PAPER_ORDER_FILLED",
+        "ORDER_CREATE": "PAPER_ORDER_FILLED",
+        "ORDER_CANCEL": "PAPER_ORDER_REJECTED",
+    }
+    raw_event_type = str(details.get("eventType") or details.get("event_type") or row["action"])
+    event_type = legacy_event_map.get(raw_event_type, raw_event_type)
+    decision_id = _first_present(
+        details.get("decisionId"),
+        intent.get("sourceDecisionId"),
+        intent.get("decision_id"),
+        decision.get("id"),
+    )
+    order_intent_id = _first_present(
+        details.get("orderIntentId"),
+        intent.get("id"),
+        intent.get("intent_id"),
+    )
+    order_id = _first_present(
+        details.get("orderId"),
+        details.get("order_id"),
+        execution.get("orderId"),
+        execution.get("order_id"),
+    )
+    backtest_id = _first_present(details.get("backtestId"), details.get("backtest_id"))
+    replay_session_id = _first_present(details.get("replaySessionId"), details.get("replay_session_id"))
+    replay_time = _first_present(details.get("replayTime"), details.get("replay_time"), details.get("asOfTime"))
+    execution_mode = _first_present(
+        details.get("executionMode"),
+        details.get("execution_mode"),
+        intent.get("executionMode"),
+        execution.get("executionMode"),
+    )
+    risk_passed = risk.get("passed")
+    if risk_passed is None:
+        risk_passed = risk.get("allowed")
+    risk_status = (
+        "passed" if risk_passed is True else
+        "blocked" if risk_passed is False or event_type == "RISK_BLOCKED" else
+        "not_checked"
+    )
+    execution_status = _first_present(
+        execution.get("status"),
+        details.get("status") if event_type.startswith("PAPER_ORDER") else None,
+        "FILLED" if event_type == "PAPER_ORDER_FILLED" else None,
+        "REJECTED" if event_type == "PAPER_ORDER_REJECTED" else None,
+    )
+    source = _first_present(
+        details.get("source"),
+        intent.get("source"),
+        execution.get("source"),
+        _nested_dict(details, "execution", "source").get("source"),
+    )
+
+    return {
+        "id": row["id"],
+        "eventType": event_type,
+        "action": _first_present(intent.get("action"), decision.get("final_signal"), details.get("action")),
+        "symbol": _first_present(details.get("symbol"), intent.get("symbol"), row["resource"]),
+        "asOfTime": details.get("asOfTime"),
+        "snapshotId": details.get("snapshotId"),
+        "decisionId": decision_id,
+        "orderIntentId": order_intent_id,
+        "orderId": order_id,
+        "backtestId": backtest_id,
+        "replaySessionId": replay_session_id,
+        "replayTime": replay_time,
+        "executionMode": execution_mode,
+        "inputSummary": details.get("inputSummary") or decision,
+        "agentOutputs": details.get("agentOutputs") or [],
+        "riskCheckResult": risk,
+        "executionResult": execution,
+        "executionStatus": execution_status,
+        "riskStatus": risk_status,
+        "source": source,
+        "createdAt": _iso(row["created_at"]),
+        "created_at": _iso(row["created_at"]),
+        "immutable": True,
+        "raw": {
+            "action": row["action"],
+            "user_id": row["user_id"],
+            "resource": row["resource"],
+            "details": details,
+            "ip_address": row["ip_address"],
+        },
     }
 
 
@@ -179,7 +327,17 @@ async def get_prd105_audit_overview(
                 "pending_replays": await _scalar(session, "SELECT COUNT(*) FROM replay_sessions WHERE status = 'pending'"),
                 "failed_replays": await _scalar(session, "SELECT COUNT(*) FROM replay_sessions WHERE status = 'failed'"),
                 "audit_logs": await _scalar(session, "SELECT COUNT(*) FROM audit_logs"),
-                "order_intent_events": await _scalar(session, "SELECT COUNT(*) FROM audit_logs WHERE action LIKE 'ORDER_INTENT_%'"),
+                "order_intent_events": await _scalar(
+                    session,
+                    """
+                    SELECT COUNT(*)
+                    FROM audit_logs
+                    WHERE action LIKE 'ORDER_INTENT_%'
+                       OR action IN ('ORDER_INTENT_CREATED','RISK_CHECK_PASSED','RISK_BLOCKED','PAPER_ORDER_FILLED','PAPER_ORDER_REJECTED','HOLD_RECORDED')
+                       OR details->>'orderIntentId' IS NOT NULL
+                       OR details->'intent'->>'intent_id' IS NOT NULL
+                    """,
+                ),
                 "coordination_history": await _scalar(session, "SELECT COUNT(*) FROM coordination_history"),
                 "paper_trades": await _scalar(session, "SELECT COUNT(*) FROM paper_trades"),
                 "equity_snapshots": await _scalar(session, "SELECT COUNT(*) FROM equity_snapshots"),
@@ -316,6 +474,9 @@ async def get_prd105_audit_overview(
                         SELECT id, action, user_id, resource, details, ip_address, created_at
                         FROM audit_logs
                         WHERE action LIKE 'ORDER_INTENT_%'
+                           OR action IN ('ORDER_INTENT_CREATED','RISK_CHECK_PASSED','RISK_BLOCKED','PAPER_ORDER_FILLED','PAPER_ORDER_REJECTED','HOLD_RECORDED')
+                           OR details->>'orderIntentId' IS NOT NULL
+                           OR details->'intent'->>'intent_id' IS NOT NULL
                         ORDER BY created_at DESC
                         LIMIT :limit
                         """
@@ -655,6 +816,188 @@ async def get_prd105_audit_overview(
         }
 
 
+@router.get("/records")
+async def list_audit_records(
+    symbol: Optional[str] = Query(None),
+    eventType: Optional[str] = Query(None),
+    action: Optional[str] = Query(None),
+    executionStatus: Optional[str] = Query(None),
+    riskStatus: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
+    decisionId: Optional[int] = Query(None),
+    orderIntentId: Optional[str] = Query(None),
+    orderId: Optional[str] = Query(None),
+    backtestId: Optional[int] = Query(None),
+    replaySessionId: Optional[str] = Query(None),
+    executionMode: Optional[str] = Query(None),
+    startTime: Optional[datetime] = Query(None),
+    endTime: Optional[datetime] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> Dict[str, Any]:
+    """List immutable AuditRecord rows with PRD stage-2 filters."""
+    where = ["1=1"]
+    params: Dict[str, Any] = {"limit": limit, "offset": offset}
+
+    if symbol:
+        where.append("(resource = :symbol OR details->>'symbol' = :symbol OR details->'intent'->>'symbol' = :symbol)")
+        params["symbol"] = symbol.upper()
+    if eventType:
+        where.append("(action = :event_type OR details->>'eventType' = :event_type)")
+        params["event_type"] = eventType
+    if decisionId is not None:
+        where.append(
+            """
+            (
+              details->>'decisionId' = :decision_id
+              OR details->'intent'->>'decision_id' = :decision_id
+              OR details->'intent'->>'sourceDecisionId' = :decision_id
+              OR details->'decision'->>'id' = :decision_id
+            )
+            """
+        )
+        params["decision_id"] = str(decisionId)
+    if orderIntentId:
+        where.append(
+            """
+            (
+              details->>'orderIntentId' = :order_intent_id
+              OR details->'intent'->>'id' = :order_intent_id
+              OR details->'intent'->>'intent_id' = :order_intent_id
+            )
+            """
+        )
+        params["order_intent_id"] = orderIntentId
+    if orderId:
+        where.append(
+            """
+            (
+              details->>'orderId' = :order_id
+              OR details->>'order_id' = :order_id
+              OR details->'execution'->>'order_id' = :order_id
+              OR details->'executionResult'->>'order_id' = :order_id
+            )
+            """
+        )
+        params["order_id"] = orderId
+    if backtestId is not None:
+        where.append("(details->>'backtestId' = :backtest_id OR details->>'backtest_id' = :backtest_id)")
+        params["backtest_id"] = str(backtestId)
+    if replaySessionId:
+        where.append("(details->>'replaySessionId' = :replay_session_id OR details->>'replay_session_id' = :replay_session_id)")
+        params["replay_session_id"] = replaySessionId
+    if executionMode:
+        where.append("(details->>'executionMode' = :execution_mode OR details->>'execution_mode' = :execution_mode)")
+        params["execution_mode"] = executionMode
+    if source:
+        where.append(
+            """
+            (
+              details->>'source' = :source
+              OR details->'intent'->>'source' = :source
+              OR details->'execution'->>'source' = :source
+            )
+            """
+        )
+        params["source"] = source
+    if startTime:
+        where.append("created_at >= :start_time")
+        params["start_time"] = startTime
+    if endTime:
+        where.append("created_at <= :end_time")
+        params["end_time"] = endTime
+
+    where_sql = " AND ".join(where)
+    async with get_db() as session:
+        total = int(
+            (
+                await session.execute(
+                    text(f"SELECT COUNT(*) FROM audit_logs WHERE {where_sql}"),
+                    params,
+                )
+            ).scalar()
+            or 0
+        )
+        rows = (
+            await session.execute(
+                text(
+                    f"""
+                    SELECT id, action, user_id, resource, details, ip_address, created_at
+                    FROM audit_logs
+                    WHERE {where_sql}
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT :limit OFFSET :offset
+                    """
+                ),
+                params,
+            )
+        ).mappings().all()
+
+    records = [_audit_record_payload(row) for row in rows]
+    if action:
+        normalized_action = action.upper()
+        records = [row for row in records if str(row.get("action") or "").upper() == normalized_action]
+    if executionStatus:
+        normalized_status = executionStatus.upper()
+        records = [row for row in records if str(row.get("executionStatus") or "").upper() == normalized_status]
+    if riskStatus:
+        records = [row for row in records if str(row.get("riskStatus") or "") == riskStatus]
+
+    return {
+        "schema_version": "audit_records.v1",
+        "generated_at": datetime.utcnow().isoformat(),
+        "immutability_note": "审计记录写入后不可修改，后续变化通过新增事件记录追踪。",
+        "data": records,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "filters": {
+            "symbol": symbol,
+            "eventType": eventType,
+            "action": action,
+            "executionStatus": executionStatus,
+            "riskStatus": riskStatus,
+            "source": source,
+            "decisionId": decisionId,
+            "orderIntentId": orderIntentId,
+            "orderId": orderId,
+            "backtestId": backtestId,
+            "replaySessionId": replaySessionId,
+            "executionMode": executionMode,
+            "startTime": _iso(startTime),
+            "endTime": _iso(endTime),
+        },
+    }
+
+
+@router.get("/records/{audit_id}")
+async def get_audit_record(audit_id: int) -> Dict[str, Any]:
+    """Return one immutable AuditRecord with normalized fields and raw JSON."""
+    async with get_db() as session:
+        row = (
+            await session.execute(
+                text(
+                    """
+                    SELECT id, action, user_id, resource, details, ip_address, created_at
+                    FROM audit_logs
+                    WHERE id = :audit_id
+                    """
+                ),
+                {"audit_id": audit_id},
+            )
+        ).mappings().first()
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Audit record {audit_id} not found")
+
+    return {
+        "schema_version": "audit_record.v1",
+        "generated_at": datetime.utcnow().isoformat(),
+        "immutability_note": "审计记录写入后不可修改，后续变化通过新增事件记录追踪。",
+        "audit_record": _audit_record_payload(row),
+    }
+
+
 @router.get("/records/{audit_id}/export")
 async def export_audit_record(audit_id: int) -> Dict[str, Any]:
     """Export one immutable audit log row as JSON for manual review."""
@@ -728,6 +1071,7 @@ async def export_audit_record(audit_id: int) -> Dict[str, Any]:
             "ip_address": row["ip_address"],
             "created_at": _iso(row["created_at"]),
         },
+        "standard_audit_record": _audit_record_payload(row),
         "linked_decision": decision,
     }
 
@@ -760,17 +1104,62 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
         if not decision_row:
             raise HTTPException(status_code=404, detail=f"Decision {decision_id} not found")
 
+        snapshot_for_query = _safe_dict(decision_row["input_snapshot_ids"])
+        factor_ids = _int_ids(snapshot_for_query.get("factor_snapshot_ids") or snapshot_for_query.get("factor_ids"), limit=40)
+        signal_ids = _int_ids(snapshot_for_query.get("signal_event_ids") or snapshot_for_query.get("signal_ids"), limit=40)
+
+        factor_rows = []
+        if factor_ids:
+            placeholders, factor_params = _in_clause("factor_id_", factor_ids)
+            factor_rows = (
+                await session.execute(
+                    text(
+                        f"""
+                        SELECT fs.id, fs.symbol, fs.timestamp, fs.available_time, fs.as_of_time,
+                               fs.factor_name, fs.factor_value, fs.provider, fs.data_source,
+                               fs.source_version, fs.schema_version,
+                               fd.display_name, fd.description
+                        FROM factor_snapshots fs
+                        LEFT JOIN factor_definitions fd ON fd.factor_name = fs.factor_name
+                        WHERE fs.id IN ({placeholders})
+                        ORDER BY fs.timestamp DESC
+                        """
+                    ),
+                    factor_params,
+                )
+            ).mappings().all()
+
+        signal_rows = []
+        if signal_ids:
+            placeholders, signal_params = _in_clause("signal_id_", signal_ids)
+            signal_rows = (
+                await session.execute(
+                    text(
+                        f"""
+                        SELECT id, symbol, timestamp, available_time, as_of_time,
+                               signal_type, signal_value, confidence, source_strategy,
+                               strategy_id, provider, data_source, source_version, schema_version
+                        FROM signal_events
+                        WHERE id IN ({placeholders})
+                        ORDER BY timestamp DESC
+                        """
+                    ),
+                    signal_params,
+                )
+            ).mappings().all()
+
         order_intent_rows = (
             await session.execute(
                 text(
                     """
                     SELECT id, action, user_id, resource, details, ip_address, created_at
                     FROM audit_logs
-                    WHERE action LIKE 'ORDER_INTENT_%'
-                      AND (
-                        details->'intent'->>'decision_id' = :decision_id_text
+                    WHERE (
+                        details->>'decisionId' = :decision_id_text
+                        OR details->'intent'->>'decision_id' = :decision_id_text
+                        OR details->'intent'->>'sourceDecisionId' = :decision_id_text
                         OR details->'decision'->>'id' = :decision_id_text
-                      )
+                    )
                     ORDER BY created_at ASC
                     """
                 ),
@@ -797,9 +1186,29 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
             )
         ).mappings().all()
 
+        audit_rows = (
+            await session.execute(
+                text(
+                    """
+                    SELECT id, action, user_id, resource, details, ip_address, created_at
+                    FROM audit_logs
+                    WHERE (
+                        details->>'decisionId' = :decision_id_text
+                        OR details->'intent'->>'decision_id' = :decision_id_text
+                        OR details->'intent'->>'sourceDecisionId' = :decision_id_text
+                        OR details->'decision'->>'id' = :decision_id_text
+                    )
+                    ORDER BY created_at ASC, id ASC
+                    """
+                ),
+                {"decision_id_text": str(decision_id)},
+            )
+        ).mappings().all()
+
     decision = _decision_payload(decision_row)
     snapshot = _safe_dict(decision.get("input_snapshot_ids"))
     roles = _safe_list(decision.get("role_opinions")) or _safe_list(decision.get("agent_signals"))
+    decision_time = decision_row["timestamp"]
 
     order_intents = [
         {
@@ -850,10 +1259,180 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
             }
         )
 
+    audit_timeline = [_audit_record_payload(row) for row in audit_rows]
+    if not any(item.get("eventType") == "AGENT_DECISION" for item in audit_timeline):
+        audit_timeline.insert(
+            0,
+            {
+                "id": None,
+                "eventType": "AGENT_DECISION",
+                "action": decision.get("final_signal"),
+                "symbol": decision.get("symbol"),
+                "asOfTime": decision.get("timestamp"),
+                "snapshotId": snapshot,
+                "decisionId": decision_id,
+                "orderIntentId": None,
+                "orderId": None,
+                "inputSummary": snapshot,
+                "agentOutputs": roles,
+                "riskCheckResult": {},
+                "executionResult": {},
+                "executionStatus": None,
+                "riskStatus": "not_checked",
+                "source": "coordination_history",
+                "createdAt": decision.get("created_at") or decision.get("timestamp"),
+                "immutable": True,
+                "synthetic": True,
+            },
+        )
+
+    latest_intent = {}
+    latest_risk = {}
+    latest_execution = {}
+    for record in audit_timeline:
+        raw_details = _safe_dict(_safe_dict(record.get("raw")).get("details"))
+        intent = _safe_dict(raw_details.get("intent"))
+        if intent:
+            latest_intent = intent
+        risk = _safe_dict(raw_details.get("risk_preview") or raw_details.get("riskCheckResult"))
+        if risk:
+            latest_risk = risk
+        execution = _safe_dict(raw_details.get("execution") or raw_details.get("executionResult"))
+        if execution:
+            latest_execution = execution
+
+    factor_evidence = []
+    for row in factor_rows:
+        available_time = row["available_time"]
+        pit_ok = bool(available_time and decision_time and available_time <= decision_time)
+        factor_evidence.append(
+            {
+                "snapshotId": row["id"],
+                "factorName": row["display_name"] or row["factor_name"],
+                "rawFactorName": row["factor_name"],
+                "value": _safe_float(row["factor_value"]),
+                "signal": "因子证据",
+                "strength": abs(_safe_float(row["factor_value"])),
+                "explanation": row["description"] or "暂无说明",
+                "availableTime": _iso(available_time),
+                "asOfTime": _iso(row["as_of_time"]),
+                "dataProvider": row["provider"] or row["data_source"] or "暂无数据",
+                "dataVersion": row["source_version"] or row["schema_version"],
+                "pitRulePassed": pit_ok,
+            }
+        )
+    for row in signal_rows:
+        available_time = row["available_time"]
+        pit_ok = bool(available_time and decision_time and available_time <= decision_time)
+        factor_evidence.append(
+            {
+                "snapshotId": row["id"],
+                "factorName": row["source_strategy"] or row["signal_type"],
+                "rawFactorName": row["signal_type"],
+                "value": _safe_float(row["signal_value"]),
+                "signal": row["signal_type"],
+                "strength": _safe_float(row["confidence"]),
+                "explanation": f"策略信号 {row['source_strategy'] or row['strategy_id'] or '暂无数据'}",
+                "availableTime": _iso(available_time),
+                "asOfTime": _iso(row["as_of_time"]),
+                "dataProvider": row["provider"] or row["data_source"] or "暂无数据",
+                "dataVersion": row["source_version"] or row["schema_version"],
+                "pitRulePassed": pit_ok,
+            }
+        )
+
+    def role_output(*keywords: str) -> Dict[str, Any]:
+        for role in roles:
+            label = " ".join(
+                str(role.get(key, ""))
+                for key in ("role", "agent_type", "agent", "label")
+            ).lower()
+            if any(keyword in label for keyword in keywords):
+                return role
+        return {"output": "暂无数据", "available": False}
+
+    agent_analysis = {
+        "technicalAgent": role_output("technical", "market", "quantagent_market"),
+        "newsAgent": role_output("news", "sentiment", "social"),
+        "macroAgent": role_output("macro", "fundamental"),
+        "riskAgent": role_output("risk"),
+        "portfolioAgent": role_output("portfolio", "trader", "execution"),
+        "finalDecision": role_output("final", "judge", "decision"),
+    }
+
+    order_intent_detail = {
+        "orderIntentId": latest_intent.get("id") or latest_intent.get("intent_id"),
+        "action": latest_intent.get("action") or decision.get("final_signal"),
+        "side": latest_intent.get("side") or "暂无数据",
+        "positionRatio": latest_intent.get("positionRatio") or latest_intent.get("position_pct"),
+        "quantity": latest_intent.get("quantity"),
+        "confidence": latest_intent.get("confidence") or decision.get("confidence"),
+        "validUntil": latest_intent.get("validUntil") or latest_intent.get("valid_until"),
+        "reason": latest_intent.get("reason") or latest_intent.get("trigger_reason") or decision.get("summary"),
+        "status": latest_intent.get("status") or "暂无数据",
+        "sourceDecisionId": latest_intent.get("sourceDecisionId") or latest_intent.get("decision_id") or decision_id,
+    }
+
+    execution_trade = linked_trades[0] if linked_trades else {}
+    execution_result = {
+        "paperOrderGenerated": bool(latest_execution or execution_trade),
+        "orderId": latest_execution.get("order_id") or latest_execution.get("orderId") or (f"PT-{execution_trade.get('id')}" if execution_trade else None),
+        "source": latest_execution.get("source") or execution_trade.get("mode") or "暂无数据",
+        "fillPrice": latest_execution.get("fillPrice") or latest_execution.get("price") or execution_trade.get("price"),
+        "filledAt": latest_execution.get("filledAt") or latest_execution.get("created_at") or execution_trade.get("created_at"),
+        "fee": latest_execution.get("fee") or execution_trade.get("fee"),
+        "slippage": latest_execution.get("slippage"),
+        "realizedPnl": latest_execution.get("realizedPnl") or latest_execution.get("pnl") or execution_trade.get("pnl"),
+        "orderStatus": latest_execution.get("status") or execution_trade.get("status") or "暂无数据",
+        "positionAfterTrade": latest_execution.get("positionAfterTrade") or "暂无数据",
+    }
+
+    available_times = [item.get("availableTime") for item in factor_evidence if item.get("availableTime")]
+    data_providers = [
+        item.get("dataProvider")
+        for item in factor_evidence
+        if item.get("dataProvider") and item.get("dataProvider") != "暂无数据"
+    ]
+    data_versions = [item.get("dataVersion") for item in factor_evidence if item.get("dataVersion")]
+    input_snapshot = {
+        "snapshotId": snapshot,
+        "asOfTime": decision.get("timestamp"),
+        "availableTime": _first_present(*available_times),
+        "dataProvider": _first_present(*data_providers) or "暂无数据",
+        "barsCount": _snapshot_count(snapshot, "bar_ids", "bar_snapshot_ids", "bars"),
+        "newsCount": _snapshot_count(snapshot, "news_payload_ids", "news_event_ids"),
+        "factorsCount": _snapshot_count(snapshot, "factor_snapshot_ids", "factor_ids"),
+        "dataVersion": _first_present(*data_versions) or "暂无数据",
+        "sourceVersion": _first_present(*data_versions) or "暂无数据",
+    }
+
     return {
         "schema_version": "decision_audit_detail.v1",
         "generated_at": datetime.utcnow().isoformat(),
         "immutability_note": "This endpoint only reads persisted decision, audit, and paper trade records.",
+        "basic_info": {
+            "decisionId": decision["id"],
+            "symbol": decision["symbol"],
+            "action": decision["final_signal"],
+            "side": order_intent_detail.get("side") or "暂无数据",
+            "confidence": decision["confidence"],
+            "createdAt": decision.get("created_at") or decision.get("timestamp"),
+            "source": "coordination_history",
+            "model": "TradingAgents / QuantAgent agentGraph",
+            "agentGraph": "TradingAgentsGraph QuantAgent adapter",
+            "status": "risk_veto" if decision.get("risk_veto") else "created",
+        },
+        "input_snapshot": input_snapshot,
+        "factor_evidence": factor_evidence,
+        "agent_analysis": agent_analysis,
+        "order_intent": order_intent_detail,
+        "risk_guard": {
+            "passed": latest_risk.get("passed") if "passed" in latest_risk else latest_risk.get("allowed"),
+            "blockedReason": latest_risk.get("blockedReason") or latest_risk.get("blocked_reason") or latest_risk.get("reason"),
+            "checkedRules": latest_risk.get("checkedRules") or latest_risk.get("checked_rules") or [],
+        },
+        "execution_result": execution_result,
+        "audit_timeline": audit_timeline,
         "decision": decision,
         "trace_summary": {
             "input_snapshot_id_groups": len(snapshot),
@@ -864,8 +1443,8 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
             "role_outputs": len(roles),
             "order_intent_events": len(order_intents),
             "paper_trades": len(linked_trades),
-            "risk_blocked": any(row["action"] == "ORDER_INTENT_BLOCKED" for row in order_intents),
-            "executed": any(row["action"] == "ORDER_INTENT_EXECUTED" for row in order_intents),
+            "risk_blocked": any(row.get("eventType") == "RISK_BLOCKED" for row in audit_timeline),
+            "executed": any(row.get("eventType") == "PAPER_ORDER_FILLED" for row in audit_timeline),
         },
         "role_outputs": roles,
         "order_intent_events": order_intents,

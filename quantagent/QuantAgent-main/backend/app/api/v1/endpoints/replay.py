@@ -4,10 +4,10 @@ import logging
 import math
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query
-from sqlalchemy import select, update, delete, func
+from sqlalchemy import select, update, delete, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.database import get_db, get_db_session
@@ -121,6 +121,207 @@ def safe_finite_float(val, default: float = 0.0) -> float:
     if not math.isfinite(f):
         return default
     return f
+
+
+def _to_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str) and value:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def _event_payload(
+    *,
+    event_id: str,
+    event_type: str,
+    event_time: Any,
+    symbol: str,
+    summary: str,
+    payload: Dict[str, Any],
+    related_decision_id: Optional[int] = None,
+    related_order_intent_id: Optional[str] = None,
+    related_order_id: Optional[str] = None,
+    related_audit_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    event_time_iso = _iso(event_time)
+    as_of_time = payload.get("asOfTime") or payload.get("as_of_time") or event_time_iso
+    summary = _demo_replay_summary(event_type, summary)
+    return {
+        "id": event_id,
+        "eventType": event_type,
+        "eventTime": event_time_iso,
+        "asOfTime": as_of_time,
+        "symbol": symbol,
+        "summary": summary,
+        "relatedDecisionId": related_decision_id,
+        "relatedOrderIntentId": related_order_intent_id,
+        "relatedOrderId": related_order_id,
+        "relatedAuditId": related_audit_id,
+        "payload": payload,
+        "links": {
+            "decision": f"/audit?decision_id={related_decision_id}" if related_decision_id else None,
+            "audit": f"/audit?audit_id={related_audit_id}" if related_audit_id else None,
+            "orderIntent": f"/audit?order_intent_id={related_order_intent_id}" if related_order_intent_id else None,
+        },
+    }
+
+
+REPLAY_EVENT_BUSINESS_ORDER = {
+    "BAR_UPDATED": 10,
+    "FACTOR_UPDATED": 20,
+    "SIGNAL_TRIGGERED": 30,
+    "AGENT_DECISION": 40,
+    "ORDER_INTENT_CREATED": 50,
+    "RISK_CHECK_PASSED": 60,
+    "RISK_BLOCKED": 60,
+    "PAPER_ORDER_FILLED": 70,
+    "PAPER_ORDER_REJECTED": 70,
+    "POSITION_UPDATED": 80,
+    "PNL_UPDATED": 90,
+    "AUDIT_RECORDED": 100,
+    "SKIPPED_AGENT_CALL": 110,
+}
+
+
+REPLAY_EVENT_DEMO_SUMMARIES = {
+    "SIGNAL_TRIGGERED": "强信号触发，进入 Agent 审计回测链路。",
+    "AGENT_DECISION": "Agent 根据行情、因子和上下文生成交易建议。",
+    "ORDER_INTENT_CREATED": "系统将 Agent 建议转换为标准交易意图 OrderIntent。",
+    "RISK_CHECK_PASSED": "RiskGuard 风控检查通过，允许进入模拟成交。",
+    "RISK_BLOCKED": "RiskGuard 拦截该交易，未生成模拟订单。",
+    "PAPER_ORDER_FILLED": "模拟订单成交，记录成交价、手续费与滑点。",
+    "POSITION_UPDATED": "持仓更新完成。",
+    "PNL_UPDATED": "盈亏重新计算完成。",
+    "SKIPPED_AGENT_CALL": "已达到 maxAgentCalls 限制，本次强信号跳过 Agent 调用。",
+}
+
+
+def _demo_replay_summary(event_type: str, fallback: str) -> str:
+    return REPLAY_EVENT_DEMO_SUMMARIES.get(event_type, fallback)
+
+
+def _sort_replay_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(
+        events,
+        key=lambda item: (
+            _to_datetime(item.get("asOfTime") or item.get("eventTime")) or datetime.min.replace(tzinfo=timezone.utc),
+            REPLAY_EVENT_BUSINESS_ORDER.get(str(item.get("eventType") or ""), 999),
+            _to_datetime(item.get("eventTime")) or datetime.min.replace(tzinfo=timezone.utc),
+            str(item.get("id") or ""),
+        ),
+    )
+
+
+def _replay_event_merge_key(event: Dict[str, Any]) -> tuple:
+    event_type = str(event.get("eventType") or "")
+    related_order_id = event.get("relatedOrderId") or ""
+    related_intent_id = event.get("relatedOrderIntentId") or ""
+    related_audit_id = event.get("relatedAuditId") or ""
+    if event_type in {"PAPER_ORDER_FILLED", "PNL_UPDATED"} and related_order_id:
+        related_intent_id = ""
+        related_audit_id = ""
+    elif event_type in {"PAPER_ORDER_FILLED", "PNL_UPDATED"} and related_intent_id:
+        related_audit_id = ""
+    return (
+        event_type,
+        related_order_id,
+        related_intent_id,
+        related_audit_id,
+        event.get("asOfTime") or event.get("eventTime") or "",
+    )
+
+
+def _event_completeness_score(event: Dict[str, Any]) -> int:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    links = event.get("links") if isinstance(event.get("links"), dict) else {}
+    return (
+        (100 if event.get("relatedAuditId") else 0)
+        + (30 if event.get("relatedDecisionId") else 0)
+        + (30 if event.get("relatedOrderIntentId") else 0)
+        + (20 if event.get("relatedOrderId") else 0)
+        + len(payload)
+        + sum(1 for value in links.values() if value)
+    )
+
+
+def _source_event_payload(event: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": event.get("id"),
+        "eventType": event.get("eventType"),
+        "eventTime": event.get("eventTime"),
+        "asOfTime": event.get("asOfTime"),
+        "relatedAuditId": event.get("relatedAuditId"),
+        "relatedOrderId": event.get("relatedOrderId"),
+        "relatedOrderIntentId": event.get("relatedOrderIntentId"),
+    }
+
+
+def _merge_replay_event_group(group: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if len(group) == 1:
+        return group[0]
+    base = max(group, key=_event_completeness_score).copy()
+    source_events = [_source_event_payload(item) for item in group]
+    raw_payloads = [item.get("payload") or {} for item in group]
+    base["sourceEvents"] = source_events
+    base["rawPayloads"] = raw_payloads
+    base["mergedFromCount"] = len(group)
+    payload = dict(base.get("payload") or {})
+    payload["sourceEvents"] = source_events
+    payload["rawPayloads"] = raw_payloads
+    payload["mergedFromCount"] = len(group)
+    base["payload"] = payload
+    base["id"] = f"MERGED-{base.get('eventType')}-{base.get('asOfTime')}-{base.get('relatedOrderId') or base.get('relatedOrderIntentId') or base.get('relatedAuditId') or base.get('id')}"
+    return base
+
+
+def _dedupe_replay_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped: Dict[tuple, List[Dict[str, Any]]] = {}
+    passthrough: List[Dict[str, Any]] = []
+    for event in events:
+        key = _replay_event_merge_key(event)
+        if not key[0]:
+            passthrough.append(event)
+            continue
+        grouped.setdefault(key, []).append(event)
+    merged = [_merge_replay_event_group(group) for group in grouped.values()]
+    return passthrough + merged
+
+
+def _build_replay_event_stats(events: List[Dict[str, Any]], execution_mode: Optional[str] = None) -> Dict[str, Any]:
+    counts: Dict[str, int] = {}
+    audit_ids = set()
+    detected_mode = execution_mode
+    for event in events:
+        event_type = str(event.get("eventType") or "")
+        counts[event_type] = counts.get(event_type, 0) + 1
+        if event.get("relatedAuditId"):
+            audit_ids.add(str(event.get("relatedAuditId")))
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        detected_mode = detected_mode or payload.get("executionMode") or payload.get("execution_mode")
+        for source_event in event.get("sourceEvents") or []:
+            if isinstance(source_event, dict) and source_event.get("relatedAuditId"):
+                audit_ids.add(str(source_event.get("relatedAuditId")))
+    return {
+        "signalTriggeredCount": counts.get("SIGNAL_TRIGGERED", 0),
+        "agentDecisionCount": counts.get("AGENT_DECISION", 0),
+        "skippedAgentCallCount": counts.get("SKIPPED_AGENT_CALL", 0),
+        "riskPassedCount": counts.get("RISK_CHECK_PASSED", 0),
+        "riskBlockedCount": counts.get("RISK_BLOCKED", 0),
+        "paperOrderFilledCount": counts.get("PAPER_ORDER_FILLED", 0),
+        "auditRecordCount": len(audit_ids) or counts.get("AUDIT_RECORDED", 0),
+        "executionMode": detected_mode or "rule_only",
+        "byEventType": counts,
+    }
+
 
 
 # =============================================================================
@@ -2129,6 +2330,321 @@ async def get_replay_position(
     except Exception as e:
         logger.error(f"Failed to get position for {replay_session_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get position: {str(e)}")
+
+
+@router.get("/{replay_session_id}/events")
+async def get_replay_events(
+    replay_session_id: str,
+    asOfTime: Optional[datetime] = Query(None),
+    limit: int = Query(300, ge=20, le=1000),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Return a player-friendly event stream for a replay session."""
+    try:
+        session_result = await db.execute(select(ReplaySession).where(ReplaySession.replay_session_id == replay_session_id))
+        session = session_result.scalar_one_or_none()
+        if not session:
+            raise HTTPException(status_code=404, detail="Replay session not found")
+
+        current_as_of = _to_datetime(asOfTime or session.current_timestamp or session.end_time)
+        session_start = _to_datetime(session.start_time) or session.start_time
+        session_end = _to_datetime(session.end_time) or session.end_time
+        params = session.params or {}
+        interval = params.get("interval", "1m")
+        events: List[Dict[str, Any]] = []
+
+        df = None
+        try:
+            df = await clickhouse_service.get_klines_dataframe(
+                symbol=session.symbol,
+                interval=interval,
+                start=session_start,
+                end=current_as_of,
+            )
+        except Exception as exc:
+            logger.warning("Failed to load replay bars for events: %s", exc)
+
+        current_bar: Optional[Dict[str, Any]] = None
+        if df is not None and len(df) > 0:
+            df = df[~df.index.duplicated(keep="last")].sort_index()
+            for idx, row in df.tail(min(80, limit)).iterrows():
+                payload = {
+                    "open": safe_finite_float(row.get("open")),
+                    "high": safe_finite_float(row.get("high")),
+                    "low": safe_finite_float(row.get("low")),
+                    "close": safe_finite_float(row.get("close")),
+                    "volume": safe_finite_float(row.get("volume")),
+                    "interval": interval,
+                }
+                current_bar = {"time": _iso(idx), **payload}
+                events.append(
+                    _event_payload(
+                        event_id=f"BAR-{replay_session_id}-{_iso(idx)}",
+                        event_type="BAR_UPDATED",
+                        event_time=idx,
+                        symbol=session.symbol,
+                        summary=f"K线更新：收盘价 {payload['close']:.2f}",
+                        payload=payload,
+                    )
+                )
+
+        trade_rows = (
+            await db.execute(
+                select(PaperTrade)
+                .where(PaperTrade.session_id == replay_session_id)
+                .order_by(PaperTrade.created_at)
+            )
+        ).scalars().all()
+        realized_pnl = 0.0
+        for trade in trade_rows:
+            trade_time = trade.created_at
+            trade_time_cmp = _to_datetime(trade_time)
+            if current_as_of and trade_time_cmp and trade_time_cmp > current_as_of:
+                continue
+            realized_pnl += safe_finite_float(trade.pnl, 0.0)
+            order_id = f"PT-{trade.id}"
+            payload = {
+                "orderId": order_id,
+                "clientOrderId": trade.client_order_id,
+                "side": trade.side,
+                "quantity": safe_finite_float(trade.quantity),
+                "price": safe_finite_float(trade.price),
+                "fee": safe_finite_float(trade.fee),
+                "realizedPnl": safe_finite_float(trade.pnl),
+                "source": trade.mode or "historical_replay",
+            }
+            events.append(
+                _event_payload(
+                    event_id=f"TRADE-{trade.id}",
+                    event_type="PAPER_ORDER_FILLED",
+                    event_time=trade_time,
+                    symbol=trade.symbol,
+                    summary=f"模拟成交：{trade.side} {safe_finite_float(trade.quantity):.6f} @ {safe_finite_float(trade.price):.2f}",
+                    payload=payload,
+                    related_order_intent_id=trade.client_order_id,
+                    related_order_id=order_id,
+                )
+            )
+            events.append(
+                _event_payload(
+                    event_id=f"PNL-{trade.id}",
+                    event_type="PNL_UPDATED",
+                    event_time=trade_time,
+                    symbol=trade.symbol,
+                    summary=f"已实现盈亏更新：{realized_pnl:.2f}",
+                    payload={"realizedPnl": realized_pnl, "tradeId": trade.id},
+                    related_order_id=order_id,
+                )
+            )
+
+        snapshot_rows = (
+            await db.execute(
+                select(EquitySnapshot)
+                .where(EquitySnapshot.session_id == replay_session_id)
+                .order_by(EquitySnapshot.timestamp)
+            )
+        ).scalars().all()
+        latest_snapshot = None
+        for snapshot in snapshot_rows:
+            snapshot_time_cmp = _to_datetime(snapshot.timestamp)
+            if current_as_of and snapshot_time_cmp and snapshot_time_cmp > current_as_of:
+                continue
+            latest_snapshot = snapshot
+            payload = {
+                "accountEquity": safe_finite_float(snapshot.total_equity),
+                "cash": safe_finite_float(snapshot.cash_balance),
+                "positionValue": safe_finite_float(snapshot.position_value),
+                "dailyPnl": safe_finite_float(snapshot.daily_pnl),
+                "drawdown": safe_finite_float(snapshot.drawdown),
+            }
+            events.append(
+                _event_payload(
+                    event_id=f"EQUITY-{snapshot.id}",
+                    event_type="PNL_UPDATED",
+                    event_time=snapshot.timestamp,
+                    symbol=session.symbol,
+                    summary=f"权益快照：{payload['accountEquity']:.2f}",
+                    payload=payload,
+                )
+            )
+
+        position_row = (
+            await db.execute(
+                select(PaperPosition)
+                .where(PaperPosition.session_id == replay_session_id, PaperPosition.symbol == session.symbol)
+                .order_by(PaperPosition.updated_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if position_row:
+            events.append(
+                _event_payload(
+                    event_id=f"POSITION-{position_row.id}",
+                    event_type="POSITION_UPDATED",
+                    event_time=position_row.updated_at,
+                    symbol=session.symbol,
+                    summary=f"持仓更新：{safe_finite_float(position_row.quantity):.6f}",
+                    payload={
+                        "quantity": safe_finite_float(position_row.quantity),
+                        "avgPrice": safe_finite_float(position_row.avg_price),
+                        "leverage": position_row.leverage,
+                    },
+                )
+            )
+
+        audit_rows = (
+            await db.execute(select(AuditLog).order_by(AuditLog.created_at.asc()).limit(500))
+        ).scalars().all()
+        for audit in audit_rows:
+            details = audit.details or {}
+            if details.get("replay_session_id") != replay_session_id and details.get("replaySessionId") != replay_session_id:
+                continue
+            event_type = str(details.get("eventType") or audit.action or "AUDIT_RECORDED")
+            event_time = _to_datetime(details.get("replayTime") or details.get("replay_time") or details.get("asOfTime")) or audit.created_at
+            if current_as_of and event_time and event_time > current_as_of:
+                continue
+            intent = details.get("intent") if isinstance(details.get("intent"), dict) else {}
+            events.append(
+                _event_payload(
+                    event_id=f"AUDIT-{audit.id}",
+                    event_type=event_type if event_type in {
+                        "SIGNAL_TRIGGERED",
+                        "AGENT_DECISION",
+                        "ORDER_INTENT_CREATED",
+                        "RISK_CHECK_PASSED",
+                        "RISK_BLOCKED",
+                        "PAPER_ORDER_FILLED",
+                        "PAPER_ORDER_REJECTED",
+                        "POSITION_UPDATED",
+                        "PNL_UPDATED",
+                        "SKIPPED_AGENT_CALL",
+                    } else "AUDIT_RECORDED",
+                    event_time=event_time,
+                    symbol=details.get("symbol") or audit.resource or session.symbol,
+                    summary=f"审计记录：{event_type}",
+                    payload=details,
+                    related_decision_id=details.get("decisionId") or intent.get("decision_id"),
+                    related_order_intent_id=details.get("orderIntentId") or intent.get("intent_id"),
+                    related_order_id=details.get("orderId"),
+                    related_audit_id=audit.id,
+                )
+            )
+
+        factor_rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT factor_name, factor_value, available_time
+                    FROM factor_snapshots
+                    WHERE symbol = :symbol AND available_time <= :as_of
+                    ORDER BY available_time DESC
+                    LIMIT 8
+                    """
+                ),
+                {"symbol": session.symbol, "as_of": current_as_of},
+            )
+        ).mappings().all() if current_as_of else []
+        signal_rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT signal_type, signal_value, confidence, available_time
+                    FROM signal_events
+                    WHERE symbol = :symbol AND available_time <= :as_of
+                    ORDER BY available_time DESC
+                    LIMIT 8
+                    """
+                ),
+                {"symbol": session.symbol, "as_of": current_as_of},
+            )
+        ).mappings().all() if current_as_of else []
+
+        account_equity = safe_finite_float(getattr(latest_snapshot, "total_equity", None), session.initial_capital)
+        cash = safe_finite_float(getattr(latest_snapshot, "cash_balance", None), session.initial_capital)
+        current_price = safe_finite_float((current_bar or {}).get("close"), 0.0)
+        current_position = {
+            "quantity": safe_finite_float(getattr(position_row, "quantity", None), 0.0) if position_row else 0.0,
+            "avgPrice": safe_finite_float(getattr(position_row, "avg_price", None), 0.0) if position_row else 0.0,
+            "side": "LONG" if position_row and safe_finite_float(position_row.quantity) > 0 else "",
+        }
+        events = _sort_replay_events(_dedupe_replay_events(events))
+        event_stats = _build_replay_event_stats(events, execution_mode=(session.metrics or {}).get("executionMode") if isinstance(session.metrics, dict) else None)
+        events = events[-limit:]
+        duration = max(1.0, (session_end - session_start).total_seconds())
+        progress = ((current_as_of - session_start).total_seconds() / duration) if current_as_of else 0.0
+        return {
+            "schema_version": "replay_events.v1",
+            "generated_at": datetime.utcnow().isoformat(),
+            "session": {
+                "replaySessionId": replay_session_id,
+                "symbol": session.symbol,
+                "status": session.status,
+                "startTime": _iso(session.start_time),
+                "endTime": _iso(session.end_time),
+                "linkedBacktestId": session.backtest_id,
+            },
+            "currentAsOfTime": _iso(current_as_of),
+            "progress": max(0.0, min(1.0, progress)),
+            "currentState": {
+                "currentPrice": current_price,
+                "currentBar": current_bar,
+                "currentFactors": [dict(row) for row in factor_rows],
+                "currentSignals": [dict(row) for row in signal_rows],
+                "accountEquity": account_equity,
+                "cash": cash,
+                "currentPosition": current_position,
+                "unrealizedPnl": (current_price - current_position["avgPrice"]) * current_position["quantity"] if current_position["quantity"] and current_position["avgPrice"] else 0.0,
+                "realizedPnl": realized_pnl,
+            },
+            "events": events,
+            "total": len(events),
+            "eventStats": event_stats,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to build replay events for %s: %s", replay_session_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to build replay events")
+
+
+@router.get("/events")
+async def query_replay_events(
+    replaySessionId: Optional[str] = Query(None),
+    backtestId: Optional[int] = Query(None),
+    asOfTime: Optional[datetime] = Query(None),
+    limit: int = Query(300, ge=20, le=1000),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Return replay events by replaySessionId or by linked backtestId."""
+    replay_session_id = replaySessionId
+    if not replay_session_id and backtestId is not None:
+        session_result = await db.execute(
+            select(ReplaySession)
+            .where(ReplaySession.backtest_id == backtestId)
+            .order_by(ReplaySession.created_at.desc())
+            .limit(1)
+        )
+        session = session_result.scalar_one_or_none()
+        replay_session_id = session.replay_session_id if session else None
+    if not replay_session_id:
+        return {
+            "schema_version": "replay_events.v1",
+            "generated_at": datetime.utcnow().isoformat(),
+            "session": None,
+            "currentAsOfTime": _iso(asOfTime),
+            "progress": 0,
+            "currentState": {},
+            "events": [],
+            "total": 0,
+            "eventStats": _build_replay_event_stats([]),
+            "message": "暂无回放事件",
+        }
+    return await get_replay_events(
+        replay_session_id=replay_session_id,
+        asOfTime=asOfTime,
+        limit=limit,
+        db=db,
+    )
 
 
 # =============================================================================

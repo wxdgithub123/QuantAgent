@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { fetchCached } from "@/lib/fetchCache";
 import {
   Activity,
   AlertTriangle,
@@ -168,15 +169,9 @@ export function Prd104StatusPanel({ className }: { className?: string }) {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [healthRes, backfillRes] = await Promise.all([
-        fetch("/api/v1/system/health", { cache: "no-store" }),
-        fetch("/api/v1/market/backfill/status", { cache: "no-store" }),
-      ]);
-      if (!healthRes.ok) throw new Error(`health ${healthRes.status}`);
-      if (!backfillRes.ok) throw new Error(`backfill ${backfillRes.status}`);
       const [health, backfill] = await Promise.all([
-        healthRes.json() as Promise<unknown>,
-        backfillRes.json() as Promise<unknown>,
+        fetchCached("/api/v1/system/health", { cache: "no-store" }, 15_000),
+        fetchCached("/api/v1/market/backfill/status", { cache: "no-store" }, 30_000),
       ]);
       setState({
         health,

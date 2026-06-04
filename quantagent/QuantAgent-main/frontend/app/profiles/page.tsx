@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useMemo } from "react";
-import Link from "next/link";
+import { AppTopNav } from "@/components/navigation/AppTopNav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -420,47 +420,40 @@ export default function StrategyProfilesPage() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       {/* Header */}
-      <div className="bg-card/80 border-b border-border sticky top-0 z-10 backdrop-blur-md">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-foreground">策略配置方案库</h1>
-              <p className="text-muted-foreground text-sm mt-1">
-                预设 {profilesResponse?.total || 0} 个策略方案，覆盖 5 种风险等级
-              </p>
-            </div>
-            
-            {/* Filters */}
-            <div className="flex items-center gap-3">
-              <Select value={selectedRiskLevel} onValueChange={setSelectedRiskLevel}>
-                <SelectTrigger className="w-36 bg-secondary border-border">
-                  <SelectValue placeholder="风险等级" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">全部风险</SelectItem>
-                  {profilesResponse?.risk_levels.map(rl => (
-                    <SelectItem key={rl.value} value={rl.value}>
-                      <span style={{ color: rl.color }}>{rl.label}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              
-              <Select value={selectedStrategy} onValueChange={setSelectedStrategy}>
-                <SelectTrigger className="w-40 bg-secondary border-border">
-                  <SelectValue placeholder="策略类型" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">全部策略</SelectItem>
-                  {profilesResponse?.strategy_types.map(st => (
-                    <SelectItem key={st.value} value={st.value}>{st.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+      <AppTopNav
+        activeSection="profiles"
+        title="策略方案库"
+        subtitle="策略配置方案管理与版本控制"
+        rightSlot={
+          <div className="flex items-center gap-3">
+            <Select value={selectedRiskLevel} onValueChange={setSelectedRiskLevel}>
+              <SelectTrigger className="w-36 bg-secondary border-border">
+                <SelectValue placeholder="风险等级" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部风险</SelectItem>
+                {profilesResponse?.risk_levels.map(rl => (
+                  <SelectItem key={rl.value} value={rl.value}>
+                    <span style={{ color: rl.color }}>{rl.label}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select value={selectedStrategy} onValueChange={setSelectedStrategy}>
+              <SelectTrigger className="w-40 bg-secondary border-border">
+                <SelectValue placeholder="策略类型" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部策略</SelectItem>
+                {profilesResponse?.strategy_types.map(st => (
+                  <SelectItem key={st.value} value={st.value}>{st.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-        </div>
-      </div>
+        }
+      />
 
       {/* Compare Bar */}
       {compareProfiles.length > 0 && (

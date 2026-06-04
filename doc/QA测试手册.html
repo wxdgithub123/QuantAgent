@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuantAgent OS — 功能测试手册</title>
+<style>
+  :root {
+    --bg: #f8f9fc;
+    --card: #ffffff;
+    --border: #e2e8f0;
+    --text: #1e293b;
+    --muted: #64748b;
+    --accent: #2563eb;
+    --green: #16a34a;
+    --amber: #d97706;
+    --red: #dc2626;
+    --purple: #7c3aed;
+    --teal: #0d9488;
+    --pink: #db2777;
+    --blue-bg: #eff6ff;
+    --green-bg: #f0fdf4;
+    --amber-bg: #fffbeb;
+    --red-bg: #fef2f2;
+    --purple-bg: #faf5ff;
+    --teal-bg: #f0fdfa;
+    --pink-bg: #fdf2f8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.75; padding: 2rem;
+  }
+  .container { max-width: 1200px; margin: 0 auto; }
+
+  /* Header */
+  .header {
+    background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
+    color: #fff; border-radius: 16px; padding: 2.5rem 2rem; margin-bottom: 2rem;
+    box-shadow: 0 4px 24px rgba(37,99,235,0.15);
+  }
+  .header h1 { font-size: 2rem; margin-bottom: .5rem; }
+  .header .sub { opacity: .85; font-size: .95rem; }
+  .header .meta { margin-top: 1rem; display: flex; gap: 2rem; font-size: .85rem; opacity: .8; flex-wrap: wrap; }
+
+  /* Summary bar */
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: .75rem; margin-bottom: 2rem; }
+  .sum-item {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1rem; text-align: center;
+  }
+  .sum-item .num { font-size: 1.8rem; font-weight: 800; }
+  .sum-item .label { font-size: .8rem; color: var(--muted); margin-top: .2rem; }
+
+  /* Section */
+  .section { margin-bottom: 2.5rem; }
+  .section-title {
+    font-size: 1.25rem; font-weight: 700; margin-bottom: 1rem;
+    display: flex; align-items: center; gap: .5rem;
+  }
+  .section-title .icon { font-size: 1.4rem; }
+  .section-desc { color: var(--muted); font-size: .88rem; margin-bottom: 1rem; }
+
+  /* Cards */
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1rem; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1.3rem; transition: box-shadow .2s;
+  }
+  .card:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+  .card h3 { font-size: 1rem; margin-bottom: .4rem; display: flex; align-items: center; gap: .4rem; }
+  .card .url { font-family: Consolas, "SF Mono", monospace; font-size: .8rem; color: var(--accent); background: var(--blue-bg); padding: 2px 8px; border-radius: 4px; word-break: break-all; display: inline-block; margin: .3rem 0 .5rem; }
+  .card .steps { font-size: .85rem; color: var(--text); }
+  .card .steps li { margin: .25rem 0; }
+  .card .expect { margin-top: .5rem; padding: .4rem .7rem; border-radius: 6px; font-size: .82rem; }
+  .card .expect.pass { background: var(--green-bg); color: var(--green); }
+  .card .expect.warn { background: var(--amber-bg); color: var(--amber); }
+
+  /* Tags */
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: .72rem; font-weight: 700; }
+  .tag.easy { background: #dcfce7; color: #16a34a; }
+  .tag.medium { background: #fef3c7; color: #d97706; }
+  .tag.hard { background: #fee2e2; color: #dc2626; }
+  .tag.core { background: #dbeafe; color: #2563eb; }
+  .tag.ai { background: #f3e8ff; color: #7c3aed; }
+  .tag.data { background: #ccfbf1; color: #0d9488; }
+
+  /* Checkbox */
+  .checklist { list-style: none; padding: 0; margin-top: .5rem; }
+  .checklist li { padding: .3rem 0; font-size: .85rem; display: flex; align-items: flex-start; gap: .5rem; }
+  .checklist li input { margin-top: .3rem; }
+
+  /* Progress */
+  .progress-bar { height: 8px; background: var(--border); border-radius: 4px; margin: .8rem 0; }
+  .progress-fill { height: 100%; border-radius: 4px; transition: width .3s; }
+
+  /* Footer */
+  .footer { text-align: center; color: var(--muted); font-size: .8rem; margin-top: 3rem; padding: 1.5rem; border-top: 1px solid var(--border); }
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
+
+  @media (max-width: 768px) {
+    body { padding: 1rem; }
+    .card-grid { grid-template-columns: 1fr; }
+    .header { padding: 1.5rem; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ====== HEADER ====== -->
+<div class="header">
+  <h1>🧪 QuantAgent OS 功能测试手册</h1>
+  <p class="sub">从用户视角逐项验证系统的功能完整度 —— 打开网站跟着走一遍即可</p>
+  <div class="meta">
+    <span>🌐 前端：<code>http://localhost:3002</code></span>
+    <span>📡 API：<code>http://localhost:8002/docs</code></span>
+    <span>📅 更新：2026-06-03</span>
+  </div>
+</div>
+
+<!-- ====== SUMMARY ====== -->
+<div class="summary">
+  <div class="sum-item"><div class="num" style="color:var(--accent)">6</div><div class="label">测试分类</div></div>
+  <div class="sum-item"><div class="num" style="color:var(--green)">27</div><div class="label">测试用例</div></div>
+  <div class="sum-item"><div class="num" style="color:var(--purple)">6</div><div class="label">前端页面</div></div>
+  <div class="sum-item"><div class="num" style="color:var(--teal)">11</div><div class="label">API 端点</div></div>
+  <div class="sum-item"><div class="num" style="color:var(--amber)">3</div><div class="label">已知局限</div></div>
+</div>
+
+<!-- ====== CATEGORY 1: 仪表盘 & 系统概览 ====== -->
+<div class="section">
+  <div class="section-title"><span class="icon">📊</span> 一、仪表盘 & 系统概览 <span class="tag core">核心</span><span class="tag easy">简单</span></div>
+  <p class="section-desc">验证系统整体健康状态，确认各数据层都连通。</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <h3>1.1 仪表盘首页</h3>
+      <div class="url">http://localhost:3002/dashboard</div>
+      <ol class="steps">
+        <li>打开浏览器访问上述地址</li>
+        <li>观察页面是否正常加载（无白屏/报错）</li>
+        <li>查看 PRD v1 流程面板 — 6 个阶段应全绿 ✓</li>
+        <li>查看系统健康状态卡片</li>
+      </ol>
+      <div class="expect pass">✅ 期望：页面加载正常，PRD 面板显示 "overall: ok"，6 阶段均为 ok</div>
+      <ul class="checklist">
+        <li><input type="checkbox"> 页面正常渲染</li>
+        <li><input type="checkbox"> PRD 6 阶段全绿</li>
+        <li><input type="checkbox"> 无控制台报错 (F12)</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>1.2 数据源管理页</h3>
+      <div class="url">http://localhost:3002/data-sources</div>
+      <ol class="steps">
+        <li>访问数据源页面</li>
+        <li>检查各数据源状态：OpenBB / CCXT / FRED / ClickHouse</li>
+        <li>确认币种行情数据可查询（BTC/ETH/SOL 等）</li>
+      </ol>
+      <div class="expect pass">✅ 期望：CCXT 显示 7 个交易所，OpenBB 显示 ok，FRED 显示 ok</div>
+      <ul class="checklist">
+        <li><input type="checkbox"> OpenBB 数据源状态正常</li>
+        <li><input type="checkbox"> CCXT 交易所列表显示</li>
+        <li><input type="checkbox"> FRED 宏观数据源可用</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ====== CATEGORY 2: 因子 & 信号 ====== -->
+<div class="section">
+  <div class="section-title"><span class="icon">🔬</span> 二、因子 & 信号系统 <span class="tag data">数据</span><span class="tag easy">简单</span></div>
+  <p class="section-desc">验证技术因子计算和策略信号生成是否正常工作。</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <h3>2.1 因子/信号主页</h3>
+      <div class="url">http://localhost:3002/signals</div>
+      <ol class="steps">
+        <li>访问因子/信号页面</li>
+        <li>查看"汇总统计"标签 — 应有因子总数、信号总数</li>
+        <li>查看"因子字典"标签 — 应列出 16+ 个因子定义</li>
+        <li>查看"因子快照"标签 — 选择 BTCUSDT，应显示 SMA/EMA/RSI 等值</li>
+      </ol>
+      <div class="expect pass">✅ 期望：因子总计 6000+，信号总计 3000+，覆盖 8 种策略</div>
+      <ul class="checklist">
+        <li><input type="checkbox"> 汇总统计有数据</li>
+        <li><input type="checkbox"> 因子字典完整（16个因子）</li>
+        <li><input type="checkbox"> 快照数据可查询（BTCUSDT 1h）</li>
+        <li><input type="checkbox"> 时序图正常渲染</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>2.2 信号事件列表</h3>
+      <div class="url">http://localhost:3002/signals → "信号事件" 标签</div>
+      <ol class="steps">
+        <li>切换到"信号事件"标签</li>
+        <li>筛选 BTCUSDT + 1h 周期</li>
+        <li>检查 BUY/SELL/WAIT 三种信号分布</li>
+        <li>点击一条信号查看详情 — 应显示关联的因子证据</li>
+      </ol>
+      <div class="expect pass">✅ 期望：信号按策略分组（ma/rsi/boll/macd 等），有 BUY/SELL/WAIT 分布</div>
+      <ul class="checklist">
+        <li><input type="checkbox"> 信号列表可筛选</li>
+        <li><input type="checkbox"> 三种信号类型都有</li>
+        <li><input type="checkbox"> 信号详情包含因子证据</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>2.3 策略体系目录</h3>
+      <div class="url">http://localhost:3002/signals → "策略体系" 标签</div>
+      <ol class="steps">
+        <li>切换到"策略体系"标签</li>
+        <li>确认 8 种策略全部列出</li>
+        <li>点击某个策略查看详情 — 应显示使用的因子和回测统计</li>
+      </ol>
+      <div class="expect pass">✅ 期望：8 种策略（MA/RSI/Boll/MACD/EMA_Triple/ATR_Trend/Turtle/Ichimoku）</div>
+      <ul class="checklist">
+        <li><input type="checkbox"> 8 种策略全部显示</li>
+        <li><input type="checkbox"> 策略详情包含回测数据</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ====== CATEGORY 3: 决策中心 ====== -->
+<div class="section">
+  <div class="section-title"><span class="icon">🧠</span> 三、AI 决策中心 <span class="tag ai">AI</span><span class="tag medium">中等</span></div>
+  <p class="section-desc">验证 LLM 多代理决策管道是否正常运转。⚠️ 此项依赖 DeepSeek API，响应可能较慢（30s-3min）。</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <h3>3.1 决策中心主页</h3>
+      <div class="url">http://localhost:3002/decisions</div>
+      <ol class="steps">
+        <li>访问决策中心页面</li>
+        <li>查看统计卡片：历史建议记录 / 近7天新增 / 平均置信度 / 风险否决次数</li>
+        <li>查看决策历史表格 — 应有决策记录</li>
+        <li>查看图表：建议分布饼图、置信度趋势折线图</li>
+      </ol>
+      <div class="expect pass">✅ 期望：至少 1 条决策记录，统计卡片有数据，饼图/折线图正常渲染</div>
+      <ul class="checklist">
+        <li><input type="checkbox"> 统计卡片数据显示</li>
+        <li><input type="checkbox"> 决策历史表格有记录</li>
+        <li><input type="checkbox"> 饼图正常</li>
+        <li><input type="checkbox"> 置信度趋势图正常</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>3.2 决策详情 — 多空辩论</h3>
+      <div class="url">点击决策列表中的某条记录</div>
+      <ol class="steps">
+        <li>点击一条决策记录查看详情</li>
+        <li>检查是否显示：多头论点 / 空头论点 / 最终裁决</li>
+        <li>检查是否显示：4 角色分析结果（技术/新闻/宏观/风控）</li>
+        <li>检查是否显示：仓位建议 / 杠杆建议 / 止损建议</li>
+        <li>检查是否显示：投票分布（看多/看空/中性占比）</li>
+      </ol>
+      <div class="expect pass">✅ 期望：完整的 15 字段决策输出，多空辩论文本可见</div>
+      <ul class="checklist">
+        <li><input type="checkbox"> 多头论点文本显示</li>
+        <li><input type="checkbox"> 空头论点文本显示</li>
+        <li><input type="checkbox"> 4 角色分析详情</li>
+        <li><input type="checkbox"> 仓位/杠杆/止损建议</li>
+        <li><input type="checkbox"> 投票分布显示</li>
+        <li><input type="checkbox"> 风控否决标记</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>3.3 手动触发一次决策</h3>
+      <div class="url">API: POST /api/v1/market/coordinate/BTCUSDT?fast=true</div>
+      <ol class="steps">
+        <li>打开 http://localhost:8002/docs</li>
+        <li>找到 GET /api/v1/market/coordinate/{symbol}</li>
+        <li>填入 symbol=BTCUSDT，interval=1h，fast=true</li>
+        <li>点击 Execute，等待响应（30s-3min）</li>
+        <li>检查返回的 final_signal / confidence / bull_view / bear_view</li>
+      </ol>
+      <div class="expect warn">⚠️ 注意：AI 调用需等待 30 秒到 3 分钟（取决于 DeepSeek API 速度）</div>
+      <ul class="checklist">
+        <li><input type="checkbox"> API 返回 200</li>
+        <li><input type="checkbox"> final_signal 为 BUY/SELL/WAIT 之一</li>
+        <li><input type="checkbox"> confidence 在 0.0-1.0 之间</li>
+        <li><input type="checkbox"> 包含 role_opinions 数组</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ====== CATEGORY 4: 回测 & 回放 ====== -->
+<div class="section">
+  <div class="section-title"><span class="icon">⏪</span> 四、策略回测 & 历史回放 <span class="tag data">数据</span><span class="tag medium">中等</span></div>
+  <p class="section-desc">验证回测引擎和审计回放功能。</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <h3>4.1 回测页面</h3>
+      <div class="url">http://localhost:3002/backtest</div>
+      <ol class="steps">
+        <li>访问回测页面</li>
+        <li>查看策略模板列表 — 应有 8 种模板</li>
+        <li>选择 MA 策略 → BTCUSDT → 1h → 设置回测区间</li>
+        <li>点击"运行回测"，等待结果</li>
+      </ol>
+      <div class="expect pass">✅ 期望：策略模板列表完整，回测运行后显示权益曲线和交易摘要</div>
+      <ul class="checklist">
+        <li><input type="checkbox"> 8 种策略模板可选</li>
+        <li><input type="checkbox"> 支持选择币种和周期</li>
+        <li><input type="checkbox"> 回测结果包含权益曲线</li>
+        <li><input type="checkbox"> 显示收益率/最大回撤/夏普比率</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>4.2 历史回放</h3>
+      <div class="url">http://localhost:3002/replay</div>
+      <ol class="steps">
+        <li>访问回放页面</li>
+        <li>选择标的 (BTCUSDT) 和时间范围</li>
+        <li>创建回放会话</li>
+        <li>观察 K 线逐根回放和信号触发</li>
+      </ol>
+      <div class="expect pass">✅ 期望：回放会话可创建，K 线按时间推进，对应信号同步显示</div>
+      <ul class="checklist">
+        <li><input type="checkbox"> 可创建回放会话</li>
+        <li><input type="checkbox"> K 线逐根推进</li>
+        <li><input type="checkbox"> 信号同步触发</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>4.3 参数优化</h3>
+      <div class="url">http://localhost:3002/backtest → 优化标签</div>
+      <ol class="steps">
+        <li>在回测页面找到参数优化功能</li>
+        <li>选择策略 + 参数范围</li>
+        <li>运行网格搜索或 Optuna 优化</li>
+        <li>查看最优参数组合</li>
+      </ol>
+      <div class="expect pass">✅ 期望：优化完成返回最优参数，可对比不同参数的回测结果</div>
+      <ul class="checklist">
+        <li><input type="checkbox"> 网格搜索功能</li>
+        <li><input type="checkbox"> Optuna 优化功能</li>
+        <li><input type="checkbox"> 最优参数展示</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ====== CATEGORY 5: Hummingbot & 模拟交易 ====== -->
+<div class="section">
+  <div class="section-title"><span class="icon">🤖</span> 五、Hummingbot 模拟交易 <span class="tag data">数据</span><span class="tag hard">较复杂</span></div>
+  <p class="section-desc">验证 Paper Bot（模拟盘）管理功能。⚠️ 依赖 Docker socket 和 MQTT。</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <h3>5.1 Hummingbot 管理页</h3>
+      <div class="url">http://localhost:3002/hummingbot</div>
+      <ol class="steps">
+        <li>访问 Hummingbot 页面</li>
+        <li>查看 Paper Bot 状态列表</li>
+        <li>检查是否能显示活跃/历史 Bot 实例</li>
+      </ol>
+      <div class="expect pass">✅ 期望：页面正常加载，显示 Bot 管理界面</div>
+      <ul class="checklist">
+        <li><input type="checkbox"> 页面正常加载</li>
+        <li><input type="checkbox"> Bot 实例列表显示</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>5.2 创建 Paper Bot（可选）</h3>
+      <div class="url">http://localhost:3002/hummingbot → 创建按钮</div>
+      <ol class="steps">
+        <li>点击创建新的 Paper Bot</li>
+        <li>选择策略（如 Bollinger Bands）</li>
+        <li>配置交易对 (BTC-USDT) 和参数</li>
+        <li>启动 Bot，观察日志输出</li>
+      </ol>
+      <div class="expect warn">⚠️ 注意：需要 Docker 正常运行且有可用镜像。如果 BOTS_HOST_PATH 未配置会失败。</div>
+      <ul class="checklist">
+        <li><input type="checkbox"> 创建表单正常</li>
+        <li><input type="checkbox"> Bot 可启动</li>
+        <li><input type="checkbox"> 日志实时输出</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ====== CATEGORY 6: API 直接测试 ====== -->
+<div class="section">
+  <div class="section-title"><span class="icon">🔌</span> 六、API 端点测试（Swagger）<span class="tag core">核心</span><span class="tag easy">简单</span></div>
+  <p class="section-desc">通过 Swagger UI 直接测试所有后端 API。</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <h3>6.1 系统健康 & PRD 流程</h3>
+      <div class="url">http://localhost:8002/docs</div>
+      <ol class="steps">
+        <li>GET /api/v1/system/health → 应返回 healthy</li>
+        <li>GET /api/v1/system/prd-flow → 6 阶段全 ok</li>
+        <li>GET /api/v1/market/overview → 应有行情概览</li>
+      </ol>
+      <div class="expect pass">✅ 期望：健康检查全绿，PRD 流程 overall=ok</div>
+    </div>
+
+    <div class="card">
+      <h3>6.2 行情数据</h3>
+      <div class="url">GET /api/v1/market/klines/{symbol}</div>
+      <ol class="steps">
+        <li>GET /api/v1/market/klines/BTCUSDT?interval=1h&limit=10</li>
+        <li>GET /api/v1/market/ticker/BTCUSDT</li>
+        <li>GET /api/v1/market/symbols</li>
+        <li>GET /api/v1/market/news?symbol=BTC&limit=5</li>
+        <li>GET /api/v1/market/macro</li>
+      </ol>
+      <div class="expect pass">✅ 期望：K 线数据返回 OHLCV，ticker 有价格，news ≥ 10 条，macro ≥ 2 个指标</div>
+    </div>
+
+    <div class="card">
+      <h3>6.3 因子 & 信号 API</h3>
+      <div class="url">GET /api/v1/signals/...</div>
+      <ol class="steps">
+        <li>GET /api/v1/signals/summary → 查看汇总统计</li>
+        <li>GET /api/v1/signals/factors?symbol=BTCUSDT&limit=5</li>
+        <li>GET /api/v1/signals/events?symbol=BTCUSDT&limit=5</li>
+        <li>GET /api/v1/signals/context/BTCUSDT → 查看 AnalysisContext</li>
+        <li>GET /api/v1/signals/factor-definitions → 因子字典</li>
+        <li>GET /api/v1/signals/strategies → 策略目录</li>
+      </ol>
+      <div class="expect pass">✅ 期望：所有端点在 Swagger 中可用且返回数据</div>
+    </div>
+
+    <div class="card">
+      <h3>6.4 决策 & 审计 API</h3>
+      <div class="url">GET /api/v1/coordination/...</div>
+      <ol class="steps">
+        <li>GET /api/v1/coordination/history?limit=5</li>
+        <li>GET /api/v1/coordination/stats</li>
+        <li>GET /api/v1/coordination/latest?symbol=BTCUSDT</li>
+        <li>GET /api/v1/coordination/{id} → 查看某条决策详情</li>
+      </ol>
+      <div class="expect pass">✅ 期望：history 有记录，stats 有统计，决策详情含完整字段</div>
+    </div>
+
+    <div class="card">
+      <h3>6.5 回测 & 回放 API</h3>
+      <div class="url">GET /api/v1/strategy/... | /api/v1/replay/...</div>
+      <ol class="steps">
+        <li>GET /api/v1/strategy/templates → 8 种策略模板</li>
+        <li>GET /api/v1/strategy/backtest/history → 回测历史</li>
+        <li>POST /api/v1/strategy/backtest/run → 运行回测</li>
+        <li>POST /api/v1/replay/create → 创建回放会话</li>
+      </ol>
+      <div class="expect pass">✅ 期望：模板列表完整，可运行新回测，回放可创建</div>
+    </div>
+
+    <div class="card">
+      <h3>6.6 数据摄入状态</h3>
+      <div class="url">GET /api/v1/market/data-ingestion-overview</div>
+      <ol class="steps">
+        <li>GET /api/v1/market/data-ingestion-overview</li>
+        <li>GET /api/v1/market/backfill/status</li>
+        <li>GET /api/v1/market/source-coverage</li>
+      </ol>
+      <div class="expect pass">✅ 期望：数据摄入概览显示各来源状态，回填状态 30 条全 ok</div>
+    </div>
+  </div>
+</div>
+
+<!-- ====== BONUS ====== -->
+<div class="section">
+  <div class="section-title"><span class="icon">📋</span> 七、快速验收命令（命令行）</div>
+  <p class="section-desc">不想手动点页面？终端直接跑这些命令。</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <h3>7.1 PRD v1 全流程验收</h3>
+      <div class="url">python backend/scripts/prd_v1_acceptance.py --timeout 300</div>
+      <div class="expect pass">✅ 期望：8/8 PASS，全部绿色</div>
+    </div>
+    <div class="card">
+      <h3>7.2 PRD 10.4 冒烟测试</h3>
+      <div class="url">python backend/scripts/prd10_4_smoke.py --timeout 300</div>
+      <div class="expect pass">✅ 期望：5/5 PASS，coordinator_tradingagents 成功</div>
+    </div>
+    <div class="card">
+      <h3>7.3 单个 API 快速检查</h3>
+      <div class="url">curl http://localhost:8002/api/v1/system/prd-flow</div>
+      <div class="expect pass">✅ 期望：JSON 返回 overall_status="ok"</div>
+    </div>
+  </div>
+</div>
+
+<hr>
+
+<!-- ====== KNOWN ISSUES ====== -->
+<div class="section">
+  <div class="section-title"><span class="icon">⚠️</span> 已知局限与注意事项</div>
+  <div class="card-grid">
+    <div class="card">
+      <h3>⚠️ AI 决策速度</h3>
+      <p style="font-size:.85rem;color:var(--muted)">
+        TradingAgents 每次调用会触发 4-11 次 LLM 请求（并行分析 + 多空辩论 + 风控辩论）。
+        使用 DeepSeek API 时，fast 模式约 30-60 秒，完整模式约 2-4 分钟。
+        <strong>这不是 bug，是 LLM 推理固有的延迟。</strong></p>
+    </div>
+    <div class="card">
+      <h3>⚠️ Binance API Key 未配置</h3>
+      <p style="font-size:.85rem;color:var(--muted)">
+        网关使用 Binance Testnet 拉取公开行情，但<strong>无法执行真实下单</strong>。
+        如需测试交易功能，需在 .env 中填入 BINANCE_API_KEY 和 BINANCE_SECRET_KEY。</p>
+    </div>
+    <div class="card">
+      <h3>⚠️ Paper Bot 需 Docker 网络</h3>
+      <p style="font-size:.85rem;color:var(--muted)">
+        Hummingbot Paper Bot 创建和启动需要 Docker 能拉取镜像，当前 Docker 网络受限，
+        可能无法创建新的 Bot 容器。已有的 Bot 容器是之前缓存的。</p>
+    </div>
+  </div>
+</div>
+
+<!-- ====== FOOTER ====== -->
+<div class="footer">
+  <p>QuantAgent OS — 功能测试手册 · 基于 PRD v1 + PRD 10.4 验收标准</p>
+  <p>当前运行状态：<span style="color:var(--green);font-weight:700">全部服务健康 | 6 阶段全 ok | 6026 因子 | 3202 信号 | 8 策略</span></p>
+</div>
+
+</div>
+</body>
+</html>

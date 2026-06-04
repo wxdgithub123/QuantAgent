@@ -34,6 +34,10 @@ type ActiveSection =
   | "diagnostics"
   | "hummingbot"
   | "terminal"
+  | "strategies"
+  | "strategies-monitor"
+  | "profiles"
+  | "monitor"
   | "none";
 
 interface AppTopNavProps {
@@ -59,6 +63,9 @@ const MORE_NAV_GROUPS = [
       { href: "/replay", label: "历史回放", icon: History, activeKey: "replay", desc: "决策复盘" },
       { href: "/audit", label: "回测审计", icon: Shield, activeKey: "audit", desc: "回测、回放、审计追踪与结果对比" },
       { href: "/signals", label: "因子/信号", icon: Layers, activeKey: "signals", desc: "标准化因子与信号" },
+      { href: "/strategies", label: "策略库", icon: BarChart, activeKey: "strategies", desc: "策略模板与参数优化" },
+      { href: "/strategies/monitor", label: "策略监控", icon: Activity, activeKey: "strategies-monitor", desc: "动态维度打分与仓位权重" },
+      { href: "/profiles", label: "策略方案库", icon: Layers, activeKey: "profiles", desc: "策略配置方案管理" },
       { href: "/dashboard?tab=agents", label: "智能体面板", icon: Brain, activeKey: "agents", desc: "子 Agent 状态与手动分析" },
     ],
   },

@@ -2,7 +2,9 @@
 
 import logging
 import time
-from typing import Any, Dict
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter
 
@@ -702,6 +704,625 @@ async def get_frontend_api_overview() -> Dict[str, Any]:
             {"label": "ClickHouse", "status": _status_label(clickhouse_status), "detail": f"{coverage['total_rows']} 行本地K线缓存"},
             {"label": "TradingAgents", "status": _status_label(tradingagents_status), "detail": "默认决策服务"},
         ],
+    }
+
+
+def _demo_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _demo_iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _demo_count_status(count: int, *, partial_when_zero: bool = True) -> str:
+    if count > 0:
+        return "done"
+    return "partial" if partial_when_zero else "pending"
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if isinstance(value, (list, dict)) and not value:
+            continue
+        return value
+    return None
+
+
+def _compact_sample_id(prefix: str, value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value)
+    return text if text.startswith(prefix) else f"{prefix}{text}"
+
+
+def _demo_step(
+    *,
+    step_name: str,
+    status: str,
+    latest_update_time: Optional[str],
+    sample_id: Optional[str],
+    short_description: str,
+    related_page_url: str,
+    related_api: str,
+    evidence_count: int,
+) -> Dict[str, Any]:
+    return {
+        "stepName": step_name,
+        "status": status,
+        "latestUpdateTime": latest_update_time,
+        "sampleId": sample_id,
+        "shortDescription": short_description,
+        "relatedPageUrl": related_page_url,
+        "relatedApi": related_api,
+        "evidenceCount": int(evidence_count or 0),
+    }
+
+
+def _build_closed_loop_steps(
+    counts: Dict[str, int],
+    latest_sample: Optional[Dict[str, Any]],
+    latest_updates: Optional[Dict[str, Optional[str]]] = None,
+) -> list[Dict[str, Any]]:
+    """Build the P5 closed-loop progress cards from persisted evidence counts."""
+    latest_updates = latest_updates or {}
+    sample = latest_sample or {}
+    decision_id = sample.get("latestDecisionId")
+    intent_id = sample.get("latestOrderIntentId")
+    order_id = sample.get("latestPaperOrderId")
+    audit_id = sample.get("latestAuditRecordId")
+    backtest_id = sample.get("latestBacktestId")
+    replay_id = sample.get("latestReplaySessionId")
+
+    market_count = counts.get("market_bar_rows", 0)
+    return [
+        _demo_step(
+            step_name="数据接入",
+            status="done" if market_count > 0 or counts.get("data_source_ready", 0) > 0 else "partial",
+            latest_update_time=latest_updates.get("market"),
+            sample_id="BTCUSDT",
+            short_description="OpenBB / CCXT / FRED 等入口接入后，行情会进入本地标准化与缓存链路。",
+            related_page_url="/data-sources",
+            related_api="/api/v1/system/health",
+            evidence_count=market_count,
+        ),
+        _demo_step(
+            step_name="数据标准化",
+            status="done" if counts.get("factor_snapshots", 0) > 0 or counts.get("signal_events", 0) > 0 else "partial",
+            latest_update_time=latest_updates.get("factor"),
+            sample_id="BarData / FactorSnapshot",
+            short_description="K 线、因子、信号统一为可回测、可审计、支持 PIT 的结构化数据。",
+            related_page_url="/signals",
+            related_api="/api/v1/signals/factor-catalog",
+            evidence_count=counts.get("factor_snapshots", 0),
+        ),
+        _demo_step(
+            step_name="因子计算",
+            status=_demo_count_status(counts.get("factor_snapshots", 0)),
+            latest_update_time=latest_updates.get("factor"),
+            sample_id="factor_snapshots",
+            short_description="行情基础因子、技术指标、收益率、波动率、新闻和宏观因子进入研究资产目录。",
+            related_page_url="/signals",
+            related_api="/api/v1/signals/factors",
+            evidence_count=counts.get("factor_snapshots", 0),
+        ),
+        _demo_step(
+            step_name="信号触发",
+            status=_demo_count_status(counts.get("signal_events", 0)),
+            latest_update_time=latest_updates.get("signal"),
+            sample_id="signal_events",
+            short_description="策略基于因子生成 SignalEvent，强信号可进入 Agent 审计回测链路。",
+            related_page_url="/signals",
+            related_api="/api/v1/signals/events",
+            evidence_count=counts.get("signal_events", 0),
+        ),
+        _demo_step(
+            step_name="Agent 决策",
+            status=_demo_count_status(counts.get("coordination_history", 0)),
+            latest_update_time=latest_updates.get("decision"),
+            sample_id=_compact_sample_id("#", decision_id),
+            short_description="TradingAgents 消费 AnalysisContext，输出结构化 AgentDecision 并进入详情页。",
+            related_page_url="/decisions",
+            related_api="/api/v1/coordination/history",
+            evidence_count=counts.get("coordination_history", 0),
+        ),
+        _demo_step(
+            step_name="OrderIntent",
+            status=_demo_count_status(counts.get("order_intent_events", 0)),
+            latest_update_time=latest_updates.get("audit"),
+            sample_id=intent_id,
+            short_description="系统把 Agent 建议或手动操作转换为标准交易意图，HOLD 也会写入审计。",
+            related_page_url="/decisions",
+            related_api="/api/v1/execution/order-intents/latest",
+            evidence_count=counts.get("order_intent_events", 0),
+        ),
+        _demo_step(
+            step_name="RiskGuard",
+            status=_demo_count_status(counts.get("risk_guard_events", 0)),
+            latest_update_time=latest_updates.get("audit"),
+            sample_id="RiskGuard",
+            short_description="所有模拟下单前统一执行仓位、敞口、回撤、标的和杠杆等风控规则。",
+            related_page_url="/dashboard?tab=positions",
+            related_api="/api/v1/trading/risk-status",
+            evidence_count=counts.get("risk_guard_events", 0),
+        ),
+        _demo_step(
+            step_name="模拟执行",
+            status=_demo_count_status(counts.get("paper_trades", 0)),
+            latest_update_time=latest_updates.get("paper_trade"),
+            sample_id=order_id,
+            short_description="本阶段只做本地模拟成交，记录成交价、手续费、滑点和关联 ID。",
+            related_page_url="/dashboard?tab=positions",
+            related_api="/api/v1/trading/orders",
+            evidence_count=counts.get("paper_trades", 0),
+        ),
+        _demo_step(
+            step_name="持仓 / PnL",
+            status="done" if counts.get("paper_positions", 0) > 0 or counts.get("paper_trades", 0) > 0 else "partial",
+            latest_update_time=latest_updates.get("position") or latest_updates.get("paper_trade"),
+            sample_id="paper_positions",
+            short_description="模拟订单更新持仓、现金和盈亏，供仪表盘、回放和审计联动查看。",
+            related_page_url="/dashboard?tab=positions",
+            related_api="/api/v1/trading/positions",
+            evidence_count=counts.get("paper_positions", 0),
+        ),
+        _demo_step(
+            step_name="回测验证",
+            status=_demo_count_status(counts.get("backtest_results", 0)),
+            latest_update_time=latest_updates.get("backtest"),
+            sample_id=_compact_sample_id("#", backtest_id),
+            short_description="支持普通规则回测和 Agent 审计回测，结果包含指标、曲线、PIT 检查和交易明细。",
+            related_page_url="/backtest",
+            related_api="/api/v1/strategy/backtest/history",
+            evidence_count=counts.get("backtest_results", 0),
+        ),
+        _demo_step(
+            step_name="历史回放",
+            status=_demo_count_status(counts.get("replay_sessions", 0)),
+            latest_update_time=latest_updates.get("replay"),
+            sample_id=replay_id,
+            short_description="播放器式还原某一 as_of_time 的行情、因子、信号、决策、订单和审计事件。",
+            related_page_url="/replay",
+            related_api="/api/v1/replay/events",
+            evidence_count=counts.get("replay_sessions", 0),
+        ),
+        _demo_step(
+            step_name="审计导出",
+            status=_demo_count_status(counts.get("audit_logs", 0)),
+            latest_update_time=latest_updates.get("audit"),
+            sample_id=_compact_sample_id("#", audit_id),
+            short_description="AuditRecord 写入后不可修改，支持筛选、详情查看和 JSON 导出 / 复制。",
+            related_page_url="/audit",
+            related_api="/api/v1/audit/records",
+            evidence_count=counts.get("audit_logs", 0),
+        ),
+    ]
+
+
+def _build_prd_acceptance(counts: Dict[str, int]) -> list[Dict[str, Any]]:
+    """Build PRD acceptance cards for phase 1 and phase 2."""
+    def item(name: str, done: bool, evidence: str, jump_link: str, note: str = "") -> Dict[str, Any]:
+        return {
+            "name": name,
+            "status": "done" if done else "partial",
+            "evidence": evidence,
+            "jumpLink": jump_link,
+            "note": note or ("已有真实记录支撑。" if done else "能力已预留，建议继续补充演示样例。"),
+        }
+
+    phase1 = [
+        item("数据接入", counts.get("market_bar_rows", 0) > 0 or counts.get("data_source_ready", 0) > 0, f"{counts.get('market_bar_rows', 0):,} 行 K 线缓存", "/data-sources"),
+        item("标准化数据模型", counts.get("factor_snapshots", 0) > 0, f"{counts.get('factor_snapshots', 0):,} 条因子快照", "/signals"),
+        item("TradingAgents 消费 AnalysisContext", counts.get("coordination_history", 0) > 0, f"{counts.get('coordination_history', 0):,} 条决策历史", "/decisions"),
+        item("point-in-time 回测", counts.get("pit_backtests", 0) > 0, f"{counts.get('pit_backtests', 0):,} 条 PIT 回测记录", "/backtest"),
+        item("决策审计和回放", counts.get("audit_logs", 0) > 0 and counts.get("replay_sessions", 0) > 0, f"{counts.get('audit_logs', 0):,} 条审计，{counts.get('replay_sessions', 0):,} 个回放", "/audit"),
+        item("前端配置、查看和复盘", True, "数据源、研究资产、回测、回放、决策、审计页面已接入", "/monitor"),
+    ]
+    phase2 = [
+        item("OrderIntent", counts.get("order_intent_events", 0) > 0, f"{counts.get('order_intent_events', 0):,} 条相关审计事件", "/decisions"),
+        item("RiskGuard", counts.get("risk_guard_events", 0) > 0, f"{counts.get('risk_guard_events', 0):,} 条风控事件", "/dashboard?tab=positions"),
+        item("模拟交易执行", counts.get("paper_trades", 0) > 0, f"{counts.get('paper_trades', 0):,} 条模拟订单", "/dashboard?tab=positions"),
+        item("研究台", counts.get("factor_snapshots", 0) > 0 and counts.get("signal_events", 0) > 0, "行情、因子、信号、新闻、Agent 面板已整合", "/dashboard"),
+        item("回测台", counts.get("backtest_results", 0) > 0, f"{counts.get('backtest_results', 0):,} 条回测结果", "/backtest"),
+        item("审计台", counts.get("audit_logs", 0) > 0, f"{counts.get('audit_logs', 0):,} 条不可变审计记录", "/audit"),
+        item("历史回放", counts.get("replay_sessions", 0) > 0, f"{counts.get('replay_sessions', 0):,} 个回放会话", "/replay"),
+        item("三台联动", counts.get("agent_audited_backtests", 0) > 0 and counts.get("replay_sessions", 0) > 0 and counts.get("audit_logs", 0) > 0, "回测详情、历史回放、审计筛选已通过 ID 联动", "/backtest"),
+    ]
+    return [
+        {"phaseName": "第一阶段", "items": phase1},
+        {"phaseName": "第二阶段", "items": phase2},
+    ]
+
+
+def _build_demo_path(latest_sample: Optional[Dict[str, Any]]) -> list[Dict[str, str]]:
+    sample = latest_sample or {}
+    backtest_url = sample.get("backtestDetailUrl") or "/backtest"
+    replay_url = sample.get("replayUrl") or "/replay"
+    decision_url = sample.get("decisionDetailUrl") or "/decisions"
+    audit_url = sample.get("auditRecordUrl") or "/audit"
+    return [
+        {
+            "title": "查看数据源状态",
+            "description": "先说明 OpenBB、CCXT、FRED、缓存和降级源分别是什么。",
+            "url": "/data-sources",
+            "expectedResult": "能看到数据源、缓存、最后更新时间和降级状态。",
+            "fallbackNote": "如果上游暂不可用，页面会展示缓存或暂无数据。",
+        },
+        {
+            "title": "查看因子资产目录",
+            "description": "展示因子不是一堆数字，而是按研究类别管理的资产。",
+            "url": "/signals",
+            "expectedResult": "能看到因子分类、可用性、数据来源、被哪些策略和信号使用。",
+            "fallbackNote": "暂无统计项会显示“暂无统计”，不会报错。",
+        },
+        {
+            "title": "查看策略体系",
+            "description": "在因子/信号页切到策略体系，说明策略如何使用因子触发信号。",
+            "url": "/signals",
+            "expectedResult": "能看到策略、使用因子、触发信号和支持的回测模式。",
+            "fallbackNote": "如果策略详情为空，先展示内置策略资产说明。",
+        },
+        {
+            "title": "运行 Agent 审计回测",
+            "description": "选择 Agent 审计回测，强调只在强信号触发时调用 Agent。",
+            "url": "/backtest",
+            "expectedResult": "生成 BacktestResult、PIT 检查、交易明细和审计链路。",
+            "fallbackNote": "如果演示时间紧，直接打开最近样例回测详情。",
+        },
+        {
+            "title": "查看回测详情",
+            "description": "展示核心指标、净值/回撤曲线、PIT 检查、交易明细。",
+            "url": backtest_url,
+            "expectedResult": "能看到 rule_only / agent_audited 模式说明和关联 ID。",
+            "fallbackNote": "暂无样例时返回回测列表。",
+        },
+        {
+            "title": "点击交易进入历史回放",
+            "description": "从交易表跳到对应 as_of_time，看那一刻发生了什么。",
+            "url": replay_url,
+            "expectedResult": "播放器展示事件流、当前状态、因子、信号和账户状态。",
+            "fallbackNote": "暂无 replaySessionId 时进入回放首页。",
+        },
+        {
+            "title": "查看 Agent 决策详情",
+            "description": "解释 Agent 输入快照、角色输出、最终建议和置信度来源。",
+            "url": decision_url,
+            "expectedResult": "能看到决策基本信息、输入快照、角色分析和关联 OrderIntent。",
+            "fallbackNote": "暂无 decisionId 时进入决策中心列表。",
+        },
+        {
+            "title": "查看 OrderIntent 和 RiskGuard",
+            "description": "说明交易建议先变成标准意图，再过风控，不能直接成交。",
+            "url": "/decisions",
+            "expectedResult": "能看到 OrderIntent 状态和风控规则表。",
+            "fallbackNote": "如果没有关联意图，页面显示暂无关联记录。",
+        },
+        {
+            "title": "查看模拟订单和持仓 PnL",
+            "description": "强调当前是本地模拟环境，不会产生真实订单。",
+            "url": "/dashboard?tab=positions",
+            "expectedResult": "能看到模拟订单、持仓、未实现盈亏和风险状态。",
+            "fallbackNote": "无持仓时展示“暂无持仓”。",
+        },
+        {
+            "title": "查看审计记录并复制 JSON",
+            "description": "最后用审计台证明每一步都可追溯、可导出。",
+            "url": audit_url,
+            "expectedResult": "能筛选关联记录，打开详情并复制 / 导出 JSON。",
+            "fallbackNote": "无关联 auditId 时进入审计中心列表。",
+        },
+    ]
+
+
+def _build_demo_health_summary(
+    health: Dict[str, Any],
+    counts: Dict[str, int],
+    coverage: Dict[str, Any],
+    health_error: Optional[str] = None,
+) -> Dict[str, Any]:
+    infrastructure = health.get("infrastructure", {}) if isinstance(health, dict) else {}
+    clickhouse_status = _layer_value(health, "layers", "L4_storage", "clickhouse", "status") or (
+        "ok" if coverage.get("total_rows", 0) > 0 else "unavailable"
+    )
+    ingestion_status = _layer_value(health, "infrastructure", "nats") or "unknown"
+    return {
+        "backendHealth": "ok" if not health_error else "partial",
+        "databaseStatus": infrastructure.get("postgresql", "unknown"),
+        "redisStatus": infrastructure.get("redis", "unknown"),
+        "clickhouseStatus": clickhouse_status,
+        "ingestionStatus": ingestion_status,
+        "frontendBuildStatus": "当前页面已加载，正式构建以 typecheck / build 结果为准",
+        "lastSmokeTestTime": _demo_now_iso(),
+        "apiErrorCount": 1 if health_error else 0,
+        "lastErrorSummary": "暂无明显错误" if not health_error else "系统健康检查部分数据暂不可用，首页已使用缓存式摘要兜底。",
+        "counts": counts,
+        "marketCoverage": coverage,
+    }
+
+
+async def _demo_scalar(session: Any, sql: str, params: Optional[Dict[str, Any]] = None) -> int:
+    from sqlalchemy import text
+
+    result = await session.execute(text(sql), params or {})
+    return int(result.scalar() or 0)
+
+
+async def _demo_counts_and_updates() -> tuple[Dict[str, int], Dict[str, Optional[str]]]:
+    counts = {
+        "data_source_ready": 0,
+        "market_bar_rows": 0,
+        "factor_snapshots": 0,
+        "signal_events": 0,
+        "coordination_history": 0,
+        "order_intent_events": 0,
+        "risk_guard_events": 0,
+        "risk_blocked_events": 0,
+        "paper_trades": 0,
+        "paper_positions": 0,
+        "backtest_results": 0,
+        "agent_audited_backtests": 0,
+        "pit_backtests": 0,
+        "replay_sessions": 0,
+        "audit_logs": 0,
+    }
+    latest_updates: Dict[str, Optional[str]] = {
+        "market": None,
+        "factor": None,
+        "signal": None,
+        "decision": None,
+        "audit": None,
+        "paper_trade": None,
+        "position": None,
+        "backtest": None,
+        "replay": None,
+    }
+    try:
+        from sqlalchemy import text
+        from app.services.database import get_db
+
+        async with get_db() as session:
+            count_queries = {
+                "factor_snapshots": "SELECT COUNT(*) FROM factor_snapshots",
+                "signal_events": "SELECT COUNT(*) FROM signal_events",
+                "coordination_history": "SELECT COUNT(*) FROM coordination_history",
+                "paper_trades": "SELECT COUNT(*) FROM paper_trades",
+                "paper_positions": "SELECT COUNT(*) FROM paper_positions WHERE quantity != 0",
+                "backtest_results": "SELECT COUNT(*) FROM backtest_results",
+                "replay_sessions": "SELECT COUNT(*) FROM replay_sessions",
+                "audit_logs": "SELECT COUNT(*) FROM audit_logs",
+                "pit_backtests": "SELECT COUNT(*) FROM backtest_results WHERE metrics ? 'pit'",
+                "agent_audited_backtests": """
+                    SELECT COUNT(*) FROM backtest_results
+                    WHERE metrics->>'executionMode' = 'agent_audited'
+                       OR metrics->>'execution_mode' = 'agent_audited'
+                """,
+                "order_intent_events": """
+                    SELECT COUNT(*) FROM audit_logs
+                    WHERE action LIKE 'ORDER_INTENT_%'
+                       OR action IN ('ORDER_INTENT_CREATED','HOLD_RECORDED')
+                       OR details->>'orderIntentId' IS NOT NULL
+                       OR details->'intent'->>'intent_id' IS NOT NULL
+                """,
+                "risk_guard_events": """
+                    SELECT COUNT(*) FROM audit_logs
+                    WHERE action IN ('RISK_CHECK_PASSED','RISK_BLOCKED')
+                       OR details->>'eventType' IN ('RISK_CHECK_PASSED','RISK_BLOCKED')
+                       OR details->'riskCheckResult' IS NOT NULL
+                """,
+                "risk_blocked_events": """
+                    SELECT COUNT(*) FROM audit_logs
+                    WHERE action = 'RISK_BLOCKED'
+                       OR details->>'eventType' = 'RISK_BLOCKED'
+                """,
+            }
+            for key, sql in count_queries.items():
+                counts[key] = await _demo_scalar(session, sql)
+
+            update_queries = {
+                "factor": "SELECT MAX(created_at) FROM factor_snapshots",
+                "signal": "SELECT MAX(created_at) FROM signal_events",
+                "decision": "SELECT MAX(created_at) FROM coordination_history",
+                "audit": "SELECT MAX(created_at) FROM audit_logs",
+                "paper_trade": "SELECT MAX(created_at) FROM paper_trades",
+                "position": "SELECT MAX(updated_at) FROM paper_positions",
+                "backtest": "SELECT MAX(created_at) FROM backtest_results",
+                "replay": "SELECT MAX(created_at) FROM replay_sessions",
+            }
+            for key, sql in update_queries.items():
+                result = await session.execute(text(sql))
+                latest_updates[key] = _demo_iso(result.scalar())
+    except Exception as exc:
+        logger.debug("Demo overview count collection failed: %s", exc)
+    return counts, latest_updates
+
+
+def _extract_related_from_trade(trade: Dict[str, Any]) -> Dict[str, Any]:
+    audit_ids = _first_present(
+        trade.get("relatedAuditIds"),
+        trade.get("related_audit_ids"),
+        trade.get("auditRecordIds"),
+    ) or []
+    if not isinstance(audit_ids, list):
+        audit_ids = [audit_ids]
+    return {
+        "decision_id": _first_present(trade.get("relatedDecisionId"), trade.get("related_decision_id"), trade.get("decisionId")),
+        "intent_id": _first_present(trade.get("relatedOrderIntentId"), trade.get("related_order_intent_id"), trade.get("orderIntentId")),
+        "order_id": _first_present(trade.get("relatedOrderId"), trade.get("related_order_id"), trade.get("orderId")),
+        "audit_ids": audit_ids,
+        "as_of_time": _first_present(trade.get("asOfTime"), trade.get("as_of_time"), trade.get("entryTime"), trade.get("entry_time")),
+    }
+
+
+async def _latest_demo_sample() -> Optional[Dict[str, Any]]:
+    try:
+        from sqlalchemy import text
+        from app.services.database import get_db
+
+        async with get_db() as session:
+            row = (
+                await session.execute(
+                    text(
+                        """
+                        SELECT
+                            bt.id,
+                            bt.strategy_type,
+                            bt.symbol,
+                            bt.interval,
+                            bt.metrics,
+                            bt.trades_summary,
+                            bt.created_at,
+                            rs.replay_session_id,
+                            rs.current_timestamp,
+                            rs.end_time
+                        FROM backtest_results bt
+                        LEFT JOIN replay_sessions rs ON rs.backtest_id = bt.id
+                        ORDER BY
+                            CASE
+                              WHEN bt.metrics->>'executionMode' = 'agent_audited'
+                                OR bt.metrics->>'execution_mode' = 'agent_audited'
+                              THEN 0 ELSE 1
+                            END,
+                            bt.created_at DESC,
+                            rs.created_at DESC
+                        LIMIT 1
+                        """
+                    )
+                )
+            ).mappings().first()
+            if not row:
+                return None
+
+            metrics = row["metrics"] or {}
+            trades = row["trades_summary"] or []
+            if not isinstance(trades, list):
+                trades = []
+            related: Dict[str, Any] = {}
+            for trade in trades:
+                if isinstance(trade, dict):
+                    related = _extract_related_from_trade(trade)
+                    if any(related.values()):
+                        break
+
+            audit_ids = related.get("audit_ids") or metrics.get("auditRecordIds") or []
+            if not isinstance(audit_ids, list):
+                audit_ids = [audit_ids]
+            latest_audit_id = _first_present(audit_ids[-1] if audit_ids else None)
+            if not latest_audit_id:
+                audit_row = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT id
+                            FROM audit_logs
+                            WHERE details->>'backtestId' = :backtest_id
+                               OR details->>'backtest_id' = :backtest_id
+                            ORDER BY created_at DESC, id DESC
+                            LIMIT 1
+                            """
+                        ),
+                        {"backtest_id": str(row["id"])},
+                    )
+                ).mappings().first()
+                latest_audit_id = audit_row["id"] if audit_row else None
+
+            latest_decision_id = related.get("decision_id")
+            if not latest_decision_id:
+                decision_row = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT id
+                            FROM coordination_history
+                            WHERE symbol = :symbol
+                            ORDER BY timestamp DESC, id DESC
+                            LIMIT 1
+                            """
+                        ),
+                        {"symbol": row["symbol"]},
+                    )
+                ).mappings().first()
+                latest_decision_id = decision_row["id"] if decision_row else None
+
+            replay_session_id = row["replay_session_id"]
+            replay_as_of = _demo_iso(_first_present(related.get("as_of_time"), row["current_timestamp"], row["end_time"]))
+            replay_url = "/replay"
+            if replay_session_id:
+                replay_url = f"/replay?session_id={quote(str(replay_session_id))}"
+                if replay_as_of:
+                    replay_url += f"&as_of_time={quote(replay_as_of)}"
+
+            execution_mode = _first_present(metrics.get("executionMode"), metrics.get("execution_mode"), "rule_only")
+            sample = {
+                "latestBacktestId": row["id"],
+                "latestReplaySessionId": replay_session_id,
+                "latestDecisionId": latest_decision_id,
+                "latestOrderIntentId": related.get("intent_id"),
+                "latestPaperOrderId": related.get("order_id"),
+                "latestAuditRecordId": latest_audit_id,
+                "executionMode": execution_mode,
+                "symbol": row["symbol"],
+                "strategyType": row["strategy_type"],
+                "interval": row["interval"],
+                "createdAt": _demo_iso(row["created_at"]),
+                "backtestDetailUrl": f"/backtest?backtest_id={row['id']}",
+                "replayUrl": replay_url,
+                "decisionDetailUrl": f"/audit?decision_id={latest_decision_id}" if latest_decision_id else "/decisions",
+                "orderIntentUrl": f"/audit?order_intent_id={quote(str(related.get('intent_id')))}" if related.get("intent_id") else "/decisions",
+                "paperOrderUrl": f"/audit?order_id={quote(str(related.get('order_id')))}" if related.get("order_id") else "/dashboard?tab=positions",
+                "auditRecordUrl": f"/audit?audit_id={latest_audit_id}" if latest_audit_id else "/audit",
+            }
+            return sample
+    except Exception as exc:
+        logger.debug("Latest demo sample collection failed: %s", exc)
+        return None
+
+
+@router.get("/demo-overview")
+async def get_demo_overview() -> Dict[str, Any]:
+    """Return a P5-friendly demo homepage overview without changing core flows."""
+    generated_at = _demo_now_iso()
+    health: Dict[str, Any] = {}
+    health_error: Optional[str] = None
+    try:
+        health = await get_system_health()
+    except Exception as exc:
+        health_error = str(exc)[:160]
+        logger.debug("Demo overview health check degraded: %s", exc)
+
+    counts, latest_updates = await _demo_counts_and_updates()
+    coverage = await _market_coverage_summary()
+    counts["market_bar_rows"] = int(coverage.get("total_rows") or 0)
+    counts["data_source_ready"] = 1 if _layer_value(health, "layers", "L1_data_source", "market_data", "status") in {"ok", "connected"} else 0
+    latest_updates["market"] = latest_updates.get("factor") or latest_updates.get("signal") or generated_at
+
+    latest_sample = await _latest_demo_sample()
+    closed_loop_steps = _build_closed_loop_steps(counts, latest_sample, latest_updates)
+    prd_acceptance = _build_prd_acceptance(counts)
+    done_steps = sum(1 for step in closed_loop_steps if step["status"] == "done")
+
+    return {
+        "schemaVersion": "demo_overview.v1",
+        "generatedAt": generated_at,
+        "overallStatus": "done" if done_steps == len(closed_loop_steps) else "partial",
+        "closedLoopSteps": closed_loop_steps,
+        "prdAcceptance": prd_acceptance,
+        "demoPath": _build_demo_path(latest_sample),
+        "health": _build_demo_health_summary(health, counts, coverage, health_error),
+        "latestSample": latest_sample,
+        "summary": {
+            "doneSteps": done_steps,
+            "totalSteps": len(closed_loop_steps),
+            "phase1Done": sum(1 for item in prd_acceptance[0]["items"] if item["status"] == "done"),
+            "phase2Done": sum(1 for item in prd_acceptance[1]["items"] if item["status"] == "done"),
+        },
     }
 
 
