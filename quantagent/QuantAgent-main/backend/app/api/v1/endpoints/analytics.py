@@ -16,8 +16,11 @@ from app.services.performance_service import performance_service
 from app.services.trade_pair_service import trade_pair_service
 from app.services.position_analysis_service import position_analysis_service
 from app.services.paper_trading_service import paper_trading_service
+from app.services.market_data_gateway import market_data_gateway
 from app.services.database import get_db, get_db_session, redis_get, redis_set
-from app.models.db_models import BacktestResult, EquitySnapshot, PaperTrade, ReplaySession
+from app.models.db_models import AuditLog, BacktestResult, EquitySnapshot, PaperTrade, ReplaySession
+from app.services.reproducibility import enrich_pit_metadata, stable_params_hash
+from app.services.performance_service import performance_service
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -338,6 +341,9 @@ async def get_equity_curve(
         )
         if session_id:
             query = query.where(EquitySnapshot.session_id == session_id)
+        else:
+            query = query.where(EquitySnapshot.session_id.is_(None))
+            query = query.where(EquitySnapshot.data_source == 'PAPER')
         if not include_mock:
             query = query.where(EquitySnapshot.data_source != 'MOCK')
         query = query.order_by(EquitySnapshot.timestamp.asc())
@@ -356,6 +362,37 @@ async def get_equity_curve(
             "daily_return": float(s.daily_return) if s.daily_return else 0,
             "drawdown": float(s.drawdown) if s.drawdown else 0,
         })
+
+    if session_id is None and curve:
+        live_equity = await performance_service._get_live_paper_equity()
+        if live_equity:
+            snapshot_final = curve[-1]["total_equity"] if curve else None
+            mismatch_pct = (
+                abs(snapshot_final - live_equity["total_equity"]) / live_equity["total_equity"] * 100
+                if snapshot_final and live_equity["total_equity"] > 0
+                else 0
+            )
+            if mismatch_pct > 5:
+                # Keep only plausible paper snapshots near the current account equity.
+                # Old test snapshots can contain inflated position_value and should not
+                # drive the user-facing paper-trading chart.
+                cleaned_curve = [
+                    point for point in curve
+                    if abs(point["total_equity"] - live_equity["total_equity"]) / live_equity["total_equity"] * 100 <= 5
+                ]
+                curve = cleaned_curve or curve[:1]
+                now_point = {
+                    "timestamp": now.isoformat(),
+                    "total_equity": live_equity["total_equity"],
+                    "cash_balance": live_equity["cash_balance"],
+                    "position_value": live_equity["position_value"],
+                    "daily_pnl": 0,
+                    "daily_return": 0,
+                    "drawdown": 0,
+                    "equity_source": "live_paper_account",
+                    "cleaned_snapshot_mismatch_pct": round(mismatch_pct, 2),
+                }
+                curve.append(now_point)
 
     # Apply interval downsampling if needed
     if interval == "4h" and len(curve) > 0:
@@ -426,10 +463,8 @@ async def get_positions_analysis():
         for pos in positions_raw:
             symbol = pos["symbol"]
             try:
-                from app.services.binance_service import binance_service
-                symbol_ccxt = _normalize_symbol(symbol)
-                ticker = await binance_service.get_ticker(symbol_ccxt)
-                current_prices[symbol] = ticker.price
+                current_price = await market_data_gateway.get_price(symbol)
+                current_prices[symbol] = current_price or pos["avg_price"]
             except Exception:
                 current_prices[symbol] = pos["avg_price"]
 
@@ -449,11 +484,10 @@ async def get_position_analysis_detail(symbol: str):
     symbol = symbol.upper()
     try:
         # Get current price
-        from app.services.binance_service import binance_service
-        symbol_ccxt = _normalize_symbol(symbol)
         try:
-            ticker = await binance_service.get_ticker(symbol_ccxt)
-            current_price = ticker.price
+            current_price = await market_data_gateway.get_price(symbol)
+            if current_price is None:
+                raise RuntimeError("market data unavailable")
         except Exception:
             # Fallback: get from positions
             positions = await paper_trading_service.get_positions()
@@ -550,6 +584,42 @@ def _normalize_symbol(symbol: str) -> str:
     return symbol
 
 
+def _iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _build_replay_compare_pit_metadata(
+    *,
+    df,
+    replay_session_id: str,
+    start_time: datetime,
+    end_time: datetime,
+    data_source: str,
+) -> Dict[str, Any]:
+    index_min = df.index.min() if df is not None and len(df) else None
+    index_max = df.index.max() if df is not None and len(df) else None
+    return {
+        "enabled": True,
+        "rule": "bar_time <= replay_end_time",
+        "scope": "replay_compare_backtest",
+        "replay_session_id": replay_session_id,
+        "as_of_time": _iso(end_time),
+        "requested_start_time": _iso(start_time),
+        "requested_end_time": _iso(end_time),
+        "actual_start_time": _iso(index_min),
+        "actual_end_time": _iso(index_max),
+        "row_count": int(len(df)) if df is not None else 0,
+        "data_source": data_source,
+        "note": "快速对比回测使用回放会话的时间窗口，确保和 completed replay 严格对齐。",
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Replay Quick Backtest — 自动用相同条件运行回测
 # ─────────────────────────────────────────────────────────────────────────────
@@ -632,9 +702,7 @@ async def replay_quick_backtest(replay_session_id: str):
     except ValueError:
         raise HTTPException(status_code=400, detail=f"不支持的策略类型: {strategy_type}")
 
-    # 4. 获取 Binance K 线数据（从 start_time 开始取 limit 根）
-    from app.services.binance_service import binance_service
-
+    # 4. 获取 K 线数据（优先走主数据网关/本地缓存）
     symbol_ccxt = symbol
     if "/" not in symbol_ccxt:
         for quote in ("USDT", "BTC", "ETH", "BNB", "BUSD"):
@@ -643,8 +711,8 @@ async def replay_quick_backtest(replay_session_id: str):
                 break
 
     # 使用 start_time 从 Binance 获取数据
-    df = await binance_service.get_klines_dataframe(
-        symbol_ccxt, interval, limit=limit, start=start_time, end=end_time
+    df = await market_data_gateway.get_dataframe(
+        symbol, interval, limit=limit, start=start_time, end=end_time
     )
 
     if df is None or len(df) < 300:
@@ -652,6 +720,24 @@ async def replay_quick_backtest(replay_session_id: str):
 
     if len(df) < 20:
         raise HTTPException(status_code=400, detail="回测区间内数据不足（需要至少 20 根 K 线）")
+
+    params_hash = stable_params_hash(params)
+    pit_metadata = enrich_pit_metadata(
+        _build_replay_compare_pit_metadata(
+            df=df,
+            replay_session_id=replay_session_id,
+            start_time=start_time,
+            end_time=end_time,
+            data_source="market_data_gateway",
+        ),
+        symbol=symbol,
+        interval=interval,
+        strategy_type=strategy_type,
+        params=params,
+        params_hash=params_hash,
+        data_source="market_data_gateway",
+        replay_session_id=replay_session_id,
+    )
 
     # 5. 构建信号函数并运行回测
     from app.services.strategy_templates import build_signal_func
@@ -697,10 +783,6 @@ async def replay_quick_backtest(replay_session_id: str):
     markers.sort(key=lambda x: x["time"])
 
     # 8. 持久化到数据库
-    import hashlib, json
-    params_json = json.dumps(params, sort_keys=True)
-    params_hash = hashlib.sha256(params_json.encode()).hexdigest()
-
     metrics_dict = {
         "total_return": result["total_return"],
         "annual_return": result["annual_return"],
@@ -712,6 +794,7 @@ async def replay_quick_backtest(replay_session_id: str):
         "total_commission": result.get("total_commission", 0.0),
         "initial_capital": initial_capital,
         "final_capital": result["final_capital"],
+        "pit": pit_metadata,
     }
 
     backtest_db_id = None
@@ -730,6 +813,26 @@ async def replay_quick_backtest(replay_session_id: str):
         session.add(bt_row)
         await session.flush()
         backtest_db_id = bt_row.id
+        session.add(
+            AuditLog(
+                action="REPLAY_COMPARE_BACKTEST_RUN",
+                user_id="system",
+                resource=symbol,
+                details={
+                    "replay_session_id": replay_session_id,
+                    "backtest_id": backtest_db_id,
+                    "strategy_type": strategy_type,
+                    "interval": interval,
+                    "params": params,
+                    "pit": pit_metadata,
+                    "metrics": {
+                        "total_return": metrics_dict["total_return"],
+                        "max_drawdown": metrics_dict["max_drawdown"],
+                        "total_trades": metrics_dict["total_trades"],
+                    },
+                },
+            )
+        )
         await session.commit()
 
     import logging
@@ -1885,4 +1988,3 @@ async def create_paper_bot_from_backtest(
     except Exception as e:
         logger.error(f"从回测 {backtest_id} 创建 Paper Bot 失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"创建 Paper Bot 失败: {str(e)}")
-

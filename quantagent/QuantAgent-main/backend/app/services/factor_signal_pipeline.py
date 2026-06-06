@@ -24,6 +24,7 @@ from app.models.instrument import Instrument
 from app.models.trading import BarData
 from app.services.database import get_db
 from app.services.indicators import add_all_indicators
+from app.services.market_data_gateway import market_data_gateway
 from app.services.strategy_templates import build_signal_func
 from sqlalchemy import delete
 
@@ -113,7 +114,7 @@ class FactorSignalPipeline:
                 "factor_rows_written": 0,
                 "signal_rows_written": 0,
                 "strategies": selected_strategies,
-                "detail": "No bars available from storage, OpenBB, or Binance fallback.",
+                "detail": "No bars available from storage, OpenBB, or exchange fallback.",
             }
 
         bars_df = self._normalize_ohlcv_dataframe(loaded.df).tail(limit)
@@ -262,8 +263,8 @@ class FactorSignalPipeline:
         )
         provider = "openbb"
         if asset_type == "crypto" and not source_bars:
-            source_bars = await self._fetch_from_binance(instrument, interval, limit)
-            provider = "binance"
+            source_bars = await self._fetch_from_exchange_fallback(instrument, interval, limit)
+            provider = "exchange-fallback"
 
         if not source_bars:
             return LoadedBars(df=pd.DataFrame(), source="none", provider="none")
@@ -329,13 +330,11 @@ class FactorSignalPipeline:
             logger.debug(f"L5 OpenBB fetch skipped for {instrument.symbol}/{interval}: {e}")
             return []
 
-    async def _fetch_from_binance(self, instrument: Instrument, interval: str, limit: int) -> List[BarData]:
+    async def _fetch_from_exchange_fallback(self, instrument: Instrument, interval: str, limit: int) -> List[BarData]:
         try:
-            from app.services.binance_service import binance_service
-
-            df = await binance_service.get_klines_dataframe(
+            df = await market_data_gateway.get_dataframe(
                 instrument.ccxt_symbol,
-                timeframe=interval,
+                interval=interval,
                 limit=limit,
             )
             df = self._normalize_ohlcv_dataframe(df)
@@ -346,8 +345,8 @@ class FactorSignalPipeline:
                 BarData(
                     symbol=instrument.symbol,
                     instrument_id=instrument.symbol,
-                    exchange="binance",
-                    provider="binance",
+                    exchange="exchange-fallback",
+                    provider="exchange-fallback",
                     source_version="ccxt",
                     schema_version="bar.v1",
                     datetime=self._to_python_datetime(ts),
@@ -364,7 +363,7 @@ class FactorSignalPipeline:
                 for ts, row in df.iterrows()
             ]
         except Exception as e:
-            logger.debug(f"L5 Binance fetch skipped for {instrument.symbol}/{interval}: {e}")
+            logger.debug(f"L5 exchange fallback fetch skipped for {instrument.symbol}/{interval}: {e}")
             return []
 
     async def _persist_bars(self, symbol: str, interval: str, bars: List[BarData]) -> int:
@@ -685,12 +684,12 @@ class FactorSignalPipeline:
                 },
                 available_time=available_time,
             ))
-        for tag in sorted({
-            tag
+        event_tag_rows = [
+            set(self._normalize_event_tags(row.get("event_tags")))
             for row in news_events
-            for tag in (row.get("event_tags") or [])
-        }):
-            count = sum(1 for row in news_events if tag in (row.get("event_tags") or []))
+        ]
+        for tag in sorted({tag for tags in event_tag_rows for tag in tags}):
+            count = sum(1 for tags in event_tag_rows if tag in tags)
             rows.append(self._context_factor_row(
                 symbol=symbol,
                 timestamp=timestamp,
@@ -939,6 +938,30 @@ class FactorSignalPipeline:
             return bool(np.isfinite(float(value)))
         except (TypeError, ValueError):
             return False
+
+    def _normalize_event_tags(self, value: Any) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, np.ndarray):
+            raw_tags = value.tolist()
+        elif isinstance(value, pd.Series):
+            raw_tags = value.tolist()
+        elif isinstance(value, (list, tuple, set)):
+            raw_tags = list(value)
+        else:
+            raw_tags = [value]
+
+        tags: List[str] = []
+        for item in raw_tags:
+            try:
+                if bool(pd.isna(item)):
+                    continue
+            except (TypeError, ValueError):
+                pass
+            tag = str(item).strip()
+            if tag:
+                tags.append(tag)
+        return tags
 
     def _to_python_datetime(self, value: Any) -> datetime:
         ts = pd.Timestamp(value)

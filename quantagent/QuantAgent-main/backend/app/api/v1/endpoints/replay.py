@@ -11,7 +11,7 @@ from sqlalchemy import select, update, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.database import get_db, get_db_session
-from app.models.db_models import ReplaySession, PaperTrade, PaperPosition, EquitySnapshot
+from app.models.db_models import AuditLog, ReplaySession, PaperTrade, PaperPosition, EquitySnapshot
 from app.models.trading import (
     ReplayCreateRequest, ReplaySessionResponse, ReplayStatusResponse,
     ReplayJumpRequest, ValidDateRangeResponse, ReplaySessionDetailResponse,
@@ -29,6 +29,7 @@ from app.services.paper_trading_service import paper_trading_service
 from app.strategies.ma_cross import MaCrossStrategy
 from app.strategies.signal_based_strategy import SignalBasedStrategy
 from app.services.indicators import ema as calc_ema_df, atr as calc_atr_df, donchian_channels as calc_donchian_df, ichimoku_cloud as calc_ichimoku_df
+from app.services.reproducibility import enrich_pit_metadata, stable_params_hash
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,40 @@ def safe_float(val, default: float = 0.0) -> float:
         return default
 
 
+def _iso(value) -> Optional[str]:
+    if value is None:
+        return None
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _build_quick_backtest_pit_metadata(
+    *,
+    df: pd.DataFrame,
+    replay_session_id: str,
+    start_time: datetime,
+    end_time: datetime,
+    data_source: str,
+) -> Dict[str, object]:
+    index_min = df.index.min() if df is not None and len(df) else None
+    index_max = df.index.max() if df is not None and len(df) else None
+    return {
+        "enabled": True,
+        "rule": "bar_time <= replay_end_time",
+        "scope": "replay_quick_backtest",
+        "replay_session_id": replay_session_id,
+        "as_of_time": _iso(end_time),
+        "requested_start_time": _iso(start_time),
+        "requested_end_time": _iso(end_time),
+        "actual_start_time": _iso(index_min),
+        "actual_end_time": _iso(index_max),
+        "row_count": int(len(df)) if df is not None else 0,
+        "data_source": data_source,
+        "note": "快速回测使用历史回放的时间窗口，用于回放 vs 回测严格对比。",
+    }
 DEFAULT_INITIAL_CAPITAL = 100000.0
 
 
@@ -501,6 +536,27 @@ async def create_replay_session(
     )
 
     db.add(new_session)
+    db.add(
+        AuditLog(
+            action="REPLAY_SESSION_CREATE",
+            user_id="system",
+            resource=request.symbol,
+            details={
+                "replay_session_id": session_id,
+                "strategy_id": request.strategy_id,
+                "strategy_type": request.strategy_type,
+                "interval": interval,
+                "params": params_with_interval,
+                "params_hash": new_session.params_hash,
+                "start_time": _iso(start_utc),
+                "end_time": _iso(end_utc),
+                "initial_capital": request.initial_capital,
+                "data_source": "clickhouse:klines",
+                "range_min": _iso(range_info.get("min_date")),
+                "range_max": _iso(range_info.get("max_date")),
+            },
+        )
+    )
     await db.commit()
     
     return ReplaySessionResponse(
@@ -569,6 +625,24 @@ async def start_replay(
         # 3. Update status to running
         try:
             session.status = "running"
+            db.add(
+                AuditLog(
+                    action="REPLAY_SESSION_START",
+                    user_id="system",
+                    resource=session.symbol,
+                    details={
+                        "replay_session_id": replay_session_id,
+                        "strategy_id": session.strategy_id,
+                        "strategy_type": session.strategy_type,
+                        "params": session.params or {},
+                        "params_hash": session.params_hash,
+                        "start_time": _iso(session.start_time),
+                        "end_time": _iso(session.end_time),
+                        "speed": session.speed,
+                        "initial_capital": safe_finite_float(session.initial_capital, DEFAULT_INITIAL_CAPITAL),
+                    },
+                )
+            )
             await db.commit()
             logger.info(f"Session {replay_session_id} status updated to running")
         except Exception as e:
@@ -1363,6 +1437,23 @@ async def quick_backtest_from_session(
             )
         
         logger.info(f"Loaded {len(df)} bars for backtest")
+        params_hash = stable_params_hash(strategy_params) if strategy_params else session.params_hash
+        pit_metadata = enrich_pit_metadata(
+            _build_quick_backtest_pit_metadata(
+                df=df,
+                replay_session_id=replay_session_id,
+                start_time=start_time,
+                end_time=end_time,
+                data_source="clickhouse:klines",
+            ),
+            symbol=symbol,
+            interval=interval,
+            strategy_type=strategy_type,
+            params=strategy_params,
+            params_hash=params_hash,
+            data_source="clickhouse:klines",
+            replay_session_id=replay_session_id,
+        )
         
         # 5. Build signal function and run backtest
         try:
@@ -1393,6 +1484,7 @@ async def quick_backtest_from_session(
             "total_commission": backtest_result.get("total_commission", 0.0),
             "initial_capital": initial_capital,
             "final_capital": backtest_result["final_capital"],
+            "pit": pit_metadata,
         }
         
         # 7. Prepare equity curve (downsample if needed)
@@ -1403,11 +1495,7 @@ async def quick_backtest_from_session(
             for i in range(0, min(len(equity_values), len(df)), step)
         ]
         
-        # 8. Generate params_hash for linking
-        params_hash = hashlib.sha256(
-            json.dumps(strategy_params, sort_keys=True).encode()
-        ).hexdigest() if strategy_params else session.params_hash
-        
+        # 8. params_hash links replay and backtest records with identical settings.
         # 9. Save to database
         bt_row = BacktestResult(
             strategy_type=strategy_type,
@@ -1429,6 +1517,26 @@ async def quick_backtest_from_session(
             update(ReplaySession)
             .where(ReplaySession.replay_session_id == replay_session_id)
             .values(backtest_id=backtest_id)
+        )
+        db.add(
+            AuditLog(
+                action="REPLAY_QUICK_BACKTEST_RUN",
+                user_id="system",
+                resource=symbol,
+                details={
+                    "replay_session_id": replay_session_id,
+                    "backtest_id": backtest_id,
+                    "strategy_type": strategy_type,
+                    "interval": interval,
+                    "params": strategy_params,
+                    "pit": pit_metadata,
+                    "metrics": {
+                        "total_return": metrics_dict["total_return"],
+                        "max_drawdown": metrics_dict["max_drawdown"],
+                        "total_trades": metrics_dict["total_trades"],
+                    },
+                },
+            )
         )
         await db.commit()
         

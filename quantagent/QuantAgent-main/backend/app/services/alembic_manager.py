@@ -16,12 +16,14 @@ Usage:
 """
 
 import logging
+import asyncio
 from pathlib import Path
 from typing import Optional
 
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -60,6 +62,11 @@ class AlembicManager:
             # the baseline migration on fresh databases (we only create tables once).
             # After this, normal upgrade applies new migrations only.
             current_rev = await self._get_current_revision(engine)
+            head_rev = ScriptDirectory.from_config(cfg).get_current_head()
+            if current_rev == head_rev:
+                logger.info(f"Current migration revision {current_rev} is already at head; skipping Alembic upgrade")
+                return
+
             if current_rev is None:
                 # No prior migrations applied — stamp baseline so it's not re-run,
                 # then upgrade (no-op since baseline is already stamped).
@@ -68,13 +75,13 @@ class AlembicManager:
                 tables_exist = await self._tables_exist(engine)
                 if tables_exist:
                     logger.info("Tables exist (likely from init-scripts) — stamping baseline migration")
-                    command.stamp(cfg, "001_initial_schema")
+                    await asyncio.to_thread(command.stamp, cfg, "001_initial_schema")
                 else:
                     logger.info("No tables found — running baseline migration")
-                    command.upgrade(cfg, "001")
+                    await asyncio.to_thread(command.upgrade, cfg, "001")
             else:
                 logger.info(f"Current migration revision: {current_rev} — running pending migrations")
-                command.upgrade(cfg, "head")
+                await asyncio.to_thread(command.upgrade, cfg, "head")
 
         except Exception as e:
             logger.error(f"Alembic upgrade failed: {e}")
@@ -91,7 +98,7 @@ class AlembicManager:
         """
         cfg = self._get_config()
         try:
-            command.stamp(cfg, revision)
+            await asyncio.to_thread(command.stamp, cfg, revision)
             logger.info(f"Database stamped at revision: {revision}")
         except Exception as e:
             logger.error(f"Alembic stamp failed: {e}")

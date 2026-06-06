@@ -27,7 +27,7 @@ from app.services.exchange_service import exchange_service
 
 logger = logging.getLogger(__name__)
 
-# Fee rate: 0.1% per trade (Binance maker/taker)
+# Fee rate: 0.1% per trade (generic spot taker-like simulation)
 FEE_RATE = Decimal("0.001")
 SLIPPAGE_PCT = Decimal("0.0005")  # 0.05% slippage for market orders
 INITIAL_BALANCE = Decimal("100000.0")
@@ -41,7 +41,7 @@ REDIS_REPLAY_BALANCE_PREFIX = "replay:balance:"  # + session_id
 class PaperTradingService:
     """
     Simulated trading engine.
-    - Fetches real-time price from BinanceService at order time
+    - Fetches real-time price from the selected CCXT exchange at order time
     - Persists all trades/positions to PostgreSQL
     - Caches balance + positions in Redis (TTL 10s)
     """
@@ -190,7 +190,7 @@ class PaperTradingService:
         self,
         current_prices: Optional[Dict[str, float]] = None,
         session_id: Optional[str] = None,
-        exchange_id: str = "binance",
+        exchange_id: str = "okx",
     ) -> List[Dict[str, Any]]:
         """
         Return open positions with real-time PnL.
@@ -315,7 +315,7 @@ class PaperTradingService:
         await redis_delete(REDIS_POSITIONS_KEY)
 
     async def _get_position(
-        self, session, symbol: str, session_id: Optional[str] = None, exchange_id: str = "binance"
+        self, session, symbol: str, session_id: Optional[str] = None, exchange_id: str = "okx"
     ) -> Optional[PaperPosition]:
         stmt = select(PaperPosition).where(PaperPosition.symbol == symbol).where(PaperPosition.exchange_id == exchange_id)
         if session_id:
@@ -342,7 +342,7 @@ class PaperTradingService:
         strategy_id: Optional[str] = None,  # Added for attribution
         mode: str = "paper",  # paper | backtest | historical_replay
         session_id: Optional[str] = None,  # For historical_replay session_id
-        exchange_id: str = "binance",  # Target exchange for simulated trading
+        exchange_id: str = "okx",  # Target exchange for simulated trading
     ) -> Dict[str, Any]:
         """
         Execute a simulated market order or place a limit order.
@@ -685,7 +685,7 @@ class PaperTradingService:
         leverage: Optional[int] = None,
         strategy_id: Optional[str] = None,
         session_id: Optional[str] = None,
-        exchange_id: str = "binance",
+        exchange_id: str = "okx",
     ):
         """Internal method to update position and balance on trade fill.
 
@@ -803,7 +803,7 @@ class PaperTradingService:
             for order in pending_orders:
                 try:
                     # Optimized: Check Redis price first via ExchangeService
-                    current_price = await exchange_service.get_price("binance", order.symbol)
+                    current_price = await exchange_service.get_price(order.exchange_id or "okx", order.symbol)
                 except Exception:
                     continue
 
@@ -830,6 +830,7 @@ class PaperTradingService:
                         fee,
                         leverage=order.leverage,
                         strategy_id=order.strategy_id,
+                        exchange_id=order.exchange_id or "okx",
                     )
 
                     pnl_record = realized_pnl if realized_pnl != 0 else None
@@ -1045,7 +1046,7 @@ class PaperTradingService:
         self,
         current_prices: Dict[str, float],
         session_id: Optional[str] = None,
-        exchange_id: str = "binance",
+        exchange_id: str = "okx",
     ) -> List[Dict[str, Any]]:
         """Close every open position at current market price.
 
@@ -1114,7 +1115,7 @@ class PaperTradingService:
                     continue
 
                 try:
-                    current_price = await exchange_service.get_price("binance", symbol)
+                    current_price = await exchange_service.get_price(pos.exchange_id or "okx", symbol)
                 except Exception:
                     continue
 
@@ -1137,6 +1138,7 @@ class PaperTradingService:
                             quantity=abs(qty),
                             price=current_price,
                             order_type="MARKET",
+                            exchange_id=pos.exchange_id or "okx",
                         )
                         # 记录清算事件
                         await risk_manager._log_risk_event(

@@ -13,6 +13,7 @@ import time
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy import text
+from sqlalchemy.pool import NullPool
 import msgpack
 
 from app.core.config import settings
@@ -24,18 +25,29 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 _engine = None
 _async_session_factory = None
+_engine_loop_id = None
 
 
 def get_engine():
-    global _engine
-    if _engine is None:
+    global _engine, _async_session_factory, _engine_loop_id
+    try:
+        current_loop_id = id(asyncio.get_running_loop())
+    except RuntimeError:
+        current_loop_id = None
+
+    if _engine is None or (
+        _engine_loop_id is not None
+        and current_loop_id is not None
+        and _engine_loop_id != current_loop_id
+    ):
         _engine = create_async_engine(
             settings.DATABASE_URL,
             echo=False,
-            pool_size=5,
-            max_overflow=10,
+            poolclass=NullPool,
             pool_pre_ping=True,
         )
+        _async_session_factory = None
+        _engine_loop_id = current_loop_id
     return _engine
 
 
@@ -90,6 +102,19 @@ async def check_db_connection() -> bool:
     except Exception as e:
         logger.error(f"DB connection check failed: {e}")
         return False
+
+
+async def close_db_connections() -> None:
+    """Dispose SQLAlchemy async engine connections."""
+    global _engine, _async_session_factory, _engine_loop_id
+    if _engine is not None:
+        try:
+            await _engine.dispose()
+        except Exception as e:
+            logger.warning(f"Database engine dispose failed: {e}")
+    _engine = None
+    _async_session_factory = None
+    _engine_loop_id = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

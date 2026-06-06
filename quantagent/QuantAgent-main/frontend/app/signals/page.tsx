@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Prd104StatusPanel } from "@/components/prd/Prd104StatusPanel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -12,9 +13,9 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import {
-  Activity, BarChart3, BarChart, History, Server, RefreshCw, Zap,
-  TrendingUp, TrendingDown, Layers, Filter, PieChart, ArrowUp, ArrowDown,
-  Minus, Brain,
+  Activity, BarChart3, BarChart, History, Server, RefreshCw,
+  TrendingUp, Layers, Filter, PieChart, ArrowUp, ArrowDown,
+  Minus, Shield,
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -29,8 +30,12 @@ interface FactorRow {
   timestamp: string | null;
   factor_name: string;
   factor_value: number;
-  parameters: Record<string, any>;
+  parameters: Record<string, unknown>;
   source: string;
+  interval?: string | null;
+  provider?: string | null;
+  data_source?: string | null;
+  definition?: FactorDefinition;
 }
 
 interface SignalRow {
@@ -48,30 +53,78 @@ interface SignalRow {
 interface FactorSeriesPoint {
   timestamp: string | null;
   value: number;
-  parameters: Record<string, any>;
+  parameters: Record<string, unknown>;
+}
+
+interface FactorDefinition {
+  factor_name?: string;
+  display_name: string;
+  category: string;
+  family?: string | null;
+  description: string;
+  calculation: string;
+  upstream_data: string;
+  provider_hint: string;
+  unit: string;
+  default_interval?: string | null;
+  snapshot_count?: number;
+  symbol_count?: number;
+  latest_timestamp?: string | null;
+  observed_providers?: string[];
+  observed_data_sources?: string[];
 }
 
 interface Summary {
   factor_total: number;
+  distinct_factor_count?: number;
   event_total: number;
   recent_7d: number;
   by_signal_type: Record<string, number>;
   by_strategy: Record<string, number>;
   by_symbol: Record<string, number>;
+  by_factor_category?: Record<string, number>;
   error?: string;
 }
 
-const SIGNAL_COLORS: Record<string, string> = {
-  BUY: "#22c55e", SELL: "#ef4444", WAIT: "#94a3b8",
-  LONG_REVERSAL: "#3b82f6", SHORT_REVERSAL: "#f59e0b", HOLD: "#6b7280",
-};
 const PIE_COLORS = ["#22c55e", "#ef4444", "#94a3b8", "#3b82f6", "#f59e0b", "#8b5cf6", "#ec4899"];
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function formatSourceLabel(value?: string | null) {
+  if (!value) return "未记录";
+  if (value === "indicators") return "内部指标计算";
+  if (value === "l5_pipeline") return "L5因子流水线";
+  if (value === "storage") return "行情缓存读取";
+  if (value === "active-storage") return "当前行情库";
+  if (value === "live-fetch") return "实时拉取后入库";
+  return value;
+}
+
+function formatProviderLabel(value?: string | null) {
+  if (!value) return "未记录上游来源";
+  if (value === "active-storage") return "行情库缓存";
+  if (value === "openbb:yfinance") return "OpenBB / yfinance";
+  if (value === "openbb:fred") return "OpenBB / FRED";
+  if (value === "openbb:oecd") return "OpenBB / OECD";
+  if (value === "ccxt") return "CCXT";
+  return value;
+}
+
+function formatFactorValue(value: number | undefined) {
+  if (value === undefined || value === null || Number.isNaN(Number(value))) return "-";
+  const numeric = Number(value);
+  if (Math.abs(numeric) >= 1000) return numeric.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  return numeric.toLocaleString(undefined, { maximumFractionDigits: 6 });
+}
 
 // ─── Page ───────────────────────────────────────────────────────────────────
 
 export default function SignalsPage() {
-  const [tab, setTab] = useState("factors");
+  const [tab, setTab] = useState("definitions");
   const [factors, setFactors] = useState<FactorRow[]>([]);
+  const [factorDefinitions, setFactorDefinitions] = useState<FactorDefinition[]>([]);
   const [events, setEvents] = useState<SignalRow[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [factorSeries, setFactorSeries] = useState<FactorSeriesPoint[]>([]);
@@ -85,6 +138,16 @@ export default function SignalsPage() {
   const [seriesSymbol, setSeriesSymbol] = useState("BTCUSDT");
   const [seriesFactor, setSeriesFactor] = useState("sma_10");
 
+  const fetchFactorDefinitions = useCallback(async () => {
+    try {
+      const res = await fetch("/api/v1/signals/factor-definitions");
+      if (res.ok) {
+        const d = await res.json();
+        setFactorDefinitions(d.data || []);
+      }
+    } catch (e: unknown) { setError(errorMessage(e)); }
+  }, []);
+
   const fetchFactors = useCallback(async () => {
     try {
       const params = new URLSearchParams({ limit: "200" });
@@ -95,20 +158,20 @@ export default function SignalsPage() {
         const d = await res.json();
         setFactors(d.data || []);
       }
-    } catch (e: any) { setError(e.message); }
+    } catch (e: unknown) { setError(errorMessage(e)); }
   }, [filterSymbol, filterFactor]);
 
   const fetchEvents = useCallback(async () => {
     try {
       const params = new URLSearchParams({ limit: "200" });
       if (filterSymbol) params.set("symbol", filterSymbol);
-      if (filterSignalType) params.set("signal_type", filterSignalType);
+      if (filterSignalType && filterSignalType !== "all") params.set("signal_type", filterSignalType);
       const res = await fetch(`/api/v1/signals/events?${params}`);
       if (res.ok) {
         const d = await res.json();
         setEvents(d.data || []);
       }
-    } catch (e: any) { setError(e.message); }
+    } catch (e: unknown) { setError(errorMessage(e)); }
   }, [filterSymbol, filterSignalType]);
 
   const fetchSummary = useCallback(async () => {
@@ -125,18 +188,32 @@ export default function SignalsPage() {
         const d = await res.json();
         setFactorSeries(d.data || []);
       }
-    } catch (e: any) { setError(e.message); }
+    } catch (e: unknown) { setError(errorMessage(e)); }
   }, [seriesSymbol, seriesFactor]);
 
-  useEffect(() => { fetchFactors(); fetchEvents(); fetchSummary(); }, [fetchFactors, fetchEvents, fetchSummary]);
+  useEffect(() => { fetchFactors(); fetchEvents(); fetchSummary(); fetchFactorDefinitions(); }, [fetchFactors, fetchEvents, fetchSummary, fetchFactorDefinitions]);
 
   const pieData = summary ? Object.entries(summary.by_signal_type || {}).map(([k, v]) => ({ name: k, value: v })) : [];
   const strategyBarData = summary ? Object.entries(summary.by_strategy || {}).map(([k, v]) => ({ name: k, count: v })) : [];
+  const factorCategoryData = summary ? Object.entries(summary.by_factor_category || {}).map(([name, value]) => ({ name, value })) : [];
+  const factorDefinitionMap = factorDefinitions.reduce<Record<string, FactorDefinition>>((acc, item) => {
+    if (item.factor_name) acc[item.factor_name] = item;
+    return acc;
+  }, {});
 
   const chartData = factorSeries.map((p) => ({
     time: p.timestamp ? new Date(p.timestamp).toLocaleDateString() : "",
     value: p.value,
   })).slice(-100);
+
+  const refreshAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      await Promise.all([fetchFactors(), fetchEvents(), fetchSummary(), fetchFactorDefinitions()]);
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchFactorDefinitions, fetchFactors, fetchEvents, fetchSummary]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -161,9 +238,10 @@ export default function SignalsPage() {
               <Link href="/terminal" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all">终端</Link>
               <Link href="/hummingbot" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Server className="w-4 h-4" /> Hummingbot</Link>
               <Link href="/signals" className="px-3 py-1.5 text-sm text-orange-400 bg-orange-500/10 rounded-lg border border-orange-500/20 font-medium flex items-center gap-1.5"><Layers className="w-4 h-4" /> 因子/信号</Link>
+              <Link href="/audit" className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-all flex items-center gap-1.5"><Shield className="w-4 h-4" /> 回测与审计</Link>
             </nav>
             <div className="flex items-center gap-2">
-              <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-foreground" onClick={() => { fetchFactors(); fetchEvents(); fetchSummary(); }}>
+              <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-foreground" onClick={() => { void refreshAll(); }}>
                 <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
               </Button>
             </div>
@@ -177,31 +255,36 @@ export default function SignalsPage() {
           <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-xs">{error}</div>
         )}
 
+        <Prd104StatusPanel className="mb-6" />
+
         {/* Summary cards */}
         {summary && !summary.error && (
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
             <Card className="bg-card border-border">
               <CardContent className="p-4">
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">因子种类</p>
+                <p className="text-2xl font-bold text-blue-400 mt-1">{summary.distinct_factor_count ?? factorDefinitions.length}</p>
+                <p className="mt-1 text-[10px] text-muted-foreground">不是记录数，是不同因子名称数量</p>
+              </CardContent>
+            </Card>
+            <Card className="bg-card border-border">
+              <CardContent className="p-4">
                 <p className="text-xs text-muted-foreground uppercase tracking-wider">因子快照</p>
-                <p className="text-2xl font-bold text-blue-400 mt-1">{summary.factor_total}</p>
+                <p className="text-2xl font-bold text-purple-400 mt-1">{summary.factor_total}</p>
+                <p className="mt-1 text-[10px] text-muted-foreground">所有币种和时间点的明细记录</p>
               </CardContent>
             </Card>
             <Card className="bg-card border-border">
               <CardContent className="p-4">
                 <p className="text-xs text-muted-foreground uppercase tracking-wider">信号事件</p>
-                <p className="text-2xl font-bold text-purple-400 mt-1">{summary.event_total}</p>
+                <p className="text-2xl font-bold text-green-400 mt-1">{summary.event_total}</p>
+                <p className="mt-1 text-[10px] text-muted-foreground">策略根据因子生成的方向判断</p>
               </CardContent>
             </Card>
             <Card className="bg-card border-border">
               <CardContent className="p-4">
                 <p className="text-xs text-muted-foreground uppercase tracking-wider">近7天信号</p>
                 <p className="text-2xl font-bold text-green-400 mt-1">{summary.recent_7d}</p>
-              </CardContent>
-            </Card>
-            <Card className="bg-card border-border">
-              <CardContent className="p-4">
-                <p className="text-xs text-muted-foreground uppercase tracking-wider">策略来源</p>
-                <p className="text-2xl font-bold text-orange-400 mt-1">{Object.keys(summary.by_strategy || {}).length}</p>
               </CardContent>
             </Card>
             <Card className="bg-card border-border">
@@ -215,22 +298,90 @@ export default function SignalsPage() {
 
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="bg-card border border-border mb-6">
+            <TabsTrigger value="definitions" className="text-muted-foreground data-[state=active]:text-emerald-400">因子字典</TabsTrigger>
             <TabsTrigger value="factors" className="text-muted-foreground data-[state=active]:text-blue-400">因子快照</TabsTrigger>
             <TabsTrigger value="events" className="text-muted-foreground data-[state=active]:text-purple-400">信号事件</TabsTrigger>
             <TabsTrigger value="series" className="text-muted-foreground data-[state=active]:text-cyan-400">因子时序图</TabsTrigger>
             <TabsTrigger value="summary" className="text-muted-foreground data-[state=active]:text-orange-400">汇总统计</TabsTrigger>
           </TabsList>
 
+          {/* ── Definitions Tab ── */}
+          <TabsContent value="definitions" className="space-y-4">
+            <Card className="border-emerald-500/20 bg-emerald-500/5">
+              <CardContent className="p-4">
+                <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <h2 className="text-sm font-semibold text-foreground">因子字典说明</h2>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      这里列的是系统当前认识的“因子类型”。因子快照表里的每一行，是某个交易对在某个时间点算出来的一次数值。
+                      所以“33个因子类型”和“几万条因子快照”不是一回事。
+                    </p>
+                  </div>
+                  <Badge className="w-fit bg-emerald-500/15 text-emerald-300">
+                    当前 {factorDefinitions.length} 个定义
+                  </Badge>
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {factorDefinitions.length === 0 ? (
+                <Card className="md:col-span-2 xl:col-span-3 bg-card border-border">
+                  <CardContent className="py-12 text-center text-sm text-muted-foreground">暂无因子字典数据</CardContent>
+                </Card>
+              ) : (
+                factorDefinitions.map((item) => (
+                  <Card key={item.factor_name} className="bg-card border-border/70">
+                    <CardContent className="p-4">
+                      <div className="mb-3 flex items-start justify-between gap-3">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-sm font-semibold text-foreground">{item.display_name}</h3>
+                            <Badge className="bg-slate-500/10 text-slate-300">{item.category}</Badge>
+                          </div>
+                          <p className="mt-1 font-mono text-[11px] text-blue-300">{item.factor_name}</p>
+                        </div>
+                        <p className="text-right text-[11px] text-muted-foreground">
+                          快照 {item.snapshot_count?.toLocaleString() ?? 0}
+                        </p>
+                      </div>
+                      <p className="text-xs leading-5 text-muted-foreground">{item.description}</p>
+                      <div className="mt-3 space-y-2 text-[11px] leading-5 text-muted-foreground">
+                        <p><span className="text-foreground/80">怎么算：</span>{item.calculation}</p>
+                        <p><span className="text-foreground/80">使用数据：</span>{item.upstream_data}</p>
+                        <p><span className="text-foreground/80">来源说明：</span>{item.provider_hint}</p>
+                        <p>
+                          <span className="text-foreground/80">实际记录：</span>
+                          {(item.observed_providers || []).length > 0
+                            ? item.observed_providers?.map(formatProviderLabel).join("、")
+                            : "还没有快照记录"}
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))
+              )}
+            </div>
+          </TabsContent>
+
           {/* ── Factors Tab ── */}
           <TabsContent value="factors" className="space-y-4">
+            <Card className="border-blue-500/20 bg-blue-500/5">
+              <CardContent className="p-4">
+                <p className="text-xs leading-5 text-muted-foreground">
+                  因子快照是“某个交易对在某个时间点的具体因子值”。表里的“计算来源”说明是谁生成了这个因子，
+                  “上游来源”才是它背后的行情、新闻或宏观数据来源；如果显示未记录，说明这是早期旧数据，没有完整来源字段。
+                </p>
+              </CardContent>
+            </Card>
             <div className="flex items-center gap-3 flex-wrap">
               <Filter className="w-4 h-4 text-muted-foreground" />
               <input
-                placeholder="Symbol (e.g. BTCUSDT)" value={filterSymbol} onChange={(e) => setFilterSymbol(e.target.value.toUpperCase())}
+                placeholder="交易对，例如 BTCUSDT" value={filterSymbol} onChange={(e) => setFilterSymbol(e.target.value.toUpperCase())}
                 className="bg-secondary border border-border text-foreground/90 text-xs rounded px-2 py-1.5 w-40"
               />
               <input
-                placeholder="Factor name (e.g. sma_10)" value={filterFactor} onChange={(e) => setFilterFactor(e.target.value)}
+                placeholder="因子代码，例如 sma_10" value={filterFactor} onChange={(e) => setFilterFactor(e.target.value)}
                 className="bg-secondary border border-border text-foreground/90 text-xs rounded px-2 py-1.5 w-48"
               />
               <Button size="sm" variant="outline" className="h-7 text-xs border-border text-foreground/80" onClick={fetchFactors}>筛选</Button>
@@ -239,28 +390,51 @@ export default function SignalsPage() {
               <Table>
                 <TableHeader className="bg-card">
                   <TableRow className="border-border">
-                    <TableHead className="text-muted-foreground text-xs">Symbol</TableHead>
-                    <TableHead className="text-muted-foreground text-xs">因子名称</TableHead>
+                    <TableHead className="text-muted-foreground text-xs">交易对</TableHead>
+                    <TableHead className="text-muted-foreground text-xs">因子</TableHead>
+                    <TableHead className="text-muted-foreground text-xs">类型</TableHead>
                     <TableHead className="text-muted-foreground text-xs">值</TableHead>
-                    <TableHead className="text-muted-foreground text-xs">来源</TableHead>
+                    <TableHead className="text-muted-foreground text-xs">计算来源</TableHead>
+                    <TableHead className="text-muted-foreground text-xs">上游来源</TableHead>
                     <TableHead className="text-muted-foreground text-xs">时间</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {factors.length === 0 ? (
                     <TableRow className="border-border">
-                      <TableCell colSpan={5} className="text-center text-muted-foreground py-10 text-sm">暂无因子快照数据</TableCell>
+                      <TableCell colSpan={7} className="text-center text-muted-foreground py-10 text-sm">暂无因子快照数据</TableCell>
                     </TableRow>
                   ) : (
-                    factors.map((f) => (
-                      <TableRow key={f.id} className="border-border hover:bg-card/50">
-                        <TableCell className="text-foreground/90 text-xs font-mono">{f.symbol}</TableCell>
-                        <TableCell className="text-blue-400 text-xs">{f.factor_name}</TableCell>
-                        <TableCell className="text-foreground/90 text-xs font-mono">{f.factor_value?.toFixed(6)}</TableCell>
-                        <TableCell className="text-muted-foreground text-xs">{f.source}</TableCell>
-                        <TableCell className="text-muted-foreground text-[11px]">{f.timestamp ? new Date(f.timestamp).toLocaleString() : "-"}</TableCell>
-                      </TableRow>
-                    ))
+                    factors.map((f) => {
+                      const definition = f.definition || factorDefinitionMap[f.factor_name];
+                      return (
+                        <TableRow key={f.id} className="border-border hover:bg-card/50">
+                          <TableCell className="text-foreground/90 text-xs font-mono">{f.symbol}</TableCell>
+                          <TableCell>
+                            <div className="text-blue-300 text-xs font-medium">{definition?.display_name || f.factor_name}</div>
+                            <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">{f.factor_name}</div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge className="bg-slate-500/10 text-slate-300 text-[10px]">
+                              {definition?.category || "未分类"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-foreground/90 text-xs font-mono">
+                            {formatFactorValue(f.factor_value)}
+                            {definition?.unit ? <span className="ml-1 text-[10px] text-muted-foreground">{definition.unit}</span> : null}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground text-xs">
+                            <div>{formatSourceLabel(f.source)}</div>
+                            {f.interval ? <div className="mt-0.5 text-[10px] text-muted-foreground/70">{f.interval}</div> : null}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground text-xs">
+                            <div>{formatProviderLabel(f.provider)}</div>
+                            <div className="mt-0.5 text-[10px] text-muted-foreground/70">{formatSourceLabel(f.data_source)}</div>
+                          </TableCell>
+                          <TableCell className="text-muted-foreground text-[11px]">{f.timestamp ? new Date(f.timestamp).toLocaleString() : "-"}</TableCell>
+                        </TableRow>
+                      );
+                    })
                   )}
                 </TableBody>
               </Table>
@@ -382,6 +556,26 @@ export default function SignalsPage() {
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <Card className="bg-card border-border/50">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-foreground text-sm">因子类型分布</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {factorCategoryData.length === 0 ? (
+                      <div className="py-10 text-center text-muted-foreground text-sm">无数据</div>
+                    ) : (
+                      <ResponsiveContainer width="100%" height={300}>
+                        <RPieChart>
+                          <Pie data={factorCategoryData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label={({ name, value }) => `${name}: ${value}`}>
+                            {factorCategoryData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                          </Pie>
+                          <Tooltip contentStyle={{ background: "#1e293b", border: "1px solid #334155", borderRadius: "8px", fontSize: "12px" }} />
+                          <Legend />
+                        </RPieChart>
+                      </ResponsiveContainer>
+                    )}
+                  </CardContent>
+                </Card>
                 <Card className="bg-card border-border/50">
                   <CardHeader className="pb-2">
                     <CardTitle className="text-foreground text-sm">信号类型分布</CardTitle>

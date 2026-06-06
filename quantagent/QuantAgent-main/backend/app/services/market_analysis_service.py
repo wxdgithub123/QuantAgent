@@ -3,7 +3,7 @@ Market Analysis Service powered by LLM
 """
 
 from app.services.llm.base import LLMFactory
-from app.services.binance_service import binance_service
+from app.services.market_data_gateway import market_data_gateway
 from app.services.embedding_service import embedding_service
 from app.models.market_data import KlineData
 from typing import List, AsyncGenerator, Dict, Any, Optional
@@ -138,8 +138,8 @@ class BaseAgentService:
     # ── 市场数据准备 ────────────────────────────────────────────────────────
     async def _prepare_analysis_inputs(self, symbol: str, interval: str = "1h"):
         """Fetch market data and build prompt/system_prompt. Returns (prompt, system_prompt, embedding, current_price)."""
-        klines = await binance_service.get_klines(symbol, interval, limit=100)
-        current_price = await binance_service.get_price(symbol)
+        klines = await market_data_gateway.get_klines(symbol, interval, limit=100)
+        current_price = await market_data_gateway.get_price(symbol)
 
         df_data = [
             {

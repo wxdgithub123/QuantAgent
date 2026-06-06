@@ -42,6 +42,32 @@ ORDER BY (symbol, interval, open_time)
 SETTINGS index_granularity = 8192
 """
 
+CREATE_MARKET_BARS_SQL = """
+CREATE TABLE IF NOT EXISTS market_bars (
+    symbol         LowCardinality(String) COMMENT 'Canonical symbol, e.g. BTCUSDT',
+    instrument_id  LowCardinality(String) COMMENT 'Stable instrument id',
+    exchange       LowCardinality(String) COMMENT 'Exchange or venue, e.g. binance/okx/yfinance',
+    provider       LowCardinality(String) COMMENT 'Data provider, e.g. ccxt/openbb:yfinance',
+    source_version LowCardinality(String) COMMENT 'Connector/source version',
+    schema_version LowCardinality(String) COMMENT 'Canonical schema version',
+    interval       LowCardinality(String) COMMENT 'Candlestick interval: 1m/5m/1h/1d ...',
+    open_time      DateTime64(3, 'UTC') COMMENT 'Candle open time',
+    close_time     DateTime64(3, 'UTC') COMMENT 'Candle close time',
+    available_time DateTime64(3, 'UTC') COMMENT 'When this bar was ingested',
+    open           Float64,
+    high           Float64,
+    low            Float64,
+    close          Float64,
+    volume         Float64,
+    vwap           Nullable(Float64),
+    volume_notional Nullable(Float64),
+    transactions   Nullable(UInt64)
+) ENGINE = ReplacingMergeTree()
+PARTITION BY toYYYYMM(open_time)
+ORDER BY (symbol, interval, open_time, provider, exchange)
+SETTINGS index_granularity = 8192
+"""
+
 # ── Client singleton ──────────────────────────────────────────────────────────
 import threading
 _client = None
@@ -95,6 +121,41 @@ def _get_event_loop():
     return get_safe_event_loop()
 
 
+def _coerce_datetime(value: Any, fallback: Optional[datetime] = None) -> datetime:
+    """Normalize datetime-like values before sending them to ClickHouse."""
+    if value is None:
+        return fallback or datetime.utcnow()
+    if isinstance(value, pd.Timestamp):
+        return value.to_pydatetime()
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return fallback or datetime.utcnow()
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sql_literal(value: str) -> str:
+    return value.replace("'", "''")
+
+
 def _get_client():
     """Lazily initialize and return a ClickHouse HTTP client. Returns None on failure."""
     global _client
@@ -140,7 +201,8 @@ class ClickHouseService:
             return False
         try:
             client.command(CREATE_KLINES_SQL)
-            logger.info("ClickHouse klines table verified/created.")
+            client.command(CREATE_MARKET_BARS_SQL)
+            logger.info("ClickHouse klines and market_bars tables verified/created.")
             return True
         except Exception as e:
             logger.error(f"ClickHouse table init failed: {e}")
@@ -210,6 +272,108 @@ class ClickHouseService:
         loop = _get_event_loop()
         return await loop.run_in_executor(
             None, self.insert_klines_sync, symbol, interval, rows
+        )
+
+    def insert_market_bars_sync(
+        self,
+        symbol: str,
+        interval: str,
+        rows: List[Dict[str, Any]],
+        provider: str = "unknown",
+        exchange: str = "unknown",
+        source_version: str = "unknown",
+    ) -> int:
+        """
+        Insert source-aware market bars.
+
+        This table is separate from legacy ``klines`` so OpenBB and CCXT can
+        coexist without overwriting the same symbol/time key.
+        """
+        client = _get_client()
+        if client is None or not rows:
+            return 0
+
+        now = datetime.utcnow()
+        clean_symbol = symbol.replace("/", "").upper()
+        data = []
+        for row in rows:
+            open_time = _coerce_datetime(
+                row.get("open_time") or row.get("timestamp") or row.get("datetime"),
+                fallback=now,
+            )
+            close_time = _coerce_datetime(
+                row.get("close_time") or row.get("bar_end_time") or row.get("event_time"),
+                fallback=open_time,
+            )
+            data.append(
+                [
+                    clean_symbol,
+                    row.get("instrument_id") or clean_symbol,
+                    row.get("exchange") or exchange,
+                    row.get("provider") or provider,
+                    row.get("source_version") or source_version,
+                    row.get("schema_version") or "bar.v1",
+                    interval,
+                    open_time,
+                    close_time,
+                    _coerce_datetime(row.get("available_time"), fallback=now),
+                    float(row["open"]),
+                    float(row["high"]),
+                    float(row["low"]),
+                    float(row["close"]),
+                    float(row["volume"]),
+                    _optional_float(row.get("vwap")),
+                    _optional_float(row.get("volume_notional") or row.get("quote_volume")),
+                    _optional_int(row.get("transactions") or row.get("trades")),
+                ]
+            )
+
+        with _client_lock:
+            try:
+                client.insert(
+                    "market_bars",
+                    data,
+                    column_names=[
+                        "symbol", "instrument_id", "exchange", "provider",
+                        "source_version", "schema_version", "interval",
+                        "open_time", "close_time", "available_time",
+                        "open", "high", "low", "close", "volume",
+                        "vwap", "volume_notional", "transactions",
+                    ],
+                )
+                return len(data)
+            except Exception as e:
+                logger.warning(
+                    "ClickHouse market_bars insert failed (%s/%s/%s/%s): %s",
+                    clean_symbol,
+                    interval,
+                    provider,
+                    exchange,
+                    e,
+                )
+                return 0
+
+    async def insert_market_bars(
+        self,
+        symbol: str,
+        interval: str,
+        rows: List[Dict[str, Any]],
+        provider: str = "unknown",
+        exchange: str = "unknown",
+        source_version: str = "unknown",
+    ) -> int:
+        """Async wrapper for source-aware market bar insertion."""
+        import asyncio
+        loop = _get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            self.insert_market_bars_sync,
+            symbol,
+            interval,
+            rows,
+            provider,
+            exchange,
+            source_version,
         )
 
     # ── Query K-lines ─────────────────────────────────────────────────────────
@@ -283,6 +447,134 @@ class ClickHouseService:
         return await loop.run_in_executor(
             None, self.query_klines_sync, symbol, interval, start, end, limit, offset
         )
+
+    def query_market_bars_sync(
+        self,
+        symbol: str,
+        interval: str,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        limit: int = 1000,
+        offset: int = 0,
+        provider: Optional[str] = None,
+        exchange: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Query source-aware market bars from ``market_bars``."""
+        client = _get_client()
+        if client is None:
+            return []
+        clean_symbol = symbol.replace("/", "").upper()
+        with _client_lock:
+            try:
+                conditions = [
+                    f"symbol = '{_sql_literal(clean_symbol)}'",
+                    f"interval = '{_sql_literal(interval)}'",
+                ]
+                if start:
+                    conditions.append(f"open_time >= '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
+                if end:
+                    conditions.append(f"open_time <= '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
+                if provider:
+                    conditions.append(f"provider = '{_sql_literal(provider)}'")
+                if exchange:
+                    conditions.append(f"exchange = '{_sql_literal(exchange)}'")
+
+                sql = f"""
+                    SELECT
+                        symbol, instrument_id, exchange, provider, source_version,
+                        schema_version, interval, open_time, close_time, available_time,
+                        open, high, low, close, volume, vwap, volume_notional, transactions
+                    FROM market_bars
+                    WHERE {" AND ".join(conditions)}
+                    ORDER BY open_time ASC
+                    LIMIT {limit}
+                    OFFSET {offset}
+                """
+                result = client.query(sql)
+                keys = [
+                    "symbol", "instrument_id", "exchange", "provider", "source_version",
+                    "schema_version", "interval", "open_time", "close_time",
+                    "available_time", "open", "high", "low", "close", "volume",
+                    "vwap", "volume_notional", "transactions",
+                ]
+                return [dict(zip(keys, row)) for row in result.result_rows]
+            except Exception as e:
+                logger.warning(
+                    "ClickHouse market_bars query failed (%s/%s/%s/%s): %s",
+                    clean_symbol,
+                    interval,
+                    provider,
+                    exchange,
+                    e,
+                )
+                return []
+
+    async def query_market_bars(
+        self,
+        symbol: str,
+        interval: str,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        limit: int = 1000,
+        offset: int = 0,
+        provider: Optional[str] = None,
+        exchange: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Async wrapper for source-aware market bar queries."""
+        import asyncio
+        loop = _get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            self.query_market_bars_sync,
+            symbol,
+            interval,
+            start,
+            end,
+            limit,
+            offset,
+            provider,
+            exchange,
+        )
+
+    async def get_market_bar_source_ranges(self) -> List[Dict[str, Any]]:
+        """Return market_bars coverage grouped by provider and exchange."""
+        import asyncio
+
+        def _get():
+            client = _get_client()
+            if client is None:
+                return []
+            try:
+                with _client_lock:
+                    result = client.query(
+                        """
+                        SELECT symbol, interval, provider, exchange,
+                               min(open_time) AS min_time,
+                               max(open_time) AS max_time,
+                               count() AS row_count
+                        FROM market_bars
+                        GROUP BY symbol, interval, provider, exchange
+                        ORDER BY symbol, interval, provider, exchange
+                        """
+                    )
+                return [
+                    {
+                        "symbol": r[0],
+                        "interval": r[1],
+                        "provider": r[2],
+                        "exchange": r[3],
+                        "min_time": r[4],
+                        "max_time": r[5],
+                        "row_count": r[6],
+                    }
+                    for r in result.result_rows
+                ]
+            except Exception as e:
+                logger.warning(f"get_market_bar_source_ranges failed: {e}")
+                return []
+
+        loop = _get_event_loop()
+        return await loop.run_in_executor(None, _get)
 
     # ── DataFrame interface (for backtest engine) ─────────────────────────────
     async def get_klines_dataframe(

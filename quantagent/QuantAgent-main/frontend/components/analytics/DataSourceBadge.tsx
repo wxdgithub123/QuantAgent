@@ -23,7 +23,7 @@ const badgeConfig = {
     className: "bg-orange-100 text-orange-800 border-orange-300",
   },
   MOCK: {
-    label: "演示数据",
+    label: "示例数据（非真实）",
     className: "bg-yellow-100 text-yellow-800 border-yellow-300",
   },
 };

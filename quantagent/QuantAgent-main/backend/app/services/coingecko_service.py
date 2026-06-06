@@ -239,14 +239,14 @@ class CoinGeckoService:
     def compare_price(
         self, 
         symbol: str = "BTC", 
-        binance_price: Optional[float] = None
+        market_price: Optional[float] = None
     ) -> PriceComparison:
         """
-        对比 Binance 和 CoinGecko 的价格
+        对比网关价格和 CoinGecko 的价格
         
         Args:
             symbol: 交易对符号，如 "BTC"
-            binance_price: Binance 价格（可选）
+            market_price: 网关价格（可选）
             
         Returns:
             PriceComparison: 价格对比结果
@@ -288,13 +288,13 @@ class CoinGeckoService:
         price_diff = None
         price_diff_percent = None
         
-        if binance_price and coingecko_price:
-            price_diff = abs(binance_price - coingecko_price)
-            price_diff_percent = (price_diff / ((binance_price + coingecko_price) / 2)) * 100
+        if market_price and coingecko_price:
+            price_diff = abs(market_price - coingecko_price)
+            price_diff_percent = (price_diff / ((market_price + coingecko_price) / 2)) * 100
         
         return PriceComparison(
             symbol=symbol,
-            binance_price=binance_price,
+            binance_price=market_price,
             coingecko_price=coingecko_price,
             price_diff=price_diff,
             price_diff_percent=price_diff_percent,

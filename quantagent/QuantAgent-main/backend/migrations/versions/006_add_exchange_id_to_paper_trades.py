@@ -16,13 +16,19 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "006_add_exchange_id_to_paper_trades"
+revision: str = "006"
 down_revision: Union[str, None] = "d4293f8c131f"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_columns = {column["name"] for column in inspector.get_columns("paper_trades")}
+    if "exchange_id" in existing_columns:
+        return
+
     op.add_column(
         "paper_trades",
         sa.Column(
@@ -35,4 +41,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_columns = {column["name"] for column in inspector.get_columns("paper_trades")}
+    if "exchange_id" not in existing_columns:
+        return
+
     op.drop_column("paper_trades", "exchange_id")

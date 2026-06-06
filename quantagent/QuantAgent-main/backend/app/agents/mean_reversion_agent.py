@@ -7,7 +7,7 @@ import logging
 from typing import Any, Dict
 
 from app.agents.base_agent import BaseAgent, SignalType
-from app.services.binance_service import binance_service
+from app.services.market_data_gateway import market_data_gateway
 from app.services.indicators import rsi, bollinger_bands
 
 logger = logging.getLogger(__name__)
@@ -39,8 +39,10 @@ IMPORTANT RULES:
     async def observe(self, symbol: str, interval: str = "1h") -> Dict[str, Any]:
         """Fetch K-lines and compute RSI + Bollinger Bands."""
         import pandas as pd
-        klines = await binance_service.get_klines(symbol, interval, limit=100)
-        price  = await binance_service.get_price(symbol)
+        klines = await market_data_gateway.get_klines(symbol, interval, limit=100)
+        price = await market_data_gateway.get_price(symbol)
+        if not klines or price is None:
+            raise RuntimeError(f"No market data available for {symbol}/{interval}")
 
         df_data = [
             {"timestamp": k.timestamp, "open": k.open, "high": k.high,

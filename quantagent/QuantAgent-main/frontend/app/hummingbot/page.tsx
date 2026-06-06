@@ -44,6 +44,13 @@ interface BotsData {
   mqtt_data?: unknown;
 }
 
+interface PortfolioData {
+  accounts?: string[];
+  portfolio_state?: Record<string, unknown>;
+  source?: string;
+  [key: string]: unknown;
+}
+
 interface OrderData {
   source?: string;
   active_orders?: unknown;
@@ -88,6 +95,7 @@ interface PaperBotPreviewResponse {
 }
 
 interface PaperBotStartResponse {
+  started?: boolean;
   local_record_created: boolean;
   remote_started: boolean;
   remote_confirmed: boolean;
@@ -148,6 +156,7 @@ interface PaperBot {
   hummingbot_bot_id?: string;
   started_at: string;
   runtime_seconds: number;
+  can_fetch_runtime_data?: boolean;
   last_error?: string;
   config?: Record<string, unknown>;
   hummingbot_status_raw?: Record<string, unknown>;
@@ -202,8 +211,8 @@ export default function HummingbotPage() {
   const [status, setStatus] = useState<ApiResponse<StatusData> | null>(null);
   const [docker, setDocker] = useState<ApiResponse<DockerData> | null>(null);
   const [connectors, setConnectors] = useState<ApiResponse | null>(null);
-  const [portfolio, setPortfolio] = useState<ApiResponse | null>(null);
-  const [bots, setBots] = useState<ApiResponse | null>(null);
+  const [portfolio, setPortfolio] = useState<ApiResponse<PortfolioData> | null>(null);
+  const [bots, setBots] = useState<ApiResponse<BotsData> | null>(null);
   const [orders, setOrders] = useState<ApiResponse<OrderData> | null>(null);
   const [positions, setPositions] = useState<ApiResponse<PositionData> | null>(null);
   const [loading, setLoading] = useState(false);
@@ -242,8 +251,8 @@ export default function HummingbotPage() {
       ]);
       clearTimeout(timeoutId);
 
-      const parseResponse = async (result: PromiseSettledResult<Response>): Promise<ApiResponse> => {
-        if (result.status === "rejected" || result.status === "rejected") {
+      const parseResponse = async <T,>(result: PromiseSettledResult<Response>): Promise<ApiResponse<T>> => {
+        if (result.status === "rejected") {
           const reason = result.reason;
           const isAbort = reason?.name === "AbortError" || reason?.message?.includes("aborted");
           return {
@@ -284,13 +293,13 @@ export default function HummingbotPage() {
       };
 
       const [s, d, c, p, b, o, pos] = await Promise.all([
-        parseResponse(statusRes),
-        parseResponse(dockerRes),
+        parseResponse<StatusData>(statusRes),
+        parseResponse<DockerData>(dockerRes),
         parseResponse(connectorsRes),
-        parseResponse(portfolioRes),
-        parseResponse(botsRes),
-        parseResponse(ordersRes),
-        parseResponse(positionsRes),
+        parseResponse<PortfolioData>(portfolioRes),
+        parseResponse<BotsData>(botsRes),
+        parseResponse<OrderData>(ordersRes),
+        parseResponse<PositionData>(positionsRes),
       ]);
 
       setStatus(s);
@@ -298,8 +307,8 @@ export default function HummingbotPage() {
       setConnectors(c);
       setPortfolio(p);
       setBots(b);
-      setOrders(o as ApiResponse<OrderData>);
-      setPositions(pos as ApiResponse<PositionData>);
+      setOrders(o);
+      setPositions(pos);
       setLastRefresh(new Date());
     } finally {
       setLoading(false);
@@ -324,7 +333,7 @@ export default function HummingbotPage() {
                   ...bot,
                   local_status: status.local_status,
                   remote_status: status.remote_status,
-                  runtime_seconds: status.runtime_seconds,
+                  runtime_seconds: status.runtime_seconds ?? bot.runtime_seconds,
                 }
               : bot
           ),
@@ -1153,11 +1162,11 @@ export default function HummingbotPage() {
                   )}
 
                   {/* Docker Containers Fallback List */}
-                  {bots?.data?.source === "docker-containers" && bots?.data?.containers_fallback?.containers?.length > 0 && (
+                  {bots?.data?.source === "docker-containers" && (bots.data.containers_fallback?.containers?.length ?? 0) > 0 && (
                     <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
                       <p className="text-muted-foreground text-xs mb-2">Hummingbot 相关容器:</p>
                       <div className="space-y-2">
-                        {bots.data.containers_fallback.containers.map((container: { container_name: string; status: string; image: string; source: string }, idx: number) => (
+                        {(bots.data.containers_fallback?.containers ?? []).map((container: { container_name: string; status: string; image: string; source: string }, idx: number) => (
                           <div key={idx} className="flex items-center justify-between p-2 bg-card/50 rounded-lg">
                             <div>
                               <p className="text-foreground/80 text-xs font-medium">{container.container_name}</p>
@@ -1379,7 +1388,7 @@ export default function HummingbotPage() {
                                   <td className={`py-2 px-2 ${pos.side === "LONG" || pos.side === "BUY" ? "text-green-400" : "text-red-400"}`}>
                                     {String(pos.side || pos.position_side || "-")}
                                   </td>
-                                  <td className="py-2 px-2 text-right text-foreground/80">{pos.amount || pos.quantity || String(pos.amount || 0)}</td>
+                                  <td className="py-2 px-2 text-right text-foreground/80">{String(pos.amount ?? pos.quantity ?? 0)}</td>
                                   <td className="py-2 px-2 text-right text-foreground/80">{pos.entry_price || pos.entryPrice ? String(pos.entry_price || pos.entryPrice) : "-"}</td>
                                   <td className="py-2 px-2 text-right text-foreground/80">{pos.mark_price || pos.markPrice ? String(pos.mark_price || pos.markPrice) : "-"}</td>
                                   <td className={`py-2 px-2 text-right ${isProfit ? "text-green-400" : "text-red-400"}`}>
@@ -1585,6 +1594,9 @@ function PaperBotSection({ onStartSuccess }: PaperBotSectionProps) {
     } catch (err) {
       setStartResult({
         started: false,
+        local_record_created: false,
+        remote_started: false,
+        remote_confirmed: false,
         source: "quantagent",
         mode: "paper",
         live_trading: false,
@@ -2347,7 +2359,7 @@ function PaperBotMonitorSection({
             Hummingbot Paper Bot 运行监控
           </h2>
           <p className="text-muted-foreground text-xs mt-1 ml-10">
-            当前仅展示 Paper Bot 运行状态和模拟数据，不执行真实交易。
+            当前仅展示 Paper Bot 运行状态和模拟盘数据，不执行真实交易。
           </p>
         </div>
         <Button
@@ -2555,7 +2567,7 @@ function PaperBotMonitorSection({
                         ? "已部署，等待运行确认"
                         : (paperBotDetail as Record<string, unknown>)?.remote_status === "not_detected"
                         ? "未检测"
-                        : (paperBotDetail as Record<string, unknown>)?.local_status || "-"}
+                        : String((paperBotDetail as Record<string, unknown>)?.local_status || "-")}
                     </Badge>
                     <Badge
                       variant="outline"
@@ -2572,8 +2584,8 @@ function PaperBotMonitorSection({
                         : (paperBotDetail as Record<string, unknown>)?.remote_status === "deployed"
                         ? "已部署"
                         : "未检测"}
-                      {(paperBotDetail as Record<string, unknown>)?.matched_by && (paperBotDetail as Record<string, unknown>)?.matched_by !== "none" && (
-                        <span className="text-muted-foreground ml-1">via {(paperBotDetail as Record<string, unknown>)?.matched_by}</span>
+                      {Boolean((paperBotDetail as Record<string, unknown>)?.matched_by) && (paperBotDetail as Record<string, unknown>)?.matched_by !== "none" && (
+                        <span className="text-muted-foreground ml-1">via {String((paperBotDetail as Record<string, unknown>)?.matched_by)}</span>
                       )}
                     </Badge>
                   </div>
@@ -2610,10 +2622,10 @@ function PaperBotMonitorSection({
                             : "-"}
                         </span>
                       </div>
-                      {(paperBotDetail as Record<string, unknown>)?.reconciliation_message && (
+                      {Boolean((paperBotDetail as Record<string, unknown>)?.reconciliation_message) && (
                         <div className="col-span-2 p-2 bg-amber-500/10 rounded border border-amber-500/20">
                           <span className="text-amber-400 text-[10px]">
-                            {(paperBotDetail as Record<string, unknown>)?.reconciliation_message as string}
+                            {String((paperBotDetail as Record<string, unknown>)?.reconciliation_message)}
                           </span>
                         </div>
                       )}
@@ -2684,7 +2696,7 @@ function PaperBotMonitorSection({
                     </div>
                   )}
 
-                  {paperBotDetail && (paperBotDetail as Record<string, unknown>)?.last_error && (
+                  {paperBotDetail && Boolean((paperBotDetail as Record<string, unknown>)?.last_error) && (
                     <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
                       <p className="text-red-400 text-xs">
                         <span className="font-semibold">错误:</span> {String((paperBotDetail as Record<string, unknown>)?.last_error)}
@@ -2693,7 +2705,7 @@ function PaperBotMonitorSection({
                   )}
 
                   {/* Config Preview */}
-                  {(paperBotDetail as Record<string, unknown>)?.config && (
+                  {Boolean((paperBotDetail as Record<string, unknown>)?.config) && (
                     <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
                       <p className="text-muted-foreground text-xs mb-2">配置预览</p>
                       <pre className="text-foreground/80 text-[10px] font-mono overflow-x-auto max-h-40">

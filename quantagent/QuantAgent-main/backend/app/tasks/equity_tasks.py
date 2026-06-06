@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.sql import func
 
 from app.services.database import get_db
+from app.services.market_data_gateway import market_data_gateway
 from app.models.db_models import EquitySnapshot, PaperAccount, PaperPosition
 
 logger = logging.getLogger(__name__)
@@ -55,14 +56,7 @@ async def record_equity_snapshot():
                 qty = Decimal(str(pos.quantity))
                 price = Decimal(str(pos.avg_price))
                 try:
-                    from app.services.binance_service import binance_service
-                    symbol_ccxt = pos.symbol.upper()
-                    for quote in ("USDT", "BTC", "ETH"):
-                        if symbol_ccxt.endswith(quote):
-                            base = symbol_ccxt[: -len(quote)]
-                            symbol_ccxt = f"{base}/{quote}"
-                            break
-                    current_price = await binance_service.get_price(symbol_ccxt)
+                    current_price = await market_data_gateway.get_price(pos.symbol)
                     if current_price:
                         price = Decimal(str(current_price))
                 except Exception:

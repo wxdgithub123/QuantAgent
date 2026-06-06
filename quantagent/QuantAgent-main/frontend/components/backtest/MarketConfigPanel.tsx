@@ -13,6 +13,8 @@ interface MarketConfigPanelProps {
   setStartTime: (val: string) => void;
   endTime: string;
   setEndTime: (val: string) => void;
+  asOfTime?: string;
+  setAsOfTime?: (val: string) => void;
   initialCapital: number;
   setInitialCapital: (val: number) => void;
   symbols: { value: string; label: string }[];
@@ -27,6 +29,8 @@ export function MarketConfigPanel({
   limit, setLimit,
   startTime, setStartTime,
   endTime, setEndTime,
+  asOfTime,
+  setAsOfTime,
   initialCapital, setInitialCapital,
   symbols, intervals, limitOptions,
   accentColor = "blue"
@@ -171,6 +175,34 @@ export function MarketConfigPanel({
               : "默认使用最近 N 根 K 线数据"}
           </p>
         </div>
+        {setAsOfTime && (
+          <div className="pt-2 border-t border-slate-700/50">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs text-slate-400 flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5" />
+                数据截止时间（PIT）
+              </label>
+              {asOfTime && (
+                <button
+                  onClick={() => setAsOfTime("")}
+                  className="text-[10px] text-slate-500 hover:text-slate-300 flex items-center gap-1 transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                  清除
+                </button>
+              )}
+            </div>
+            <input
+              type="datetime-local"
+              value={asOfTime || ""}
+              onChange={e => setAsOfTime(e.target.value)}
+              className={`w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-100 focus:outline-none focus:ring-1 ${styles.inputFocus}`}
+            />
+            <p className="text-[10px] text-slate-500 mt-2">
+              填写后，本次回测只允许使用该时间点之前已经可见的数据；不填则以后端实际 K 线窗口末尾作为截止时间。
+            </p>
+          </div>
+        )}
         <div>
           <label className="text-xs text-slate-400 mb-1.5 block">初始资金 (USDT)</label>
           <div className="flex gap-2">

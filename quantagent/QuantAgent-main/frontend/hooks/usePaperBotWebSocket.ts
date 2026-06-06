@@ -84,7 +84,7 @@ export function usePaperBotWebSocket({
   enabled = true,
 }: UsePaperBotWebSocketOptions = {}) {
   const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [lastHeartbeat, setLastHeartbeat] = useState<Date | null>(null);
 
@@ -102,7 +102,7 @@ export function usePaperBotWebSocket({
 
       ws.onopen = () => {
         setIsConnected(true);
-        clearTimeout(reconnectTimerRef.current);
+        if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       };
 
       ws.onmessage = (event) => {
@@ -146,7 +146,7 @@ export function usePaperBotWebSocket({
   }, [paperBotId, onStatusUpdate, onOrdersUpdate, onPositionsUpdate, onPortfolioUpdate, reconnectInterval, enabled]);
 
   const disconnect = useCallback(() => {
-    clearTimeout(reconnectTimerRef.current);
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;

@@ -13,7 +13,14 @@ import numpy as np
 from sqlalchemy import select, func as sqlfunc
 
 from app.services.database import get_db, redis_get, redis_set
-from app.models.db_models import TradePair, EquitySnapshot, PaperTrade
+from app.models.db_models import (
+    EquitySnapshot,
+    PaperAccount,
+    PaperPosition,
+    PaperTrade,
+    TradePair,
+)
+from app.services.exchange_service import exchange_service
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +29,9 @@ REDIS_METRICS_KEY = "paper:metrics:{period}"
 
 class PerformanceService:
     RISK_FREE_RATE = 0.03  # 3% annual risk-free rate
+    MIN_TRADES_FOR_RATIO_METRICS = 5
+    MIN_DAYS_FOR_ANNUALIZED_METRICS = 30
+    MAX_REASONABLE_ANNUALIZED_RETURN_PCT = 1000.0
 
     async def calculate_metrics(
         self,
@@ -51,10 +61,23 @@ class PerformanceService:
         returns = self._calculate_returns(equity_curve)
 
         # Determine final equity
+        snapshot_final_equity = None
         if equity_curve:
-            final_equity = float(equity_curve[-1]["total_equity"])
+            snapshot_final_equity = float(equity_curve[-1]["total_equity"])
+            final_equity = snapshot_final_equity
         else:
             final_equity = float(initial_capital)
+
+        live_equity = None
+        equity_mismatch_pct = None
+        if session_id is None:
+            # Global paper trading should reflect the current local paper account,
+            # not stale hourly snapshots that may have been produced by old tests.
+            live_equity = await self._get_live_paper_equity()
+            if live_equity:
+                final_equity = live_equity["total_equity"]
+                if snapshot_final_equity and final_equity > 0:
+                    equity_mismatch_pct = abs(snapshot_final_equity - final_equity) / final_equity * 100
 
         init_cap = float(initial_capital)
         total_return = ((final_equity / init_cap) - 1) * 100 if init_cap > 0 else 0
@@ -72,6 +95,23 @@ class PerformanceService:
             "winning_trades": len(winning),
             "losing_trades": len(losing),
         }
+        if live_equity:
+            metrics["equity_source"] = "live_paper_account"
+            metrics["live_equity"] = {
+                "cash_balance": round(live_equity["cash_balance"], 2),
+                "position_value": round(live_equity["position_value"], 2),
+                "open_positions": live_equity["open_positions"],
+            }
+            metrics["snapshot_final_equity"] = (
+                round(snapshot_final_equity, 2)
+                if snapshot_final_equity is not None
+                else None
+            )
+            metrics["equity_snapshot_mismatch_pct"] = (
+                round(equity_mismatch_pct, 2)
+                if equity_mismatch_pct is not None
+                else None
+            )
 
         # Win rate & profit factor
         # Return None for ratio metrics when there's no trades (data insufficient)
@@ -118,11 +158,6 @@ class PerformanceService:
         tca_metrics = self._calculate_tca_metrics(closed_pairs_with_tca)
         metrics["tca"] = tca_metrics
 
-        # Volatility (daily standard deviation annualized)
-        volatility = self._calculate_volatility(returns)
-        # 返回百分比形式（如 23.05 表示 23.05%），前端直接显示无需再×100
-        metrics["volatility"] = round(float(volatility * 100), 2)
-
         # Annualized return - use actual equity curve time span for accuracy
         if equity_curve and len(equity_curve) >= 2:
             first_ts = equity_curve[0]["timestamp"]
@@ -136,17 +171,52 @@ class PerformanceService:
         else:
             actual_days = max((end_date - start_date).days, 1)
 
+        metrics["sample_quality"] = {
+            "total_trades": metrics["total_trades"],
+            "equity_points": len(equity_curve),
+            "days": actual_days,
+            "equity_source": metrics.get("equity_source", "equity_snapshots"),
+            "equity_snapshot_mismatch_pct": metrics.get("equity_snapshot_mismatch_pct"),
+            "min_trades_for_ratio_metrics": self.MIN_TRADES_FOR_RATIO_METRICS,
+            "min_days_for_annualized_metrics": self.MIN_DAYS_FOR_ANNUALIZED_METRICS,
+            "ratio_metrics_reliable": (
+                metrics["total_trades"] >= self.MIN_TRADES_FOR_RATIO_METRICS
+                and actual_days >= self.MIN_DAYS_FOR_ANNUALIZED_METRICS
+                and len(returns) >= 5
+                and (
+                    equity_mismatch_pct is None
+                    or equity_mismatch_pct <= 5
+                )
+            ),
+        }
+
+        # Volatility (daily standard deviation annualized)
+        volatility = self._calculate_volatility(returns)
+        # 返回百分比形式（如 23.05 表示 23.05%），前端直接显示无需再×100。
+        # 样本不足时不展示，避免把几条异常快照放大成年化风险。
+        metrics["volatility"] = (
+            round(float(volatility * 100), 2)
+            if metrics["sample_quality"]["ratio_metrics_reliable"]
+            else None
+        )
+
         years = actual_days / 365
         if years > 0 and init_cap > 0:
             annualized = (((final_equity / init_cap) ** (1 / years)) - 1) * 100
         else:
             annualized = 0.0
-        metrics["annualized_return"] = round(float(annualized), 2)
+        annualized_is_reliable = (
+            metrics["sample_quality"]["ratio_metrics_reliable"]
+            and abs(float(annualized)) <= self.MAX_REASONABLE_ANNUALIZED_RETURN_PCT
+        )
+        metrics["annualized_return"] = (
+            round(float(annualized), 2) if annualized_is_reliable else None
+        )
 
         # Sharpe ratio: (annualized_return% - risk_free_rate%) / annual_volatility%
         # Note: volatility is already annualized (daily_std * sqrt(252))
         # Return None if insufficient data (less than 5 data points or zero volatility)
-        if len(returns) < 5:
+        if not annualized_is_reliable:
             metrics["sharpe_ratio"] = None
             metrics["sortino_ratio"] = None
             metrics["calmar_ratio"] = None
@@ -404,6 +474,7 @@ class PerformanceService:
             else:
                 # Query global data (not associated with any replay session)
                 query = query.where(EquitySnapshot.session_id.is_(None))
+                query = query.where(EquitySnapshot.data_source == "PAPER")
             query = query.order_by(EquitySnapshot.timestamp.asc())
             result = await session.execute(query)
             snapshots = result.scalars().all()
@@ -423,6 +494,56 @@ class PerformanceService:
             }
             for s in snapshots
         ]
+
+    async def _get_live_paper_equity(self) -> Optional[Dict[str, float]]:
+        """Calculate current global paper equity from account + open positions."""
+        try:
+            async with get_db() as session:
+                account_result = await session.execute(
+                    select(PaperAccount).where(PaperAccount.id == 1)
+                )
+                account = account_result.scalar_one_or_none()
+                if not account:
+                    return None
+
+                pos_result = await session.execute(
+                    select(PaperPosition).where(
+                        PaperPosition.session_id.is_(None),
+                        PaperPosition.exchange_id == "okx",
+                        PaperPosition.quantity != 0,
+                    )
+                )
+                positions = pos_result.scalars().all()
+
+            cash_balance = float(account.total_usdt)
+            position_value = 0.0
+            for pos in positions:
+                qty = float(pos.quantity)
+                avg_price = float(pos.avg_price)
+                mark_price = avg_price
+                try:
+                    mark_price = await exchange_service.get_price(
+                        pos.exchange_id or "okx",
+                        pos.symbol,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to fetch mark price for live equity %s/%s: %s",
+                        pos.exchange_id,
+                        pos.symbol,
+                        exc,
+                    )
+                position_value += qty * mark_price
+
+            return {
+                "cash_balance": cash_balance,
+                "position_value": position_value,
+                "total_equity": cash_balance + position_value,
+                "open_positions": len(positions),
+            }
+        except Exception as exc:
+            logger.warning("Failed to calculate live paper equity: %s", exc)
+            return None
 
     def _calculate_returns(self, equity_curve: List[Dict]) -> List[float]:
         """Calculate returns series from equity curve."""

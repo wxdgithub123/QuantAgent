@@ -7,11 +7,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AppTopNav } from "@/components/navigation/AppTopNav";
 import {
-  ArrowLeft, RefreshCw, TrendingUp, TrendingDown,
+  RefreshCw, TrendingUp, TrendingDown,
   BarChart3, PieChart as PieChartIcon, Activity, DollarSign, Target,
   Zap, AlertTriangle, Clock, Wallet, ChevronDown, ChevronRight,
-  BarChart as BarChartIcon, History, Server, Layers, Brain
+  BarChart as BarChartIcon
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -49,6 +50,24 @@ interface PerformanceMetrics {
   // 新增字段
   max_drawdown_duration: number | null; // 最大回撤持续天数
   var_95: number | null; // 95% VaR
+  sample_quality?: {
+    total_trades?: number;
+    equity_points?: number;
+    days?: number;
+    equity_source?: string;
+    equity_snapshot_mismatch_pct?: number | null;
+    min_trades_for_ratio_metrics?: number;
+    min_days_for_annualized_metrics?: number;
+    ratio_metrics_reliable?: boolean;
+  };
+  equity_source?: string;
+  live_equity?: {
+    cash_balance?: number;
+    position_value?: number;
+    open_positions?: number;
+  };
+  snapshot_final_equity?: number | null;
+  equity_snapshot_mismatch_pct?: number | null;
 }
 
 interface EquityPoint {
@@ -454,11 +473,32 @@ function AnalyticsContent() {
   // 当选择了回放会话时使用 sessionMetrics，否则使用 globalMetrics
   // 当 selectedSessionId 有值但 sessionMetrics 为 null 时，activeMetrics 为 null（显示 loading）
   const activeMetrics = selectedSessionId ? sessionMetrics : globalMetrics;
+  const sampleQuality = activeMetrics?.sample_quality;
+  const totalTrades = activeMetrics?.total_trades ?? sampleQuality?.total_trades ?? 0;
+  const sampleDays = sampleQuality?.days ?? null;
+  const minTradesForRatios = sampleQuality?.min_trades_for_ratio_metrics ?? 5;
+  const minDaysForRatios = sampleQuality?.min_days_for_annualized_metrics ?? 30;
+  const ratioMetricsReliable = Boolean(sampleQuality?.ratio_metrics_reliable);
+  const shouldHideRatioMetrics = Boolean(activeMetrics) && !ratioMetricsReliable;
+  const equitySource = activeMetrics?.equity_source || sampleQuality?.equity_source;
+  const equityMismatchPct = activeMetrics?.equity_snapshot_mismatch_pct ?? sampleQuality?.equity_snapshot_mismatch_pct;
+  const usingLivePaperEquity = equitySource === "live_paper_account";
+  const hasEquitySnapshotMismatch = typeof equityMismatchPct === "number" && equityMismatchPct > 5;
+  const ratioUnavailableLabel = "样本不足";
+  const ratioUnavailableReason = `当前只有 ${totalTrades} 笔已平仓交易${sampleDays != null ? `、约 ${sampleDays} 天权益样本` : ""}；年化收益、夏普、Sortino、卡玛和年化波动率至少需要 ${minTradesForRatios} 笔交易并覆盖 ${minDaysForRatios} 天以上才有解释意义。`;
 
   // 格式化函数 - 处理 null 值显示 N/A
   const formatPct = (v: number | undefined | null, showNA = false) => {
     if (v == null) return showNA ? "N/A" : "0.00%";
     return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+  };
+  const formatRatioMetric = (v: number | undefined | null, decimals = 2) => {
+    if (shouldHideRatioMetrics || v == null) return ratioUnavailableLabel;
+    return v.toFixed(decimals);
+  };
+  const formatRatioPct = (v: number | undefined | null) => {
+    if (shouldHideRatioMetrics || v == null) return ratioUnavailableLabel;
+    return formatPct(v, true);
   };
 
   // 安全日期格式化函数 - 处理空值和无效日期
@@ -538,52 +578,12 @@ function AnalyticsContent() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
-        <div className="container mx-auto px-4 py-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Link href="/dashboard" className="text-muted-foreground hover:text-foreground transition-colors">
-                <ArrowLeft className="w-5 h-5" />
-              </Link>
-              <div className="w-9 h-9 bg-gradient-to-br from-purple-500 to-pink-600 rounded-xl flex items-center justify-center">
-                <BarChart3 className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <h1 className="text-lg font-bold text-foreground">性能分析</h1>
-                <p className="text-[10px] text-muted-foreground">Performance Analytics</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 flex-wrap">
-              {/* Navigation */}
-              <nav className="hidden lg:flex items-center gap-1 mr-4">
-                <Link href="/dashboard" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
-                  仪表盘
-                </Link>
-                <Link href="/trades" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
-                  交易流水
-                </Link>
-                <Link href="/analytics" className="px-2 py-1 text-xs text-purple-400 bg-purple-500/10 rounded border border-purple-500/20 font-medium">
-                  性能分析
-                </Link>
-                <Link href="/backtest" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
-                  回测
-                </Link>
-                <Link href="/replay" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
-                  历史回放
-                </Link>
-                <Link href="/terminal" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary">
-                  终端
-                </Link>
-                <Link href="/hummingbot" className="px-2 py-1 text-xs text-cyan-400 hover:text-cyan-100 rounded hover:bg-cyan-500/10">
-                  <span className="flex items-center gap-1"><Server className="w-3 h-3" /> Hummingbot</span>
-                </Link>
-                <Link href="/hummingbot-testnet" className="px-2 py-1 text-xs text-orange-400 hover:text-orange-100 rounded hover:bg-orange-500/10">
-                  <span className="flex items-center gap-1"><Server className="w-3 h-3" /> Testnet</span>
-                </Link>
-                <Link href="/signals" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary flex items-center gap-1"><Layers className="w-3 h-3" /> 因子/信号</Link>
-                <Link href="/decisions" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-secondary flex items-center gap-1"><Brain className="w-3 h-3" /> 决策中心</Link>
-              </nav>
+      <AppTopNav
+        activeSection="analytics"
+        title="绩效分析"
+        subtitle="模拟盘收益、回撤与归因"
+        rightSlot={
+          <div className="flex items-center gap-3 flex-wrap">
               {/* 回放会话选择器 - Session Selector */}
               <div className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground hidden sm:inline">查看会话:</span>
@@ -620,25 +620,19 @@ function AnalyticsContent() {
                     : "bg-gray-50 border-gray-300 text-gray-600 hover:bg-gray-100"
                 }`}
               >
-                {showMockData ? "隐藏演示数据" : "显示演示数据"}
+                {showMockData ? "隐藏示例数据" : "显示示例数据（非真实）"}
               </button>
               <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-foreground" onClick={fetchData}>
                 <RefreshCw className={`w-3 h-3 mr-1 ${loading ? "animate-spin" : ""}`} /> 刷新
               </Button>
-              <Link href="/replay">
-                <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-foreground">
-                  <Clock className="w-3 h-3 mr-1" /> 历史回放
-                </Button>
-              </Link>
               <Link href="/trades">
                 <Button variant="outline" size="sm" className="h-8 text-xs border-blue-500/30 text-blue-400 hover:bg-blue-500/10">
                   交易流水
                 </Button>
               </Link>
-            </div>
           </div>
-        </div>
-      </header>
+        }
+      />
 
       <main className="container mx-auto px-4 py-6 space-y-6">
         {/* 选中会话的信息横幅 - Session Info Banner */}
@@ -677,6 +671,41 @@ function AnalyticsContent() {
             <span className="text-sm">加载会话指标中...</span>
           </div>
         ) : (
+        <>
+        {shouldHideRatioMetrics && (
+          <div className="rounded-2xl border border-amber-500/25 bg-amber-500/10 p-4 text-sm text-amber-100">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+              <div>
+                <p className="font-semibold">年化类指标暂不展示</p>
+                <p className="mt-1 leading-6 text-amber-100/80">{ratioUnavailableReason}</p>
+                <p className="mt-1 leading-6 text-amber-100/70">
+                  当前页面仍展示总收益、最大回撤、交易次数、当前权益等可解释指标；如果看到过异常权益，请先回到模拟盘确认当前余额和持仓。
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+        {usingLivePaperEquity && (
+          <div className="rounded-2xl border border-sky-500/25 bg-sky-500/10 p-4 text-sm text-sky-100">
+            <div className="flex items-start gap-3">
+              <Wallet className="mt-0.5 h-4 w-4 shrink-0 text-sky-300" />
+              <div>
+                <p className="font-semibold">当前权益已按模拟账户实时重算</p>
+                <p className="mt-1 leading-6 text-sky-100/80">
+                  绩效页现在使用当前虚拟现金 {formatMoney(activeMetrics?.live_equity?.cash_balance, true)}
+                  {activeMetrics?.live_equity?.position_value != null ? ` + 当前持仓价值 ${formatMoney(activeMetrics.live_equity.position_value, true)}` : ""}
+                  ，不再直接采用旧权益快照最后一行。
+                </p>
+                {hasEquitySnapshotMismatch && (
+                  <p className="mt-1 leading-6 text-sky-100/70">
+                    检测到旧快照与当前模拟账户差异约 {equityMismatchPct?.toFixed(2)}%，旧快照可能来自历史测试或异常补数。
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
           <Card className="bg-card border-border">
             <CardContent className="p-4">
@@ -696,9 +725,10 @@ function AnalyticsContent() {
                 <TrendingUp className="w-4 h-4 text-muted-foreground" />
                 <p className="text-xs text-muted-foreground">年化收益率</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.annualized_return == null ? "text-muted-foreground" : (activeMetrics.annualized_return >= 0 ? "text-green-400" : "text-red-400")}`}>
-                {formatPct(activeMetrics?.annualized_return, true)}
+              <p className={`text-2xl font-bold ${shouldHideRatioMetrics || activeMetrics?.annualized_return == null ? "text-muted-foreground" : (activeMetrics.annualized_return >= 0 ? "text-green-400" : "text-red-400")}`}>
+                {formatRatioPct(activeMetrics?.annualized_return)}
               </p>
+              {shouldHideRatioMetrics && <p className="mt-1 text-[11px] text-muted-foreground">避免短样本年化放大</p>}
             </CardContent>
           </Card>
 
@@ -708,9 +738,10 @@ function AnalyticsContent() {
                 <Zap className="w-4 h-4 text-blue-400" />
                 <p className="text-xs text-muted-foreground">夏普比率</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.sharpe_ratio == null ? "text-muted-foreground" : "text-blue-400"}`}>
-                {activeMetrics?.sharpe_ratio != null ? activeMetrics.sharpe_ratio.toFixed(2) : "N/A"}
+              <p className={`text-2xl font-bold ${shouldHideRatioMetrics || activeMetrics?.sharpe_ratio == null ? "text-muted-foreground" : "text-blue-400"}`}>
+                {formatRatioMetric(activeMetrics?.sharpe_ratio)}
               </p>
+              {shouldHideRatioMetrics && <p className="mt-1 text-[11px] text-muted-foreground">需要更长收益序列</p>}
             </CardContent>
           </Card>
 
@@ -768,9 +799,10 @@ function AnalyticsContent() {
                 <TrendingUp className="w-4 h-4 text-cyan-400" />
                 <p className="text-xs text-muted-foreground">卡玛比率</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.calmar_ratio == null ? "text-muted-foreground" : "text-cyan-400"}`}>
-                {activeMetrics?.calmar_ratio != null ? activeMetrics.calmar_ratio.toFixed(2) : "N/A"}
+              <p className={`text-2xl font-bold ${shouldHideRatioMetrics || activeMetrics?.calmar_ratio == null ? "text-muted-foreground" : "text-cyan-400"}`}>
+                {formatRatioMetric(activeMetrics?.calmar_ratio)}
               </p>
+              {shouldHideRatioMetrics && <p className="mt-1 text-[11px] text-muted-foreground">需要稳定年化收益</p>}
             </CardContent>
           </Card>
 
@@ -780,9 +812,10 @@ function AnalyticsContent() {
                 <TrendingDown className="w-4 h-4 text-indigo-400" />
                 <p className="text-xs text-muted-foreground">Sortino 比率</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.sortino_ratio == null ? "text-muted-foreground" : "text-indigo-400"}`}>
-                {activeMetrics?.sortino_ratio != null ? activeMetrics.sortino_ratio.toFixed(2) : "N/A"}
+              <p className={`text-2xl font-bold ${shouldHideRatioMetrics || activeMetrics?.sortino_ratio == null ? "text-muted-foreground" : "text-indigo-400"}`}>
+                {formatRatioMetric(activeMetrics?.sortino_ratio)}
               </p>
+              {shouldHideRatioMetrics && <p className="mt-1 text-[11px] text-muted-foreground">下行样本不足</p>}
             </CardContent>
           </Card>
 
@@ -792,9 +825,10 @@ function AnalyticsContent() {
                 <Activity className="w-4 h-4 text-pink-400" />
                 <p className="text-xs text-muted-foreground">波动率</p>
               </div>
-              <p className={`text-2xl font-bold ${activeMetrics?.volatility == null ? "text-muted-foreground" : "text-pink-400"}`}>
-                {activeMetrics?.volatility != null ? `${activeMetrics.volatility.toFixed(2)}%` : "N/A"}
+              <p className={`text-2xl font-bold ${shouldHideRatioMetrics || activeMetrics?.volatility == null ? "text-muted-foreground" : "text-pink-400"}`}>
+                {shouldHideRatioMetrics || activeMetrics?.volatility == null ? ratioUnavailableLabel : `${activeMetrics.volatility.toFixed(2)}%`}
               </p>
+              {shouldHideRatioMetrics && <p className="mt-1 text-[11px] text-muted-foreground">不做短样本年化</p>}
             </CardContent>
           </Card>
 
@@ -822,6 +856,7 @@ function AnalyticsContent() {
             </CardContent>
           </Card>
         </div>
+        </>
         )}
 
         {/* Charts Row */}
@@ -838,14 +873,14 @@ function AnalyticsContent() {
               <p className="text-sm font-medium text-yellow-900">当前无真实交易数据</p>
               <p className="text-xs text-yellow-700 mt-1">
                 请先运行模拟盘、回测或历史回放，真实数据将自动显示在图表中。
-                可在右上角开启"显示演示数据"查看模拟数据。
+                可在页面顶部开启“显示示例数据（非真实）”查看界面效果。
               </p>
             </div>
             <button
               onClick={() => setShowMockData(true)}
               className="text-xs text-yellow-800 hover:text-yellow-900 underline"
             >
-              查看演示数据
+              查看示例数据
             </button>
           </div>
         )}
@@ -1607,11 +1642,15 @@ function AnalyticsContent() {
                 </div>
                 <div className="p-3 bg-secondary/50 rounded-lg">
                   <p className="text-xs text-muted-foreground mb-1">Sortino比率</p>
-                  <p className="text-lg font-bold text-blue-400">{(activeMetrics?.sortino_ratio || 0).toFixed(2)}</p>
+                  <p className={`text-lg font-bold ${shouldHideRatioMetrics ? "text-muted-foreground" : "text-blue-400"}`}>
+                    {formatRatioMetric(activeMetrics?.sortino_ratio)}
+                  </p>
                 </div>
                 <div className="p-3 bg-secondary/50 rounded-lg">
                   <p className="text-xs text-muted-foreground mb-1">年化波动率</p>
-                  <p className="text-lg font-bold text-foreground/80">{(activeMetrics?.volatility || 0).toFixed(2)}%</p>
+                  <p className={`text-lg font-bold ${shouldHideRatioMetrics ? "text-muted-foreground" : "text-foreground/80"}`}>
+                    {shouldHideRatioMetrics || activeMetrics?.volatility == null ? ratioUnavailableLabel : `${activeMetrics.volatility.toFixed(2)}%`}
+                  </p>
                 </div>
               </div>
             </CardContent>

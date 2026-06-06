@@ -26,7 +26,7 @@ class OrderRequest(BaseModel):
     price: Optional[float] = None            # If None, fetch real-time price
     exchange_id: Literal[
         "binance", "okx", "bybit", "gateio", "bitget", "coinbase", "kraken"
-    ] = "binance"                            # Target exchange for simulated trading
+    ] = "okx"                                # Target exchange for simulated trading
 
 
 class OrderResponse(BaseModel):
@@ -97,7 +97,7 @@ async def get_orders(
 
 @router.get("/positions")
 async def get_positions(
-    exchange_id: Optional[str] = Query("binance", description="交易所 ID，用于获取实时价格计算持仓盈亏"),
+    exchange_id: Optional[str] = Query("okx", description="交易所 ID，用于获取实时价格计算持仓盈亏"),
 ):
     """
     Get current open positions with real-time PnL.
@@ -126,7 +126,7 @@ async def get_positions(
 
 @router.post("/positions/close-all")
 async def close_all_positions(
-    exchange_id: Optional[str] = Query("binance", description="交易所 ID"),
+    exchange_id: Optional[str] = Query("okx", description="交易所 ID"),
 ):
     """Close every open position at current market price."""
     positions_raw = await paper_trading_service.get_positions(exchange_id=exchange_id)
@@ -158,7 +158,7 @@ async def get_balance():
 
 @router.get("/risk-status")
 async def get_risk_status(
-    exchange_id: Optional[str] = Query("binance", description="交易所 ID"),
+    exchange_id: Optional[str] = Query("okx", description="交易所 ID"),
 ):
     """Get current account risk metrics and status."""
     from app.services.risk_manager import risk_manager

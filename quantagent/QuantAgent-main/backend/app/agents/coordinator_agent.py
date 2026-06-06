@@ -28,7 +28,9 @@ from app.agents.base_agent import AgentSignal, SignalType
 from app.agents.trend_agent import TrendAgent
 from app.agents.mean_reversion_agent import MeanReversionAgent
 from app.agents.risk_agent import RiskAgent
+from app.core.config import settings
 from app.models.db_models import CoordinationHistoryDB
+from app.models.instrument import Instrument
 from app.services.llm.base import LLMFactory
 from app.services.database import get_db
 from sqlalchemy import text as sql_text
@@ -164,15 +166,23 @@ class CoordinatorAgent:
     def __init__(
         self,
         provider_name: Optional[str] = None,
-        use_tradingagents: bool = False,
+        use_tradingagents: Optional[bool] = None,
         fast_mode: bool = False,
     ):
-        self.use_tradingagents = use_tradingagents
+        self.use_tradingagents = (
+            settings.USE_TRADINGAGENTS
+            if use_tradingagents is None
+            else use_tradingagents
+        )
         self.fast_mode = fast_mode
         self.trend_agent = TrendAgent(provider_name)
         self.mr_agent = MeanReversionAgent(provider_name)
         self.risk_agent = RiskAgent(provider_name)
-        self.llm = LLMFactory.create_provider(provider_name)
+        try:
+            self.llm = LLMFactory.create_provider(provider_name)
+        except Exception as e:
+            logger.warning(f"[coordinator] LLM provider unavailable, using deterministic fallback: {e}")
+            self.llm = None
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -187,30 +197,30 @@ class CoordinatorAgent:
 
         In fast_mode, skips the 3-round debate (saves ~3 LLM calls).
         """
+        instrument = Instrument.from_raw(symbol)
+        canonical_symbol = instrument.symbol
+
         # ── TradingAgents path ─────────────────────────────────────────────
         if self.use_tradingagents:
             try:
-                from app.agents.tradingagents_adapter import tradingagents_adapter, _TA_AVAILABLE
-                if _TA_AVAILABLE:
-                    ctx = await self._load_analysis_context(symbol, interval)
-                    market_data = {"symbol": symbol, "interval": interval}
-                    macro_context = self._extract_macro_context(ctx)
-                    signal_events = ctx.get("recent_signals", [])
-                    result = await tradingagents_adapter.run_analysis(
-                        symbol=symbol,
-                        market_data=market_data,
-                        signal_events=signal_events,
-                        macro_context=macro_context,
-                    )
-                    if result is not None:
-                        result.data_source = "tradingagents"
-                        await self._persist_result(result)
-                        return result
+                from app.agents.tradingagents_adapter import tradingagents_adapter
+
+                ctx = await self._load_analysis_context(canonical_symbol, interval)
+                result = await tradingagents_adapter.run_analysis(
+                    symbol=canonical_symbol,
+                    interval=interval,
+                    analysis_context=ctx,
+                    fast=self.fast_mode,
+                )
+                if result is not None:
+                    result.symbol = canonical_symbol
+                    await self._persist_result(result)
+                    return result
             except Exception as e:
                 logger.warning(f"[coordinator] TradingAgents fallback: {e}")
 
         # ── PRD 10.4 standard path ─────────────────────────────────────────
-        return await self._coordinate_prd104(symbol, interval)
+        return await self._coordinate_prd104(canonical_symbol, interval)
 
     async def _coordinate_prd104(
         self,
@@ -218,6 +228,8 @@ class CoordinatorAgent:
         interval: str,
     ) -> CoordinationResult:
         """PRD 10.4 decision pipeline: context → 4 roles → debate → decision."""
+        symbol = Instrument.from_raw(symbol).symbol
+
         # Step 1: Load AnalysisContext
         ctx = await self._load_analysis_context(symbol, interval)
 
@@ -315,6 +327,8 @@ class CoordinatorAgent:
 
         Returns the agent payload dict (same as AnalysisContext.to_agent_payload()).
         """
+        symbol = Instrument.from_raw(symbol).symbol
+
         try:
             from app.services.analysis_context_builder import analysis_context_builder
 
@@ -646,9 +660,9 @@ Respond STRICTLY in the format specified. Use Chinese for reasoning text."""
     def _default_role_opinion(self, role: str) -> RoleOpinion:
         return RoleOpinion(
             role=role,
-            opinion="neutral",
+            opinion="wait" if role == "risk" else "neutral",
             confidence=0.3,
-            risk_flag=True,
+            risk_flag=False,
             reasoning=f"[{role}] LLM 不可用，返回默认判断",
         )
 
@@ -1021,6 +1035,7 @@ DECISION_REASONING: <裁决理由>
         interval: str = "1h",
     ) -> AsyncGenerator[str, None]:
         """Stream the PRD 10.4 decision process step-by-step."""
+        symbol = Instrument.from_raw(symbol).symbol
         yield f"## PRD 10.4 多 Agent 协作分析: {symbol}\n\n"
 
         # Load context

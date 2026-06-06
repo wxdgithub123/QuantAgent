@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { Suspense, useEffect, useState, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -65,27 +65,6 @@ interface MonitorData {
   totalAllocation: number;
 }
 
-// ─── Mock Data ────────────────────────────────────────────────────────────────
-const MOCK_DATA: MonitorData = {
-  dimensions: [
-    { subject: "动量 (Momentum)", score: 85, fullMark: 100 },
-    { subject: "均值回归 (Reversion)", score: 65, fullMark: 100 },
-    { subject: "波动率 (Volatility)", score: 90, fullMark: 100 },
-    { subject: "成交量 (Volume)", score: 70, fullMark: 100 },
-    { subject: "市场情绪 (Sentiment)", score: 80, fullMark: 100 },
-  ],
-  weights: [
-    { name: "双均线 (MA)", value: 35, fill: "#3b82f6" },
-    { name: "RSI 振荡器", value: 20, fill: "#8b5cf6" },
-    { name: "MACD 信号", value: 25, fill: "#10b981" },
-    { name: "布林带 (BOLL)", value: 10, fill: "#06b6d4" },
-    { name: "ATR 趋势", value: 10, fill: "#f43f5e" },
-  ],
-  lastUpdated: new Date().toISOString(),
-  activeCount: 5,
-  totalAllocation: 100000,
-};
-
 // ─── Helper Functions ─────────────────────────────────────────────────────────
 const getScoreStatus = (score: number): "running" | "warning" | "danger" => {
   if (score >= 60) return "running";
@@ -117,7 +96,7 @@ const getStatusBadge = (status: "running" | "warning" | "danger") => {
 };
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
-export default function StrategyMonitorPage() {
+function StrategyMonitorContent() {
   const [data, setData] = useState<MonitorData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -200,8 +179,7 @@ export default function StrategyMonitorPage() {
       } else {
         setError(`后端接口尚未就绪：${err instanceof Error ? err.message : "未知错误"}`);
       }
-      // Fallback to mock data for UI demonstration
-      setData(MOCK_DATA);
+      setData(null);
     } finally {
       setLoading(false);
     }
@@ -654,5 +632,13 @@ export default function StrategyMonitorPage() {
         onConfirmEliminate={handleConfirmEliminate}
       />
     </div>
+  );
+}
+
+export default function StrategyMonitorPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
+      <StrategyMonitorContent />
+    </Suspense>
   );
 }

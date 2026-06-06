@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QuantAgent PRD v1 完成总结</title>
+  <style>
+    :root {
+      --bg: #07111f;
+      --bg2: #0d1727;
+      --card: rgba(10, 18, 32, 0.88);
+      --card-2: rgba(15, 24, 41, 0.96);
+      --border: rgba(148, 163, 184, 0.18);
+      --text: #e5eefc;
+      --muted: #a7b4c9;
+      --good: #4ade80;
+      --good-bg: rgba(74, 222, 128, 0.12);
+      --warn: #fbbf24;
+      --warn-bg: rgba(251, 191, 36, 0.12);
+      --accent: #38bdf8;
+      --accent-bg: rgba(56, 189, 248, 0.12);
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.18), transparent 26%),
+        radial-gradient(circle at top right, rgba(74, 222, 128, 0.12), transparent 24%),
+        linear-gradient(180deg, var(--bg) 0%, var(--bg2) 100%);
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+
+    a { color: #7dd3fc; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .wrap {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+    }
+
+    .hero {
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 28px;
+      background: linear-gradient(135deg, rgba(14, 26, 46, 0.95), rgba(7, 17, 31, 0.92));
+      box-shadow: var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -80px -120px auto;
+      width: 280px;
+      height: 280px;
+      background: radial-gradient(circle, rgba(56, 189, 248, 0.16), transparent 68%);
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.13);
+      color: #bae6fd;
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 14px 0 10px;
+      font-size: clamp(28px, 4vw, 46px);
+      line-height: 1.1;
+    }
+
+    .lead {
+      margin: 0;
+      max-width: 980px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .meta-grid,
+    .card-grid {
+      display: grid;
+      gap: 16px;
+    }
+
+    .meta-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-top: 22px;
+    }
+
+    .meta-card,
+    .panel,
+    .mini-card {
+      border: 1px solid var(--border);
+      background: var(--card);
+      border-radius: 20px;
+      box-shadow: 0 12px 38px rgba(0, 0, 0, 0.22);
+    }
+
+    .meta-card {
+      padding: 18px;
+    }
+
+    .meta-label {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .meta-value {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .meta-note {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .status-good { color: var(--good); }
+    .status-warn { color: var(--warn); }
+    .status-accent { color: var(--accent); }
+
+    .section {
+      margin-top: 24px;
+    }
+
+    .panel {
+      padding: 22px;
+      background: var(--card-2);
+    }
+
+    .section h2 {
+      margin: 0 0 12px;
+      font-size: 22px;
+    }
+
+    .section p.section-desc {
+      margin: 0 0 18px;
+      color: var(--muted);
+    }
+
+    .card-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .mini-card {
+      padding: 18px;
+      background: rgba(12, 20, 35, 0.96);
+    }
+
+    .mini-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .mini-title h3 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .pill.ok {
+      color: var(--good);
+      background: var(--good-bg);
+      border: 1px solid rgba(74, 222, 128, 0.22);
+    }
+
+    .pill.check {
+      color: var(--warn);
+      background: var(--warn-bg);
+      border: 1px solid rgba(251, 191, 36, 0.22);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      background: rgba(6, 13, 24, 0.75);
+    }
+
+    th, td {
+      padding: 14px 12px;
+      vertical-align: top;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+      font-size: 14px;
+    }
+
+    th {
+      text-align: left;
+      color: #c9d7eb;
+      background: rgba(18, 30, 49, 0.96);
+      font-size: 13px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    .status-cell {
+      white-space: nowrap;
+      font-weight: 700;
+    }
+
+    .status-ok {
+      color: var(--good);
+    }
+
+    .list {
+      margin: 0;
+      padding-left: 20px;
+      color: var(--text);
+    }
+
+    .list li {
+      margin: 6px 0;
+    }
+
+    .code-block {
+      margin: 0;
+      padding: 16px 18px;
+      background: #07101e;
+      color: #dbeafe;
+      border-radius: 16px;
+      border: 1px solid rgba(125, 211, 252, 0.15);
+      overflow: auto;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .link-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .link-card {
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: rgba(8, 17, 30, 0.78);
+      border: 1px solid rgba(148, 163, 184, 0.16);
+    }
+
+    .footnote {
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 12px;
+    }
+
+    .timeline-item {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 14px;
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: rgba(8, 16, 29, 0.72);
+      border: 1px solid rgba(148, 163, 184, 0.14);
+    }
+
+    .timeline-label {
+      color: #c4d4e8;
+      font-weight: 700;
+    }
+
+    .timeline-detail {
+      color: var(--muted);
+    }
+
+    .summary-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 12px;
+      padding: 9px 12px;
+      border-radius: 999px;
+      background: rgba(74, 222, 128, 0.12);
+      border: 1px solid rgba(74, 222, 128, 0.25);
+      color: #bbf7d0;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .small {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    @media (max-width: 980px) {
+      .meta-grid,
+      .card-grid,
+      .link-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .timeline-item {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="hero">
+      <span class="eyebrow">QuantAgent PRD v1 / 交付总结</span>
+      <h1>量化研究平台 PRD v1 已完成主流程打通</h1>
+      <p class="lead">
+        这份页面是对当前分支的详细总结，覆盖 PRD 文档中的 10.1 - 10.6 全链路。
+        现在的状态不是“只有页面能看”，而是已经完成可运行、可验收、可回放、可审计的本地闭环。
+      </p>
+      <div class="summary-badge">当前结论：PRD 主流程已跑通，自动验收已通过</div>
+
+      <div class="meta-grid">
+        <div class="meta-card">
+          <p class="meta-label">Git 分支</p>
+          <p class="meta-value">prd10-4-stabilize</p>
+          <p class="meta-note">已推送到 origin</p>
+        </div>
+        <div class="meta-card">
+          <p class="meta-label">最新提交</p>
+          <p class="meta-value">8990a67</p>
+          <p class="meta-note">Add PRD data source management page</p>
+        </div>
+        <div class="meta-card">
+          <p class="meta-label">PRD 总状态</p>
+          <p class="meta-value status-good">OK</p>
+          <p class="meta-note">/api/v1/system/prd-flow 返回 overall_status=ok</p>
+        </div>
+        <div class="meta-card">
+          <p class="meta-label">本地验收</p>
+          <p class="meta-value status-good">PASS</p>
+          <p class="meta-note">write-checks 已通过</p>
+        </div>
+      </div>
+    </header>
+
+    <section class="section panel">
+      <h2>一、结论摘要</h2>
+      <p class="section-desc">
+        当前实现已经覆盖 PRD 要求的主链路：OpenBB/FRED 数据入口、统一标准化与存储、因子/信号生成、
+        TradingAgents 决策、回测/回放/审计、以及前端/API 可见性。
+      </p>
+      <div class="card-grid">
+        <div class="mini-card">
+          <div class="mini-title">
+            <h3>主流程完成度</h3>
+            <span class="pill ok">100%</span>
+          </div>
+          <p class="small">
+            按 PRD 第一阶段验收口径，已经是“可以接上、可以验收、可以演示”的状态。
+          </p>
+        </div>
+        <div class="mini-card">
+          <div class="mini-title">
+            <h3>生产化加固</h3>
+            <span class="pill check">后续增强</span>
+          </div>
+          <p class="small">
+            还建议继续补权限、密钥管理、告警监控、长跑稳定性和实盘风控，不影响当前 PRD 验收。
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <h2>二、PRD 流程覆盖情况</h2>
+      <p class="section-desc">下面按 PRD 的 10.1 - 10.6 逐项对照当前实现。</p>
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 12%">章节</th>
+            <th style="width: 18%">状态</th>
+            <th style="width: 30%">实现内容</th>
+            <th>当前证据</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>10.1</td>
+            <td class="status-cell status-ok">已完成</td>
+            <td>数据入口与接入层</td>
+            <td>OpenBB SDK 可用，FRED 通过 OpenBB 接入，crypto market data 与 SPY equity 均可读。</td>
+          </tr>
+          <tr>
+            <td>10.2</td>
+            <td class="status-cell status-ok">已完成</td>
+            <td>标准化与存储</td>
+            <td>ClickHouse、PostgreSQL、Redis、NATS 在线，Parquet 归档文件存在且可写。</td>
+          </tr>
+          <tr>
+            <td>10.3</td>
+            <td class="status-cell status-ok">已完成</td>
+            <td>因子与信号</td>
+            <td>FactorSignalPipeline、AnalysisContextBuilder、NewsEnrichmentService 已可用，因子与信号有持续累计数据。</td>
+          </tr>
+          <tr>
+            <td>10.4</td>
+            <td class="status-cell status-ok">已完成</td>
+            <td>TradingAgents 决策</td>
+            <td>CoordinatorAgent 与独立 TradingAgents 服务健康，决策审计历史已落库。</td>
+          </tr>
+          <tr>
+            <td>10.5</td>
+            <td class="status-cell status-ok">已完成</td>
+            <td>回测 / 回放 / 审计</td>
+            <td>回测结果与 replay session 可创建并关联，支持 point-in-time 复盘。</td>
+          </tr>
+          <tr>
+            <td>10.6</td>
+            <td class="status-cell status-ok">已完成</td>
+            <td>前端 / API 视图</td>
+            <td>Dashboard、Data Sources、Signals、Decisions、Replay、Backtest 页面都已纳入验收。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section panel">
+      <h2>三、最新验证结果</h2>
+      <p class="section-desc">以下是最近一次 `write-checks` 的结果，代表本地闭环已经通过。</p>
+      <pre class="code-block">[PASS] prd_health: L1/L4/L5/L6/infrastructure healthy
+[PASS] l1_data: crypto_tickers=6, headlines=12, macro=6, equity=SPY@750.4600219726562
+[PASS] standard_storage: 30 symbol/interval rows ok
+[PASS] prd_flow_api: 6 PRD stages ok
+[PASS] l5_signal_context: bars=120, factors=1767, signals=961, news=20, macro=30
+[PASS] l6_decision_audit: default=WAIT, tradingagents=WAIT, history_rows=5
+[PASS] replay_backtest_readiness: templates=8, replay_range=2026-04-28T18:00:00..2026-05-28T09:00:00
+[PASS] frontend_visibility: pages=/dashboard,/data-sources,/signals,/decisions,/replay,/backtest
+[PASS] parquet_archive_write: rows=360, files=16, path=data/market
+[PASS] replay_backtest_write: backtest_id=10, replay_session_id=REPLAY_20260528_8c3178, final_capital=9545.070200372997</pre>
+      <p class="footnote">
+        最新状态接口：<a href="http://127.0.0.1:3002/api/v1/system/prd-flow" target="_blank" rel="noreferrer">/api/v1/system/prd-flow</a>
+      </p>
+    </section>
+
+    <section class="section panel">
+      <h2>四、当前运行时关键数据</h2>
+      <div class="card-grid">
+        <div class="mini-card">
+          <div class="mini-title">
+            <h3>数据入口</h3>
+            <span class="pill ok">OK</span>
+          </div>
+          <ul class="list">
+            <li>OpenBB provider：yfinance</li>
+            <li>FRED 指标：FEDFUNDS / DGS10 / T10YIE / M2SL</li>
+            <li>SPY equity：约 750.46</li>
+            <li>BTC/USDT market data：可读</li>
+          </ul>
+        </div>
+        <div class="mini-card">
+          <div class="mini-title">
+            <h3>加工与存储</h3>
+            <span class="pill ok">OK</span>
+          </div>
+          <ul class="list">
+            <li>factor_snapshots：26454</li>
+            <li>signal_events：13094</li>
+            <li>coordination_history：41</li>
+            <li>backtest_results：10，replay_sessions：8</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <h2>五、关键页面与接口</h2>
+      <p class="section-desc">这些是你现在可以直接点开验收的入口。</p>
+      <div class="link-grid">
+        <div class="link-card"><strong>Dashboard</strong><br /><a href="http://127.0.0.1:3002/dashboard" target="_blank" rel="noreferrer">http://127.0.0.1:3002/dashboard</a></div>
+        <div class="link-card"><strong>Data Sources</strong><br /><a href="http://127.0.0.1:3002/data-sources" target="_blank" rel="noreferrer">http://127.0.0.1:3002/data-sources</a></div>
+        <div class="link-card"><strong>Signals</strong><br /><a href="http://127.0.0.1:3002/signals" target="_blank" rel="noreferrer">http://127.0.0.1:3002/signals</a></div>
+        <div class="link-card"><strong>Decisions</strong><br /><a href="http://127.0.0.1:3002/decisions" target="_blank" rel="noreferrer">http://127.0.0.1:3002/decisions</a></div>
+        <div class="link-card"><strong>Replay</strong><br /><a href="http://127.0.0.1:3002/replay" target="_blank" rel="noreferrer">http://127.0.0.1:3002/replay</a></div>
+        <div class="link-card"><strong>Backtest</strong><br /><a href="http://127.0.0.1:3002/backtest" target="_blank" rel="noreferrer">http://127.0.0.1:3002/backtest</a></div>
+        <div class="link-card"><strong>PRD Flow API</strong><br /><a href="http://127.0.0.1:3002/api/v1/system/prd-flow" target="_blank" rel="noreferrer">http://127.0.0.1:3002/api/v1/system/prd-flow</a></div>
+        <div class="link-card"><strong>GitHub Repo</strong><br /><a href="https://github.com/wxdgithub123/QuantAgent" target="_blank" rel="noreferrer">https://github.com/wxdgithub123/QuantAgent</a></div>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <h2>六、做到了什么，没做满什么</h2>
+      <div class="timeline">
+        <div class="timeline-item">
+          <div class="timeline-label">已做到</div>
+          <div class="timeline-detail">PRD 第一阶段的研究与决策底座已经闭环，数据入口、标准化、因子、决策、回测、回放、审计、前端可见性都能连续跑通。</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-label">已验证</div>
+          <div class="timeline-detail">自动验收脚本不是空跑，而是真的会写入回测结果和 replay session，再把结果回写到统计里。</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-label">待增强</div>
+          <div class="timeline-detail">如果要走向生产实盘，还建议继续补权限控制、密钥管理、告警监控、重试策略、长期稳定性和交易风控。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <h2>七、使用说明</h2>
+      <p class="section-desc">
+        这份 HTML 是一个静态总结页，适合直接打开给同事看，或作为里程碑说明文档。
+        如果后端或前端继续改动，建议重新跑一次 `backend/scripts/prd_v1_acceptance.py --write-checks`
+        再更新这份页面里的关键数字。
+      </p>
+      <p class="footnote">
+        本页生成时的工作区状态：`prd10-4-stabilize` 分支干净，最新提交已推送到远端。
+      </p>
+    </section>
+  </div>
+</body>
+</html>

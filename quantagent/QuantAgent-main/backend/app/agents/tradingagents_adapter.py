@@ -1,209 +1,242 @@
-"""
-TradingAgents Adapter — L6 multi-round debate decision layer.
+"""HTTP adapter for the isolated TradingAgents service.
 
-Wraps the ``tradingagents`` library's LangGraph-based multi-agent framework
-and maps its output to the existing ``CoordinationResult`` dataclass.
-
-Architecture (5 stages, 13+ agents):
-  1. Analyst Team (parallel): Fundamentals, Sentiment, News, Technical
-  2. Research Team: Bull vs Bear researcher debate (configurable rounds)
-  3. Trading Agent: Position sizing and execution strategy
-  4. Risk Agent: Aggressive/Conservative/Neutral perspectives
-  5. Portfolio Manager: Final capital allocation decision
-
-Graceful degradation:
-  - If ``tradingagents`` is not installed, ``available = False``.
-  - ``CoordinatorAgent`` falls back to existing 3-agent parallel voting.
+TradingAgents is intentionally not imported in the main backend. Its current
+dependency tree can require pandas 3.x, while the OpenBB data-entry backend is
+kept on the verified pandas 2.x stack. This adapter preserves that boundary:
+the backend builds the PRD AnalysisContext, sends it to the isolated service,
+and maps the response back to the existing CoordinationResult contract.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import aiohttp
+
 from app.agents.base_agent import SignalType
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# ── Lazy import of tradingagents ────────────────────────────────────────────────
 
-_TA_GRAPH = None
-_TA_AVAILABLE = False
+def _normalize_decision(value: Any) -> str:
+    decision = str(value or "WAIT").upper()
+    if decision in {"BUY", "LONG"}:
+        return "BUY"
+    if decision in {"SELL", "SHORT"}:
+        return "SELL"
+    return "WAIT"
 
 
-def _try_import_tradingagents() -> bool:
-    """Attempt to import TradingAgentsGraph. Returns True on success."""
-    global _TA_GRAPH, _TA_AVAILABLE
-    if _TA_GRAPH is not None:
-        return _TA_AVAILABLE
+def _safe_float(value: Any, default: float = 0.5) -> float:
     try:
-        from tradingagents.graph.trading_graph import TradingAgentsGraph
-
-        _TA_GRAPH = TradingAgentsGraph
-        _TA_AVAILABLE = True
-        logger.info("TradingAgents library loaded successfully")
-        return True
-    except ImportError:
-        _TA_AVAILABLE = False
-        logger.warning(
-            "TradingAgents library not installed. "
-            "L6 will use existing CoordinatorAgent (3-agent parallel voting). "
-            "Install with: pip install tradingagents"
-        )
-        return False
-
-
-# ── Adapter class ───────────────────────────────────────────────────────────────
+        return float(value)
+    except Exception:
+        return default
 
 
 class TradingAgentsAdapter:
-    """Adapter wrapping TradingAgentsGraph's multi-stage debate.
+    """Remote client for ``tradingagents-service``."""
 
-    Maps its output (decision, confidence, reasoning) to the existing
-    ``CoordinationResult`` format so the downstream execution layer
-    is unchanged regardless of which L6 implementation is active.
-    """
-
-    available: bool = _TA_AVAILABLE
+    available: bool = True
 
     def __init__(
         self,
-        quick_think_llm: str = "gpt-4o-mini",
-        deep_think_llm: str = "gpt-4o",
-        max_debate_rounds: int = 2,
-        enable_chinese_llm: bool = False,
+        service_url: Optional[str] = None,
+        timeout_seconds: Optional[float] = None,
     ):
-        self.quick_think_llm = quick_think_llm
-        self.deep_think_llm = deep_think_llm
-        self.max_debate_rounds = max_debate_rounds
-        self.graph: Optional[Any] = None
-        self._initialized = False
-
-        if not _try_import_tradingagents():
-            return
-
-        try:
-            self._init_graph(enable_chinese_llm)
-        except Exception as e:
-            logger.error(f"TradingAgentsGraph init failed: {e}")
-            self.graph = None
-
-    def _init_graph(self, enable_chinese_llm: bool = False):
-        """Build the TradingAgents graph with LLM configuration."""
-        config: Dict[str, Any] = {
-            "quick_think_llm": self.quick_think_llm,
-            "deep_think_llm": self.deep_think_llm,
-            "max_debate_rounds": self.max_debate_rounds,
-            "online_tools": False,  # Use our own data pipeline
-        }
-
-        if enable_chinese_llm:
-            from app.core.config import settings
-
-            dashscope_key = getattr(settings, "DASHSCOPE_API_KEY", None) or ""
-            if dashscope_key:
-                import os
-                os.environ["DASHSCOPE_API_KEY"] = dashscope_key
-            config.update(
-                {
-                    "llm_provider": "dashscope",
-                    "deep_think_llm": "qwen-max",
-                    "quick_think_llm": "qwen-plus",
-                }
-            )
-
-        self.graph = _TA_GRAPH(config=config, debug=False)
-        self._initialized = True
-        logger.info(
-            f"TradingAgentsGraph initialized "
-            f"(quick={config['quick_think_llm']}, deep={config['deep_think_llm']})"
+        self.service_url = (service_url or settings.TRADINGAGENTS_SERVICE_URL).rstrip("/")
+        self.timeout_seconds = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else settings.TRADINGAGENTS_TIMEOUT_SECONDS
         )
 
-    # ── Main entry point ───────────────────────────────────────────────────
+    async def health(self) -> Dict[str, Any]:
+        """Return service health, or an unavailable status when unreachable."""
+        url = f"{self.service_url}/health"
+        timeout = aiohttp.ClientTimeout(total=min(float(self.timeout_seconds), 10.0))
+        try:
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
+                async with session.get(url) as resp:
+                    data = await resp.json(content_type=None)
+                    return {
+                        "status": "ok" if resp.status == 200 else "error",
+                        "service_url": self.service_url,
+                        "http_status": resp.status,
+                        "detail": data,
+                    }
+        except Exception as exc:
+            return {
+                "status": "unavailable",
+                "service_url": self.service_url,
+                "detail": str(exc)[:200],
+            }
+
+    async def native_preview(self, symbol: str, interval: str = "1h") -> Dict[str, Any]:
+        """Return the native upstream TradingAgentsGraph sandbox preview."""
+        url = f"{self.service_url}/native/preview/{symbol}"
+        timeout = aiohttp.ClientTimeout(total=min(float(self.timeout_seconds), 10.0))
+        try:
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
+                async with session.get(url, params={"interval": interval}) as resp:
+                    data = await resp.json(content_type=None)
+                    return {
+                        "status": "ok" if resp.status == 200 else "error",
+                        "service_url": self.service_url,
+                        "http_status": resp.status,
+                        "detail": data,
+                    }
+        except Exception as exc:
+            return {
+                "status": "unavailable",
+                "service_url": self.service_url,
+                "detail": str(exc)[:200],
+            }
+
+    async def run_native_graph(
+        self,
+        symbol: str,
+        interval: str = "1h",
+        trade_date: Optional[str] = None,
+        selected_analysts: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Run the native upstream TradingAgentsGraph sandbox path."""
+        payload = {
+            "symbol": symbol,
+            "interval": interval,
+            "trade_date": trade_date,
+            "selected_analysts": selected_analysts or ["market", "news", "social", "fundamentals"],
+        }
+        url = f"{self.service_url}/native/analyze"
+        timeout = aiohttp.ClientTimeout(total=max(float(self.timeout_seconds), 240.0))
+        try:
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
+                async with session.post(url, json=payload) as resp:
+                    body = await resp.json(content_type=None)
+                    body["http_status"] = resp.status
+                    return body
+        except Exception as exc:
+            return {
+                "status": "error",
+                "symbol": symbol,
+                "error": str(exc)[:500],
+                "raw": {
+                    "mode": "native_graph",
+                    "service_url": self.service_url,
+                },
+            }
 
     async def run_analysis(
         self,
         symbol: str,
+        interval: str = "1h",
+        analysis_context: Optional[Dict[str, Any]] = None,
+        fast: bool = False,
         market_data: Optional[Dict[str, Any]] = None,
         signal_events: Optional[List[Dict[str, Any]]] = None,
         macro_context: Optional[Dict[str, Any]] = None,
     ) -> Optional["CoordinationResult"]:
-        """Run the full TradingAgents pipeline.
+        """Call the isolated service and map its response.
 
-        Returns ``CoordinationResult`` on success, ``None`` if unavailable.
-        Callers should fall back to CoordinatorAgent on None.
+        Returns ``None`` on any service failure so CoordinatorAgent can fall
+        back to the in-process PRD 10.4 decision pipeline.
         """
         from app.agents.coordinator_agent import CoordinationResult
 
-        if not _TA_AVAILABLE or self.graph is None:
-            return None
+        context = analysis_context or {
+            "symbol": symbol,
+            "timeframe": interval,
+            "market_data": market_data or {},
+            "recent_signals": signal_events or [],
+            "macro_events": (macro_context or {}).get("macro_events", []),
+            "latest_factors": (macro_context or {}).get("latest_factors", {}),
+        }
+        payload = {
+            "symbol": symbol,
+            "interval": interval,
+            "analysis_context": context,
+            "fast": fast,
+        }
 
+        url = f"{self.service_url}/analyze"
+        timeout = aiohttp.ClientTimeout(total=max(float(self.timeout_seconds), 300.0))
         try:
-            analysis_input = {
-                "symbol": symbol,
-                "market_data": market_data or {},
-                "signals": signal_events or [],
-                "macro": macro_context or {},
-                "timestamp": datetime.utcnow().isoformat(),
-            }
-
-            # TradingAgentsGraph.invoke() returns a dict
-            # Expected keys: decision, confidence, reasoning, analyst_reports
-            raw = await self._invoke_graph(analysis_input)
-
-            if raw is None:
-                return None
-
-            return self._map_to_result(symbol, raw)
-
-        except Exception as e:
-            logger.error(f"TradingAgents analysis failed: {e}", exc_info=True)
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
+                async with session.post(url, json=payload) as resp:
+                    body = await resp.json(content_type=None)
+                    if resp.status >= 400:
+                        logger.warning(
+                            "[tradingagents] service returned HTTP %s: %s",
+                            resp.status,
+                            str(body)[:300],
+                        )
+                        return None
+        except Exception as exc:
+            logger.warning(
+                "[tradingagents] service call failed: %s: %r",
+                type(exc).__name__,
+                exc,
+            )
             return None
 
-    async def _invoke_graph(self, inputs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Invoke the TradingAgents graph (sync wrapper in thread pool)."""
-        import asyncio
+        if str(body.get("status", "")).lower() not in {"ok", "success"}:
+            logger.warning("[tradingagents] service status not ok: %s", body)
+            return None
 
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.graph.invoke, inputs)
-
-    # ── Output mapping ─────────────────────────────────────────────────────
+        return self._map_to_result(symbol=symbol, raw=body)
 
     def _map_to_result(
-        self, symbol: str, raw: Dict[str, Any]
+        self,
+        symbol: str,
+        raw: Dict[str, Any],
     ) -> "CoordinationResult":
-        """Convert TradingAgents output to CoordinationResult."""
+        """Convert service output into the backend coordination contract."""
         from app.agents.coordinator_agent import CoordinationResult
 
-        decision = str(raw.get("decision", "HOLD")).upper()
-
+        decision = _normalize_decision(raw.get("decision"))
         signal_map = {
             "BUY": SignalType.BUY,
             "SELL": SignalType.SELL,
-            "HOLD": SignalType.WAIT,
             "WAIT": SignalType.WAIT,
         }
-        final_signal = signal_map.get(decision, SignalType.WAIT)
 
-        analyst_reports = raw.get("analyst_reports", [])
+        confidence = max(0.0, min(1.0, _safe_float(raw.get("confidence"), 0.5)))
+        analyst_reports = raw.get("analyst_reports") or []
         if not isinstance(analyst_reports, list):
-            analyst_reports = [analyst_reports] if analyst_reports else []
+            analyst_reports = [analyst_reports]
 
-        risk_flagged = raw.get("risk_flagged", False)
+        vote_breakdown = raw.get("vote_breakdown") or {"tradingagents": confidence}
+        if not isinstance(vote_breakdown, dict):
+            vote_breakdown = {"tradingagents": confidence}
+
+        risk_flagged = bool(raw.get("risk_flagged", False))
+        raw_payload = raw.get("raw") if isinstance(raw.get("raw"), dict) else {}
+        position_advice = raw.get("position_advice") if isinstance(raw.get("position_advice"), dict) else {}
+        internal_chain = raw_payload.get("internal_chain")
+        if isinstance(internal_chain, list):
+            position_advice = {
+                **position_advice,
+                "tradingagents_internal_chain": internal_chain,
+            }
 
         return CoordinationResult(
             symbol=symbol,
-            final_signal=final_signal,
-            confidence=float(raw.get("confidence", 0.5)),
-            summary=str(raw.get("reasoning", "TradingAgents analysis completed")),
+            final_signal=signal_map[decision],
+            confidence=confidence,
+            summary=str(raw.get("reasoning") or "TradingAgents service analysis completed"),
             agent_signals=analyst_reports,
-            vote_breakdown={"tradingagents": float(raw.get("confidence", 0.5))},
-            risk_veto=decision == "HOLD" and risk_flagged,
-            timestamp=datetime.utcnow(),
+            vote_breakdown=vote_breakdown,
+            risk_veto=risk_flagged,
+            data_source="tradingagents-service",
+            role_opinions=analyst_reports,
+            input_snapshot_ids=raw_payload.get("input_snapshot_ids", {}),
+            risk_notes=str(raw.get("risk_notes") or ""),
+            position_advice=position_advice,
+            timestamp=datetime.now(timezone.utc),
         )
 
-
-# ── Module-level singleton ─────────────────────────────────────────────────────
 
 tradingagents_adapter = TradingAgentsAdapter()

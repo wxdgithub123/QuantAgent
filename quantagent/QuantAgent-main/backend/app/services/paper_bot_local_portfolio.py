@@ -306,9 +306,9 @@ class PaperBotLocalPortfolioService:
     async def _get_current_price(self, base_asset: str, quote_asset: str) -> Decimal:
         """从价格服务获取当前价格"""
         try:
-            from app.services.binance_service import binance_service
-            symbol = f"{base_asset}/{quote_asset}"
-            price = await binance_service.get_price(symbol)
+            from app.services.market_data_gateway import market_data_gateway
+            symbol = f"{base_asset}{quote_asset}"
+            price = await market_data_gateway.get_price(symbol)
             return Decimal(str(price))
         except Exception:
             # 如果无法获取价格，返回 0（会导致持仓价值为 0）

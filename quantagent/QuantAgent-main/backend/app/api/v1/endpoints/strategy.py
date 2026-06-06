@@ -8,7 +8,8 @@ import asyncio
 import itertools
 import logging
 import time
-from datetime import datetime, date
+import uuid
+from datetime import datetime, date, timezone
 from typing import List, Optional, Dict, Any
 
 import pandas as pd
@@ -16,16 +17,20 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.services.strategy_templates import get_all_templates_meta, build_signal_func, get_template, update_template_default_params, get_template_default_params
-from app.services.binance_service import binance_service
 from app.services.clickhouse_service import clickhouse_service
+from app.services.market_data_gateway import market_data_gateway
 from app.services.database import get_db
-from app.models.db_models import BacktestResult, OptimizationResult
+from app.models.db_models import AuditLog, BacktestResult, OptimizationResult
 from app.services.backtester import GridOptimizer, OptunaOptimizer
 from app.services.backtester.annualization import annualize_return, annualize_sharpe, infer_annualization_factor
 from app.services.backtester.signal_resolution import resolve_signal_output
+from app.services.reproducibility import enrich_pit_metadata, stable_params_hash
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+BACKTEST_TASKS: Dict[str, Dict[str, Any]] = {}
+BACKTEST_TASK_HISTORY_LIMIT = 50
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -41,6 +46,7 @@ class BacktestRequest(BaseModel):
     params:          Dict[str, Any] = {}
     start_time:      Optional[datetime] = None  # 按时间范围查询（ClickHouse）
     end_time:        Optional[datetime] = None  # 按时间范围查询（ClickHouse）
+    as_of_time:      Optional[datetime] = None  # point-in-time 数据截止时间
 
 
 class TradeRecord(BaseModel):
@@ -85,6 +91,52 @@ class BacktestResponse(BaseModel):
     markers:       List[TradeMarker]     # buy/sell markers on price chart
     trades:        List[TradeRecord]
     created_at:    str
+    pit:           Dict[str, Any] = {}
+
+
+def _iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, pd.Timestamp):
+        value = value.to_pydatetime()
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _build_backtest_pit_metadata(
+    *,
+    df: pd.DataFrame,
+    requested_as_of_time: Optional[datetime],
+    requested_start_time: Optional[datetime],
+    requested_end_time: Optional[datetime],
+    data_source: str,
+) -> Dict[str, Any]:
+    index_min = df.index.min() if df is not None and len(df) else None
+    index_max = df.index.max() if df is not None and len(df) else None
+    effective_as_of_time = requested_as_of_time or (
+        index_max.to_pydatetime() if isinstance(index_max, pd.Timestamp) else index_max
+    )
+    return {
+        "enabled": True,
+        "rule": "bar_time <= as_of_time",
+        "scope": "backtest_ohlcv",
+        "as_of_time": _iso(effective_as_of_time),
+        "requested_as_of_time": _iso(requested_as_of_time),
+        "requested_start_time": _iso(requested_start_time),
+        "requested_end_time": _iso(requested_end_time),
+        "actual_start_time": _iso(index_min),
+        "actual_end_time": _iso(index_max),
+        "row_count": int(len(df)) if df is not None else 0,
+        "data_source": data_source,
+        "note": "普通策略回测按 K 线时间裁剪；TradingAgents AnalysisContext 使用 available_time <= as_of_time。",
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -179,23 +231,29 @@ async def run_backtest(req: BacktestRequest):
     # Normalize symbol to ccxt format
     symbol_ccxt = _normalize_symbol(req.symbol)
     symbol_clean = req.symbol.upper()  # ClickHouse uses "BTCUSDT" format
+    pit_cutoff = _as_utc(req.as_of_time) if req.as_of_time else None
+    effective_end_time = req.end_time
+    if pit_cutoff and (effective_end_time is None or _as_utc(effective_end_time) > pit_cutoff):
+        effective_end_time = pit_cutoff
 
     # Fetch historical OHLCV data
     df = None
-    use_time_range = req.start_time is not None and req.end_time is not None
+    data_source_used = "market_data_gateway"
+    use_time_range = req.start_time is not None and effective_end_time is not None
 
     if use_time_range:
         # 按时间范围查询（优先使用 ClickHouse 历史数据）
-        logger.info(f"Backtest with time range: {req.start_time} ~ {req.end_time}")
+        logger.info(f"Backtest with time range: {req.start_time} ~ {effective_end_time}")
         try:
             df = await clickhouse_service.get_klines_dataframe(
                 symbol=symbol_clean,
                 interval=req.interval,
                 start=req.start_time,
-                end=req.end_time,
+                end=effective_end_time,
                 limit=10000,  # 时间范围查询允许更多数据
             )
             if df is not None and len(df) >= 50:
+                data_source_used = "clickhouse:klines"
                 logger.info(f"ClickHouse returned {len(df)} bars for {symbol_clean}/{req.interval}")
             else:
                 logger.warning(f"ClickHouse data insufficient ({len(df) if df is not None else 0} bars), falling back to Binance")
@@ -207,14 +265,15 @@ async def run_backtest(req: BacktestRequest):
         # 如果 ClickHouse 数据不足，回退到 Binance（支持时间范围查询）
         if df is None:
             try:
-                df = await binance_service.get_klines_dataframe(
+                df = await market_data_gateway.get_dataframe(
                     symbol_ccxt, 
                     req.interval, 
                     limit=effective_limit,
                     start=req.start_time,
-                    end=req.end_time
+                    end=effective_end_time
                 )
                 if df is not None and len(df) >= 50:
+                    data_source_used = "market_data_gateway:fallback"
                     logger.warning(
                         f"Time range query fell back to Binance (limit={effective_limit}). "
                         f"Consider backfilling ClickHouse data for {symbol_clean}/{req.interval}"
@@ -231,12 +290,43 @@ async def run_backtest(req: BacktestRequest):
     else:
         # 向后兼容：使用 limit 参数从 Binance 获取数据
         try:
-            df = await binance_service.get_klines_dataframe(symbol_ccxt, req.interval, limit=effective_limit)
+            df = await market_data_gateway.get_dataframe(
+                symbol_ccxt,
+                req.interval,
+                limit=effective_limit,
+                end=effective_end_time,
+            )
+            data_source_used = "market_data_gateway"
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"Failed to fetch market data: {e}")
 
+    if df is not None and pit_cutoff is not None and len(df) > 0:
+        cutoff = pd.Timestamp(pit_cutoff)
+        if df.index.tz is None:
+            cutoff = cutoff.tz_localize(None)
+        else:
+            cutoff = cutoff.tz_convert(df.index.tz)
+        df = df[df.index <= cutoff]
+
     if df is None or len(df) < 300:
         raise HTTPException(status_code=400, detail=f"历史K线数据不足：当前 {len(df) if df is not None else 0} 根，至少需要 300 根才能执行回测")
+
+    params_hash = stable_params_hash(req.params)
+    pit_metadata = enrich_pit_metadata(
+        _build_backtest_pit_metadata(
+            df=df,
+            requested_as_of_time=pit_cutoff,
+            requested_start_time=req.start_time,
+            requested_end_time=req.end_time,
+            data_source=data_source_used,
+        ),
+        symbol=symbol_clean,
+        interval=req.interval,
+        strategy_type=req.strategy_type,
+        params=req.params,
+        params_hash=params_hash,
+        data_source=data_source_used,
+    )
 
     # Run backtest engine (EventDrivenBacktester with Numba)
     try:
@@ -325,6 +415,7 @@ async def run_backtest(req: BacktestRequest):
         "total_commission": result.get("total_commission", 0.0),
         "initial_capital":  req.initial_capital,
         "final_capital":    result["final_capital"],
+        "pit":              pit_metadata,
     }
 
     # Persist to PostgreSQL
@@ -336,13 +427,34 @@ async def run_backtest(req: BacktestRequest):
                 symbol=symbol_clean,
                 interval=req.interval,
                 params=req.params,
+                params_hash=params_hash,
                 metrics=metrics_dict,
                 equity_curve=equity_curve[:2000],   # cap to 2000 points (match max candles)
                 trades_summary=trades_list[:100],    # store up to 100 trades for mid-freq strategies
+                data_source="BACKTEST",
             )
             session.add(bt_row)
             await session.flush()
             db_id = bt_row.id
+            session.add(
+                AuditLog(
+                    action="BACKTEST_RUN",
+                    user_id="system",
+                    resource=symbol_clean,
+                    details={
+                        "backtest_id": db_id,
+                        "strategy_type": req.strategy_type,
+                        "interval": req.interval,
+                        "params": req.params,
+                        "pit": pit_metadata,
+                        "metrics": {
+                            "total_return": metrics_dict["total_return"],
+                            "max_drawdown": metrics_dict["max_drawdown"],
+                            "total_trades": metrics_dict["total_trades"],
+                        },
+                    },
+                )
+            )
     except Exception as e:
         logger.warning(f"Failed to persist backtest result: {e}")
 
@@ -358,6 +470,7 @@ async def run_backtest(req: BacktestRequest):
         markers=[TradeMarker(**m) for m in markers],
         trades=[TradeRecord(**t) for t in trades_list],
         created_at=datetime.utcnow().isoformat(),
+        pit=pit_metadata,
     )
 
 
@@ -426,7 +539,16 @@ async def get_backtest_history(
             ]
         
         # Ensure metrics has all required fields with default values
-        metrics = row.metrics or {}
+        raw_metrics = row.metrics or {}
+        pit_metadata = raw_metrics.get("pit") if isinstance(raw_metrics.get("pit"), dict) else {}
+        if not pit_metadata and isinstance(row.params_hash, str):
+            pit_metadata = {
+                "enabled": False,
+                "params_hash": row.params_hash,
+                "data_source": row.data_source,
+                "note": "This older backtest record does not include full PIT metadata.",
+            }
+        metrics = raw_metrics
         metrics = {
             "total_return": metrics.get("total_return", 0),
             "annual_return": metrics.get("annual_return", 0),
@@ -452,6 +574,7 @@ async def get_backtest_history(
             "markers":        markers,
             "trades":         trades_summary,
             "created_at":     row.created_at.isoformat() if row.created_at else None,
+            "pit":            pit_metadata,
         })
     return {"history": history, "total": len(history)}
 
@@ -1012,7 +1135,7 @@ async def optimize_strategy(req: OptimizeRequest):
     effective_limit = min(req.limit, MAX_LIMITS.get(req.interval, 1000))
 
     try:
-        df = await binance_service.get_klines_dataframe(symbol_ccxt, req.interval, limit=effective_limit)
+        df = await market_data_gateway.get_dataframe(symbol_ccxt, req.interval, limit=effective_limit)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Failed to fetch market data: {e}")
 
@@ -1387,6 +1510,179 @@ class BatchBacktestResponse(BaseModel):
     success_count: int
 
 
+class ParameterBatchBacktestRequest(BacktestRequest):
+    param_grid: Dict[str, List[Any]]
+    max_parallel: int = 5
+
+
+class BacktestTaskSubmitResponse(BaseModel):
+    task_id: str
+    status: str
+    total_runs: int
+    max_parallel: int
+    note: str
+
+
+def _trim_backtest_tasks() -> None:
+    if len(BACKTEST_TASKS) <= BACKTEST_TASK_HISTORY_LIMIT:
+        return
+    ordered = sorted(
+        BACKTEST_TASKS.items(),
+        key=lambda item: item[1].get("created_at") or "",
+    )
+    for task_id, task in ordered[: max(0, len(BACKTEST_TASKS) - BACKTEST_TASK_HISTORY_LIMIT)]:
+        if task.get("status") in {"queued", "running"}:
+            continue
+        BACKTEST_TASKS.pop(task_id, None)
+
+
+def _parameter_combinations(param_grid: Dict[str, List[Any]], max_runs: int = 100) -> List[Dict[str, Any]]:
+    keys = [key for key, values in param_grid.items() if values]
+    if not keys:
+        raise HTTPException(status_code=400, detail="请至少配置一个参数组合")
+    combos = [
+        dict(zip(keys, values))
+        for values in itertools.product(*(param_grid[key] for key in keys))
+    ]
+    if len(combos) > max_runs:
+        raise HTTPException(status_code=400, detail=f"参数组合过多：当前 {len(combos)} 个，最多允许 {max_runs} 个")
+    return combos
+
+
+def _task_public_view(task: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: value
+        for key, value in task.items()
+        if key not in {"request"}
+    }
+
+
+async def _run_parameter_batch_task(task_id: str, req: ParameterBatchBacktestRequest, combos: List[Dict[str, Any]]) -> None:
+    task = BACKTEST_TASKS[task_id]
+    task["status"] = "running"
+    task["started_at"] = datetime.utcnow().isoformat()
+    semaphore = asyncio.Semaphore(max(1, min(req.max_parallel, 5)))
+
+    async def run_one(index: int, combo: Dict[str, Any]) -> Dict[str, Any]:
+        async with semaphore:
+            run_req = BacktestRequest(
+                strategy_type=req.strategy_type,
+                symbol=req.symbol,
+                interval=req.interval,
+                limit=req.limit,
+                initial_capital=req.initial_capital,
+                params={**(req.params or {}), **combo},
+                start_time=req.start_time,
+                end_time=req.end_time,
+                as_of_time=req.as_of_time,
+            )
+            try:
+                result = await run_backtest(run_req)
+                payload = result.model_dump()
+                return {
+                    "index": index,
+                    "status": "completed",
+                    "params": run_req.params,
+                    "backtest_id": payload.get("id"),
+                    "metrics": payload.get("metrics", {}),
+                    "pit": payload.get("pit", {}),
+                    "created_at": payload.get("created_at"),
+                }
+            except Exception as exc:
+                detail = getattr(exc, "detail", None)
+                return {
+                    "index": index,
+                    "status": "failed",
+                    "params": run_req.params,
+                    "error": str(detail or exc)[:500],
+                }
+
+    try:
+        results = await asyncio.gather(*(run_one(index, combo) for index, combo in enumerate(combos)))
+        completed = sum(1 for item in results if item.get("status") == "completed")
+        failed = len(results) - completed
+        task.update(
+            {
+                "status": "completed" if failed == 0 else "completed_with_errors",
+                "completed_at": datetime.utcnow().isoformat(),
+                "completed_runs": completed,
+                "failed_runs": failed,
+                "results": sorted(results, key=lambda item: item["index"]),
+            }
+        )
+    except Exception as exc:
+        task.update(
+            {
+                "status": "failed",
+                "completed_at": datetime.utcnow().isoformat(),
+                "error": str(exc)[:500],
+            }
+        )
+
+
+@router.post("/backtest/parameter-batch", response_model=BacktestTaskSubmitResponse)
+async def submit_parameter_batch_backtest(req: ParameterBatchBacktestRequest):
+    """
+    Submit a lightweight in-process background backtest task for parameter combinations.
+    Each completed run is persisted through the existing BacktestResult path.
+    """
+    combos = _parameter_combinations(req.param_grid)
+    max_parallel = max(1, min(req.max_parallel, 5))
+    task_id = f"bt-{uuid.uuid4().hex[:12]}"
+    BACKTEST_TASKS[task_id] = {
+        "task_id": task_id,
+        "status": "queued",
+        "kind": "parameter_batch",
+        "created_at": datetime.utcnow().isoformat(),
+        "started_at": None,
+        "completed_at": None,
+        "symbol": req.symbol.upper(),
+        "interval": req.interval,
+        "strategy_type": req.strategy_type,
+        "total_runs": len(combos),
+        "completed_runs": 0,
+        "failed_runs": 0,
+        "max_parallel": max_parallel,
+        "storage": "PostgreSQL backtest_results",
+        "queue_scope": "in_process_memory",
+        "pit": {
+            "requested_as_of_time": _iso(req.as_of_time),
+            "requested_start_time": _iso(req.start_time),
+            "requested_end_time": _iso(req.end_time),
+            "rule": "bar_time <= as_of_time",
+        },
+        "results": [],
+    }
+    _trim_backtest_tasks()
+    req.max_parallel = max_parallel
+    asyncio.create_task(_run_parameter_batch_task(task_id, req, combos))
+    return BacktestTaskSubmitResponse(
+        task_id=task_id,
+        status="queued",
+        total_runs=len(combos),
+        max_parallel=max_parallel,
+        note="任务在当前后端进程内异步执行；服务重启会丢失任务状态，但成功的单次回测结果会保存到 backtest_results。",
+    )
+
+
+@router.get("/backtest/tasks")
+async def list_backtest_tasks(limit: int = Query(20, ge=1, le=50)):
+    tasks = sorted(
+        (_task_public_view(task) for task in BACKTEST_TASKS.values()),
+        key=lambda task: task.get("created_at") or "",
+        reverse=True,
+    )
+    return {"tasks": tasks[:limit], "total": len(tasks)}
+
+
+@router.get("/backtest/tasks/{task_id}")
+async def get_backtest_task(task_id: str):
+    task = BACKTEST_TASKS.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="回测任务不存在或后端服务已重启")
+    return _task_public_view(task)
+
+
 @router.post("/backtest/batch", response_model=BatchBacktestResponse)
 async def batch_backtest(req: BatchBacktestRequest):
     """
@@ -1408,7 +1704,7 @@ async def batch_backtest(req: BatchBacktestRequest):
         try:
             symbol_ccxt  = _normalize_symbol(symbol)
             symbol_clean = symbol.upper()
-            df = await binance_service.get_klines_dataframe(
+            df = await market_data_gateway.get_dataframe(
                 symbol_ccxt, req.interval, limit=effective_limit
             )
             if df is None or len(df) < 300:

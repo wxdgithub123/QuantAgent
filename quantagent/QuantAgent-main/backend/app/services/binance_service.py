@@ -225,15 +225,29 @@ class BinanceService:
             for k in klines:
                 rows.append({
                     "open_time":  k.timestamp,
+                    "exchange":   "binance",
+                    "provider":   "ccxt",
+                    "source_version": "ccxt",
+                    "schema_version": "bar.v1",
                     "open":       k.open,
                     "high":       k.high,
                     "low":        k.low,
                     "close":      k.close,
                     "volume":     k.volume,
                     "close_time": k.close_time or k.timestamp,
+                    "quote_volume": k.quote_volume,
+                    "trades": k.trades,
                 })
             symbol_clean = symbol.replace("/", "")
             inserted = await clickhouse_service.insert_klines(symbol_clean, timeframe, rows)
+            await clickhouse_service.insert_market_bars(
+                symbol_clean,
+                timeframe,
+                rows,
+                provider="ccxt",
+                exchange="binance",
+                source_version="ccxt",
+            )
             if inserted:
                 logger.debug(f"ClickHouse: inserted {inserted} klines for {symbol_clean}/{timeframe}")
         except Exception as e:
