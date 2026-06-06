@@ -29,7 +29,6 @@ from app.agents.trend_agent import TrendAgent
 from app.agents.mean_reversion_agent import MeanReversionAgent
 from app.agents.risk_agent import RiskAgent
 from app.core.config import settings
-from app.models.db_models import CoordinationHistoryDB
 from app.models.instrument import Instrument
 from app.services.llm.base import LLMFactory
 from app.services.database import get_db
@@ -125,6 +124,12 @@ class CoordinationResult:
     role_opinions: List[Dict[str, Any]] = field(default_factory=list)
     position_advice: Dict[str, Any] = field(default_factory=dict)
     risk_notes: str = ""
+    decision_id: Optional[int] = None
+    context_id: Optional[str] = None
+    context_hash: Optional[str] = None
+    audit_url: Optional[str] = None
+    order_intent_status: Optional[str] = None
+    order_intent_id: Optional[str] = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -143,6 +148,18 @@ class CoordinationResult:
             "role_opinions": self.role_opinions,
             "position_advice": self.position_advice,
             "risk_notes": self.risk_notes,
+            "decision_id": self.decision_id,
+            "decisionId": self.decision_id,
+            "context_id": self.context_id,
+            "contextId": self.context_id,
+            "context_hash": self.context_hash,
+            "contextHash": self.context_hash,
+            "audit_url": self.audit_url,
+            "auditUrl": self.audit_url,
+            "order_intent_status": self.order_intent_status,
+            "orderIntentStatus": self.order_intent_status,
+            "order_intent_id": self.order_intent_id,
+            "orderIntentId": self.order_intent_id,
             "timestamp": self.timestamp.isoformat(),
         }
 
@@ -191,36 +208,75 @@ class CoordinatorAgent:
         symbol: str,
         interval: str = "1h",
     ) -> CoordinationResult:
-        """
-        Main entry point. Loads AnalysisContext, runs 4-role analysis,
-        debate, and produces a structured decision.
+        """Main entry point. Loads AnalysisContext, delegates to TradingAgents service."""
+        return await self.coordinate_at(symbol=symbol, interval=interval)
 
-        In fast_mode, skips the 3-round debate (saves ~3 LLM calls).
-        """
+    async def coordinate_at(
+        self,
+        symbol: str,
+        interval: str = "1h",
+        as_of_time: Optional[datetime] = None,
+        extra_input_snapshot_ids: Optional[Dict[str, Any]] = None,
+        audit_metadata: Optional[Dict[str, Any]] = None,
+        draft_order_intent: bool = True,
+    ) -> CoordinationResult:
+        """Run the unified TradingAgents decision path at a specific PIT time."""
         instrument = Instrument.from_raw(symbol)
         canonical_symbol = instrument.symbol
 
-        # ── TradingAgents path ─────────────────────────────────────────────
-        if self.use_tradingagents:
-            try:
-                from app.agents.tradingagents_adapter import tradingagents_adapter
+        ctx = await self._load_analysis_context(canonical_symbol, interval, as_of_time=as_of_time)
+        if extra_input_snapshot_ids:
+            snapshot_ids = ctx.get("input_snapshot_ids")
+            if not isinstance(snapshot_ids, dict):
+                snapshot_ids = {}
+            snapshot_ids = {**snapshot_ids, **extra_input_snapshot_ids}
+            ctx["input_snapshot_ids"] = snapshot_ids
+        if audit_metadata:
+            metadata = ctx.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            ctx["metadata"] = {**metadata, **audit_metadata}
 
-                ctx = await self._load_analysis_context(canonical_symbol, interval)
-                result = await tradingagents_adapter.run_analysis(
-                    symbol=canonical_symbol,
-                    interval=interval,
-                    analysis_context=ctx,
-                    fast=self.fast_mode,
-                )
-                if result is not None:
-                    result.symbol = canonical_symbol
-                    await self._persist_result(result)
-                    return result
-            except Exception as e:
-                logger.warning(f"[coordinator] TradingAgents fallback: {e}")
+        from app.agents.tradingagents_adapter import tradingagents_adapter
+        result = await tradingagents_adapter.run_analysis(
+            symbol=canonical_symbol, interval=interval,
+            analysis_context=ctx, fast=self.fast_mode,
+        )
+        if result is not None:
+            result.symbol = canonical_symbol
+            if as_of_time is not None:
+                result.timestamp = as_of_time
+            if not result.input_snapshot_ids:
+                result.input_snapshot_ids = ctx.get("input_snapshot_ids", {})
+            else:
+                result.input_snapshot_ids = {
+                    **ctx.get("input_snapshot_ids", {}),
+                    **result.input_snapshot_ids,
+                }
+            result.context_hash = result.context_hash or ctx.get("context_hash")
+            await self._persist_result(
+                result,
+                ctx,
+                draft_order_intent=draft_order_intent,
+                audit_metadata=audit_metadata,
+            )
+            return result
 
-        # ── PRD 10.4 standard path ─────────────────────────────────────────
-        return await self._coordinate_prd104(canonical_symbol, interval)
+        # TA service failed — return error, no local LLM fallback
+        logger.error("[coordinator] TradingAgents service unavailable")
+        return CoordinationResult(
+            symbol=canonical_symbol,
+            final_signal=SignalType.WAIT,
+            confidence=0.0,
+            summary="TradingAgents 服务不可用。请确认 tradingagents-service 容器正常运行且 LLM API 已配置。",
+            agent_signals=[],
+            vote_breakdown={"error": 1.0},
+            risk_veto=False,
+            data_source="error",
+            role_opinions=[],
+            risk_notes="外部 TradingAgents 服务调用失败",
+            timestamp=as_of_time or datetime.now(timezone.utc),
+        )
 
     async def _coordinate_prd104(
         self,
@@ -311,7 +367,7 @@ class CoordinatorAgent:
             position_advice=position_advice,
             risk_notes=risk_notes,
         )
-        await self._persist_result(result)
+        await self._persist_result(result, ctx)
         return result
 
     # ── AnalysisContext loader ────────────────────────────────────────────────
@@ -320,6 +376,7 @@ class CoordinatorAgent:
         self,
         symbol: str,
         interval: str = "1h",
+        as_of_time: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         """
         Load AnalysisContext. Uses local Builder directly to avoid
@@ -335,6 +392,7 @@ class CoordinatorAgent:
             ctx = await analysis_context_builder.build(
                 symbol=symbol,
                 interval=interval,
+                as_of_time=as_of_time,
             )
             logger.info(
                 f"[coordinator] Loaded AnalysisContext for {symbol}: "
@@ -344,14 +402,14 @@ class CoordinatorAgent:
             return ctx.to_agent_payload()
         except Exception as e:
             logger.error(f"[coordinator] AnalysisContext Builder failed: {e}")
-            return self._empty_context(symbol, interval)
+            return self._empty_context(symbol, interval, as_of_time=as_of_time)
 
     @staticmethod
-    def _empty_context(symbol: str, interval: str) -> Dict[str, Any]:
+    def _empty_context(symbol: str, interval: str, as_of_time: Optional[datetime] = None) -> Dict[str, Any]:
         return {
             "symbol": symbol,
             "timeframe": interval,
-            "as_of_time": datetime.now(timezone.utc).isoformat(),
+            "as_of_time": (as_of_time or datetime.now(timezone.utc)).isoformat(),
             "bars": [],
             "latest_factors": {},
             "recent_signals": [],
@@ -989,10 +1047,44 @@ DECISION_REASONING: <裁决理由>
     # ── Persistence ────────────────────────────────────────────────────────
 
     @staticmethod
-    async def _persist_result(result: CoordinationResult) -> None:
+    async def _persist_result(
+        result: CoordinationResult,
+        ctx: Dict[str, Any] | None = None,
+        *,
+        draft_order_intent: bool = True,
+        audit_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[int]:
         """Persist full coordination result to coordination_history."""
-        import json as json_module
+        import json as json_module, hashlib, uuid
         decision_id = None
+
+        # ── Build context_id / context_hash from snapshot data ──────────
+        context_id = f"ctx-{uuid.uuid4().hex[:12]}"
+        ctx_metadata = ctx.get("metadata", {}) if isinstance(ctx, dict) and isinstance(ctx.get("metadata"), dict) else {}
+        context_hash = (
+            result.context_hash
+            or (ctx.get("context_hash") if isinstance(ctx, dict) else None)
+            or ctx_metadata.get("context_hash")
+        )
+        if not context_hash:
+            snapshot_payload = json_module.dumps({
+                "input_snapshot_ids": (ctx.get("input_snapshot_ids") if isinstance(ctx, dict) else None) or result.input_snapshot_ids,
+                "data_versions": ctx.get("data_versions", {}) if isinstance(ctx, dict) else {},
+                "symbol": result.symbol,
+                "timeframe": ctx.get("timeframe") if isinstance(ctx, dict) else None,
+                "as_of_time": ctx.get("as_of_time") if isinstance(ctx, dict) else None,
+            }, sort_keys=True, default=str).encode("utf-8")
+            context_hash = f"sha256:{hashlib.sha256(snapshot_payload).hexdigest()[:16]}"
+        result.context_id = context_id
+        result.context_hash = context_hash
+
+        # ── Extract model / prompt versions from role_opinions ───────────
+        model_version = "TradingAgents/QuantAgent"
+        prompt_version = "v1"
+        if isinstance(result.role_opinions, list) and len(result.role_opinions) > 0:
+            meta = result.role_opinions[0] if isinstance(result.role_opinions[0], dict) else {}
+            model_version = str(meta.get("model_version", meta.get("role", model_version)))
+
         try:
             async with get_db() as session:
                 persisted = await session.execute(
@@ -1001,12 +1093,16 @@ DECISION_REASONING: <裁决理由>
                             (symbol, timestamp, final_signal, confidence,
                              vote_breakdown, risk_veto, summary, agent_signals,
                              bull_view, bear_view, input_snapshot_ids,
-                             role_opinions, position_advice, risk_notes)
+                             role_opinions, position_advice, risk_notes,
+                             context_id, context_hash, available_time,
+                             model_version, prompt_version)
                         VALUES
                             (:symbol, :timestamp, :final_signal, :confidence,
                              :vote_breakdown, :risk_veto, :summary, :agent_signals,
                              :bull_view, :bear_view, :input_snapshot_ids,
-                             :role_opinions, :position_advice, :risk_notes)
+                             :role_opinions, :position_advice, :risk_notes,
+                             :context_id, :context_hash, :available_time,
+                             :model_version, :prompt_version)
                         RETURNING id
                     """),
                     {
@@ -1024,14 +1120,21 @@ DECISION_REASONING: <裁决理由>
                         "role_opinions": json_module.dumps(result.role_opinions),
                         "position_advice": json_module.dumps(result.position_advice),
                         "risk_notes": (result.risk_notes or "")[:2000],
+                        "context_id": context_id,
+                        "context_hash": context_hash,
+                        "available_time": result.timestamp,
+                        "model_version": model_version[:128],
+                        "prompt_version": prompt_version[:128],
                     },
                 )
                 decision_id = persisted.scalar()
         except Exception as e:
             logger.error(f"[coordinator] Failed to persist result: {e}")
-            return
+            return None
 
         if decision_id:
+            result.decision_id = int(decision_id)
+            result.audit_url = f"/audit?decision_id={decision_id}"
             try:
                 from app.services.audit_service import audit_service
 
@@ -1040,18 +1143,31 @@ DECISION_REASONING: <裁决理由>
                     user_id="system",
                     resource=result.symbol,
                     details={
+                        **(audit_metadata or {}),
                         "decisionId": decision_id,
                         "asOfTime": result.timestamp.isoformat() if result.timestamp else None,
+                        "contextId": context_id,
+                        "contextHash": context_hash,
                         "snapshotId": result.input_snapshot_ids,
                         "inputSummary": {
                             "snapshot_ids": result.input_snapshot_ids,
                             "risk_notes": result.risk_notes,
+                            "factor_snapshot": ctx.get("latest_factors", {}) if ctx else {},
+                            "recent_signals": [
+                                {"type": s.get("signal_type"), "strategy": s.get("source_strategy"), "conf": s.get("confidence")}
+                                for s in (ctx.get("recent_signals", []) or [])[:20]
+                            ] if ctx else [],
+                            "price": ctx.get("bars", [{}])[-1].get("close") if ctx and ctx.get("bars") else None,
+                            "news_count": len(ctx.get("news_events", []) or []) if ctx else 0,
+                            "macro_count": len(ctx.get("macro_events", []) or []) if ctx else 0,
                         },
                         "agentOutputs": result.role_opinions or result.agent_signals,
                         "decision": {
                             "id": decision_id,
                             "symbol": result.symbol,
                             "timestamp": result.timestamp.isoformat() if result.timestamp else None,
+                            "context_id": context_id,
+                            "context_hash": context_hash,
                             "final_signal": result.final_signal.value,
                             "confidence": result.confidence,
                             "risk_veto": result.risk_veto,
@@ -1062,6 +1178,19 @@ DECISION_REASONING: <裁决理由>
                 )
             except Exception as exc:
                 logger.warning("[coordinator] Failed to write AGENT_DECISION audit: %s", exc)
+
+            if draft_order_intent:
+                try:
+                    from app.services.order_intent_service import order_intent_service
+
+                    draft = await order_intent_service.draft_intent_from_decision(int(decision_id))
+                    intent = draft.get("intent") if isinstance(draft, dict) else {}
+                    result.order_intent_status = str(draft.get("status")) if isinstance(draft, dict) else None
+                    result.order_intent_id = intent.get("intent_id") or intent.get("id") if isinstance(intent, dict) else None
+                except Exception as exc:
+                    logger.warning("[coordinator] Failed to draft OrderIntent for decision %s: %s", decision_id, exc)
+
+        return int(decision_id) if decision_id else None
 
     # ── Streaming ────────────────────────────────────────────────────────────
 
@@ -1162,7 +1291,7 @@ DECISION_REASONING: <裁决理由>
             position_advice=position_advice,
             risk_notes=risk_notes,
         )
-        await self._persist_result(result)
+        await self._persist_result(result, ctx)
         yield "\n✅ 决策已写入 coordination_history\n"
 
     # ── Helpers ──────────────────────────────────────────────────────────────

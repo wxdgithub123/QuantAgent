@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -52,6 +53,30 @@ class AnalysisContextBuilder:
         news = self._load_news(instrument, cutoff, news_limit)
         macro = self._load_macro(cutoff, macro_limit)
 
+        bar_meta = self._build_bar_meta(bars, interval)
+        data_versions = {
+            "bars": self._version_set(bars),
+            "factors": factor_versions,
+            "signals": signal_versions,
+            "news": self._version_set(news),
+            "macro": self._version_set(macro),
+        }
+        input_snapshot_ids = {
+            "factor_snapshot_ids": factor_ids,
+            "signal_event_ids": signal_ids,
+            "news_payload_ids": [row.get("raw_payload_id") for row in news if row.get("raw_payload_id")],
+            "macro_keys": [f"{row.get('indicator')}:{row.get('timestamp')}" for row in macro],
+            # ── K-line metadata (bars don't have IDs, record as single-element list for Pydantic) ──
+            "bar_meta": [bar_meta],
+        }
+        context_hash = self._context_hash(
+            symbol=instrument.symbol,
+            interval=interval,
+            as_of_time=cutoff,
+            input_snapshot_ids=input_snapshot_ids,
+            data_versions=data_versions,
+        )
+
         return AnalysisContext(
             instrument_id=instrument.symbol,
             symbol=instrument.symbol,
@@ -62,22 +87,13 @@ class AnalysisContextBuilder:
             recent_signals=signals,
             macro_events=macro,
             news_events=news,
-            data_versions={
-                "bars": self._version_set(bars),
-                "factors": factor_versions,
-                "signals": signal_versions,
-                "news": self._version_set(news),
-                "macro": self._version_set(macro),
-            },
-            input_snapshot_ids={
-                "factor_snapshot_ids": factor_ids,
-                "signal_event_ids": signal_ids,
-                "news_payload_ids": [row.get("raw_payload_id") for row in news if row.get("raw_payload_id")],
-                "macro_keys": [f"{row.get('indicator')}:{row.get('timestamp')}" for row in macro],
-            },
+            data_versions=data_versions,
+            input_snapshot_ids=input_snapshot_ids,
+            context_hash=context_hash,
             metadata={
                 "point_in_time_rule": "available_time <= as_of_time",
                 "builder_version": "analysis_context_builder.v1",
+                "context_hash": context_hash,
             },
         )
 
@@ -119,6 +135,59 @@ class AnalysisContextBuilder:
         except Exception as e:
             logger.debug(f"AnalysisContext bar load skipped for {symbol}/{interval}: {e}")
             return []
+
+    def _build_bar_meta(self, bars: List[Dict[str, Any]], interval: str) -> Dict[str, Any]:
+        providers = sorted({str(b.get("provider") or "unknown") for b in bars})
+        digest_rows = [
+            {
+                "t": bar.get("event_time"),
+                "o": bar.get("open"),
+                "h": bar.get("high"),
+                "l": bar.get("low"),
+                "c": bar.get("close"),
+                "v": bar.get("volume"),
+            }
+            for bar in bars
+        ]
+        digest = hashlib.sha256(
+            json.dumps(digest_rows, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()[:16]
+        first = bars[0] if bars else {}
+        last = bars[-1] if bars else {}
+        return {
+            "count": len(bars),
+            "bars_count": len(bars),
+            "interval": interval,
+            "first_event_time": first.get("event_time"),
+            "last_event_time": last.get("event_time"),
+            "last_available_time": last.get("available_time"),
+            "last_close": last.get("close"),
+            "ohlc_digest": f"sha256:{digest}",
+            "provider": providers[0] if len(providers) == 1 else ("multiple" if providers else "unknown"),
+            "providers": providers,
+            "schema_version": "bar_meta.v1",
+        }
+
+    @staticmethod
+    def _context_hash(
+        *,
+        symbol: str,
+        interval: str,
+        as_of_time: Any,
+        input_snapshot_ids: Dict[str, Any],
+        data_versions: Dict[str, Any],
+    ) -> str:
+        stable = {
+            "symbol": symbol,
+            "timeframe": interval,
+            "as_of_time": as_of_time,
+            "input_snapshot_ids": input_snapshot_ids,
+            "data_versions": data_versions,
+        }
+        digest = hashlib.sha256(
+            json.dumps(stable, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()[:16]
+        return f"sha256:{digest}"
 
     async def _load_factors(
         self,
@@ -227,7 +296,7 @@ class AnalysisContextBuilder:
             aliases = {instrument.symbol, instrument.base_asset}
             rows: List[Dict[str, Any]] = []
             for alias in aliases:
-                rows.extend(pipeline_store.query_news(symbol=alias, limit=limit))
+                rows.extend(pipeline_store.query_news(symbol=alias, limit=limit, end=cutoff))
             deduped: Dict[str, Dict[str, Any]] = {}
             for row in rows:
                 available_time = row.get("available_time") or row.get("published_at")

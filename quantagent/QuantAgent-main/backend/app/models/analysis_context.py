@@ -62,6 +62,7 @@ class AnalysisContext(BaseModel):
     news_events: List[Dict[str, Any]] = Field(default_factory=list)
     data_versions: Dict[str, Any] = Field(default_factory=dict)
     input_snapshot_ids: Dict[str, List[Any]] = Field(default_factory=dict)
+    context_hash: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
     def to_agent_payload(self) -> Dict[str, Any]:

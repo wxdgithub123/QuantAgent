@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from app.api.v1.endpoints.strategy import (
     EXECUTION_MODE_AGENT_AUDITED,
     EXECUTION_MODE_RULE_ONLY,
-    _build_mock_agent_outputs,
+    _agent_action_to_order_action,
     _build_order_intent_payload,
     _build_drawdown_curve,
     _build_pit_check,
@@ -112,20 +112,7 @@ def test_max_agent_calls_is_clamped_for_performance_guard():
     assert _clamp_max_agent_calls(999) == 20
 
 
-def test_agent_audited_payloads_have_decision_intent_and_risk_shapes():
-    trade = {
-        "entry_price": 100.0,
-        "exit_price": 110.0,
-        "quantity": 1.5,
-        "pnl_pct": 10.0,
-    }
-
-    agent_outputs = _build_mock_agent_outputs(
-        symbol="BTCUSDT",
-        action="BUY",
-        confidence=0.8,
-        trade=trade,
-    )
+def test_agent_audited_payloads_have_intent_and_risk_shapes():
     intent = _build_order_intent_payload(
         intent_id="OI-BT-1-1-test",
         symbol="BTCUSDT",
@@ -144,12 +131,21 @@ def test_agent_audited_payloads_have_decision_intent_and_risk_shapes():
         ]
     )
 
-    assert any(item["role"] == "finalDecision" for item in agent_outputs)
     assert intent["sourceDecisionId"] == 99
     assert intent["status"] == "CREATED"
     assert intent["executionMode"] == EXECUTION_MODE_AGENT_AUDITED
     assert risk_result["passed"] is True
     assert risk_result["blockedReason"] is None
+
+
+def test_agent_audited_order_action_uses_agent_final_signal():
+    assert _agent_action_to_order_action("BUY") == "BUY"
+    assert _agent_action_to_order_action("LONG_REVERSAL") == "BUY"
+    assert _agent_action_to_order_action("SELL") == "SELL"
+    assert _agent_action_to_order_action("SHORT_REVERSAL") == "SELL"
+    assert _agent_action_to_order_action("WAIT") == "WAIT"
+    assert _agent_action_to_order_action("HOLD") == "HOLD"
+    assert _agent_action_to_order_action("UNKNOWN") == "WAIT"
 
 
 def test_risk_result_records_blocked_rule_without_generating_order_assumption():

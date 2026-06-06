@@ -75,6 +75,67 @@ def test_low_confidence_trade_signal_is_no_action():
 
 
 @pytest.mark.asyncio
+async def test_draft_intent_from_decision_skips_realtime_dependencies(monkeypatch):
+    service = OrderIntentService()
+    decision = make_decision(final_signal="BUY", confidence=0.8, position_advice={"position_pct": 0.05})
+    audit_events = []
+
+    async def fake_load_decision(decision_id):
+        return decision
+
+    async def fail_realtime_dependency(*args, **kwargs):
+        raise AssertionError("draft intent must not call realtime execution dependencies")
+
+    async def fake_audit_once(action, intent, details):
+        audit_events.append((action, intent.intent_id, details.get("stage")))
+
+    monkeypatch.setattr(service, "_load_decision", fake_load_decision)
+    monkeypatch.setattr(service, "_get_price", fail_realtime_dependency)
+    monkeypatch.setattr(service, "_calculate_quantity", fail_realtime_dependency)
+    monkeypatch.setattr(service, "_risk_preview", fail_realtime_dependency)
+    monkeypatch.setattr(service, "_audit_once", fake_audit_once)
+
+    result = await service.draft_intent_from_decision(101, exchange_id="okx")
+
+    assert result["status"] == "READY"
+    assert result["draft_only"] is True
+    assert result["price"] is None
+    assert result["sizing"] is None
+    assert result["risk_preview"] is None
+    assert result["intent"]["intent_id"] == "OI-101-okx-0500"
+    assert audit_events == [("ORDER_INTENT_CREATED", "OI-101-okx-0500", "decision_evidence")]
+
+
+@pytest.mark.asyncio
+async def test_wait_draft_intent_writes_hold_recorded(monkeypatch):
+    service = OrderIntentService()
+    audit_events = []
+
+    async def fake_load_decision(decision_id):
+        return make_decision(final_signal="WAIT", confidence=0.65)
+
+    async def fail_realtime_dependency(*args, **kwargs):
+        raise AssertionError("WAIT draft must not call realtime execution dependencies")
+
+    async def fake_audit_once(action, intent, details):
+        audit_events.append((action, intent.side, details.get("stage")))
+
+    monkeypatch.setattr(service, "_load_decision", fake_load_decision)
+    monkeypatch.setattr(service, "_get_price", fail_realtime_dependency)
+    monkeypatch.setattr(service, "_calculate_quantity", fail_realtime_dependency)
+    monkeypatch.setattr(service, "_risk_preview", fail_realtime_dependency)
+    monkeypatch.setattr(service, "_audit_once", fake_audit_once)
+
+    result = await service.draft_intent_from_decision(101, exchange_id="okx")
+
+    assert result["status"] == "NO_ACTION"
+    assert result["intent"]["action"] == "HOLD"
+    assert result["intent"]["position_pct"] == 0.0
+    assert result["risk_preview"] is None
+    assert audit_events == [("HOLD_RECORDED", None, "decision_evidence")]
+
+
+@pytest.mark.asyncio
 async def test_buy_decision_executes_paper_order_once(monkeypatch):
     service = OrderIntentService()
     decision = make_decision(final_signal="BUY", confidence=0.8, position_advice={"position_pct": 0.05})

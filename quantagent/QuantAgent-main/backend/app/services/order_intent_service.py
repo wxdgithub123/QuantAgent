@@ -51,9 +51,24 @@ class OrderIntentService:
         exchange_id: str = "okx",
         position_pct: Optional[float] = None,
     ) -> Dict[str, Any]:
+        """Create/read the draft intent only; no live price, sizing or RiskGuard."""
+        return await self.draft_intent_from_decision(
+            decision_id,
+            exchange_id=exchange_id,
+            position_pct=position_pct,
+        )
+
+    async def draft_intent_from_decision(
+        self,
+        decision_id: int,
+        *,
+        exchange_id: str = "okx",
+        position_pct: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Persist decision-evidence intent draft without realtime dependencies."""
         decision = await self._load_decision(decision_id)
         intent = self._build_intent(decision, exchange_id=exchange_id, position_pct=position_pct)
-        return await self._preview(decision, intent, exchange_id)
+        return await self._draft_response(decision, intent, exchange_id)
 
     async def execute_from_decision(
         self,
@@ -64,10 +79,37 @@ class OrderIntentService:
     ) -> Dict[str, Any]:
         decision = await self._load_decision(decision_id)
         intent_obj = self._build_intent(decision, exchange_id=exchange_id, position_pct=position_pct)
-        preview = await self._preview(decision, intent_obj, exchange_id)
-        if preview["status"] == "NO_ACTION":
-            return preview
-        if preview["status"] == "BLOCKED":
+        draft = await self._draft_response(decision, intent_obj, exchange_id)
+        if intent_obj.side is None:
+            return draft
+
+        price = await self._get_price(intent_obj.symbol, exchange_id)
+        sizing = await self._calculate_quantity(intent_obj, price)
+        risk_preview = await self._risk_preview(intent_obj, price, sizing["quantity"])
+
+        preview = {
+            **draft,
+            "status": "RISK_CHECKED" if risk_preview["allowed"] else "BLOCKED",
+            "message": "OrderIntent 已通过实时执行前风控，准备进入本地模拟成交。" if risk_preview["allowed"] else "OrderIntent 草案已生成，但当前实时风控不允许执行。",
+            "intent": self._intent_api(intent_obj, quantity=sizing["quantity"]),
+            "price": price,
+            "sizing": sizing,
+            "risk_preview": risk_preview,
+            "passed": risk_preview["allowed"],
+            "blockedReason": risk_preview.get("reason"),
+        }
+        await self._audit(
+            "RISK_CHECK_PASSED" if risk_preview["allowed"] else "RISK_BLOCKED",
+            intent_obj,
+            {
+                "stage": "execution_preview_or_result",
+                "decision": self._decision_audit_payload(decision),
+                "price": price,
+                "sizing": sizing,
+                "risk_preview": risk_preview,
+            },
+        )
+        if not risk_preview["allowed"]:
             return preview
 
         client_order_id = intent_obj.intent_id
@@ -92,7 +134,15 @@ class OrderIntentService:
                 "order_id": execution.get("order_id"),
                 "execution": execution,
             }
-            await self._audit("PAPER_ORDER_FILLED", intent_obj, result)
+            await self._audit(
+                "PAPER_ORDER_FILLED",
+                intent_obj,
+                {
+                    **result,
+                    "stage": "execution_preview_or_result",
+                    "decision": self._decision_audit_payload(decision),
+                },
+            )
             return result
         except ValueError as exc:
             result = {
@@ -102,7 +152,15 @@ class OrderIntentService:
                 "order_id": None,
                 "execution": None,
             }
-            await self._audit("PAPER_ORDER_REJECTED", intent_obj, result)
+            await self._audit(
+                "PAPER_ORDER_REJECTED",
+                intent_obj,
+                {
+                    **result,
+                    "stage": "execution_preview_or_result",
+                    "decision": self._decision_audit_payload(decision),
+                },
+            )
             return result
 
     async def execute_manual_order(
@@ -238,6 +296,34 @@ class OrderIntentService:
             "sizing": sizing,
             "risk_preview": risk_preview,
             "decision": self._decision_summary(decision),
+        }
+
+    async def _draft_response(
+        self,
+        decision: Dict[str, Any],
+        intent: OrderIntent,
+        exchange_id: str,
+    ) -> Dict[str, Any]:
+        action = "HOLD_RECORDED" if intent.side is None else "ORDER_INTENT_CREATED"
+        status = "NO_ACTION" if intent.side is None else "READY"
+        if intent.status == "BLOCKED":
+            status = "BLOCKED"
+        details = {
+            "stage": "decision_evidence",
+            "decision": self._decision_audit_payload(decision),
+            "execution_note": "Draft only. No realtime price/account/position lookup and no RiskGuard check.",
+        }
+        await self._audit_once(action, intent, details)
+        return {
+            "status": status,
+            "message": "该决策为观望/空仓，不生成模拟盘订单。" if intent.side is None else "OrderIntent 草案已生成，等待用户显式执行。",
+            "data_lineage": self._data_lineage(exchange_id),
+            "intent": self._intent_api(intent),
+            "decision": self._decision_summary(decision),
+            "draft_only": True,
+            "risk_preview": None,
+            "price": None,
+            "sizing": None,
         }
 
     async def _load_decision(self, decision_id: int) -> Dict[str, Any]:
@@ -475,6 +561,36 @@ class OrderIntentService:
             },
             ip_address="internal",
         )
+
+    async def _audit_once(self, action: str, intent: OrderIntent, details: Dict[str, Any]) -> None:
+        if await self._has_audit_event(action, intent):
+            return
+        await self._audit(action, intent, details)
+
+    async def _has_audit_event(self, action: str, intent: OrderIntent) -> bool:
+        try:
+            async with get_db() as session:
+                row = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT id
+                            FROM audit_logs
+                            WHERE action = :action
+                              AND (
+                                details->>'orderIntentId' = :intent_id
+                                OR details->'intent'->>'id' = :intent_id
+                                OR details->'intent'->>'intent_id' = :intent_id
+                              )
+                            LIMIT 1
+                            """
+                        ),
+                        {"action": action, "intent_id": intent.intent_id},
+                    )
+                ).first()
+            return row is not None
+        except Exception:
+            return False
 
     @staticmethod
     def _decision_summary(decision: Dict[str, Any]) -> Dict[str, Any]:

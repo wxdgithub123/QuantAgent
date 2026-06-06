@@ -1018,3 +1018,9 @@ class CoordinationHistoryDB(Base):
     position_advice = Column(JSONB, nullable=False, default={})
     risk_notes = Column(Text, nullable=False, default="")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # ── Audit traceability (2025-06) ─────────────────────────────────────
+    context_id = Column(String(128), nullable=True)
+    context_hash = Column(String(128), nullable=True)
+    available_time = Column(DateTime(timezone=True), nullable=True)
+    model_version = Column(String(128), nullable=True)
+    prompt_version = Column(String(128), nullable=True)

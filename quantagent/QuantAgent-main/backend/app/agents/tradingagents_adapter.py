@@ -9,6 +9,8 @@ and maps the response back to the existing CoordinationResult contract.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -35,6 +37,16 @@ def _safe_float(value: Any, default: float = 0.5) -> float:
         return float(value)
     except Exception:
         return default
+
+
+def _truncate_text(value: Any, max_chars: int = 700) -> Any:
+    if not isinstance(value, str):
+        return value
+    return value if len(value) <= max_chars else value[:max_chars] + "..."
+
+
+def _json_size_bytes(value: Dict[str, Any]) -> int:
+    return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
 
 
 class TradingAgentsAdapter:
@@ -146,47 +158,159 @@ class TradingAgentsAdapter:
         """
         from app.agents.coordinator_agent import CoordinationResult
 
-        context = analysis_context or {
-            "symbol": symbol,
-            "timeframe": interval,
-            "market_data": market_data or {},
-            "recent_signals": signal_events or [],
-            "macro_events": (macro_context or {}).get("macro_events", []),
-            "latest_factors": (macro_context or {}).get("latest_factors", {}),
-        }
+        compact_context = self._compact_analysis_context(
+            analysis_context or {},
+            symbol=symbol,
+            interval=interval,
+        )
         payload = {
             "symbol": symbol,
             "interval": interval,
-            "analysis_context": context,
+            "analysis_context": compact_context,
             "fast": fast,
         }
 
-        url = f"{self.service_url}/analyze"
-        timeout = aiohttp.ClientTimeout(total=max(float(self.timeout_seconds), 300.0))
+        import json as _json, http.client, asyncio
+        _payload_str = _json.dumps(payload, default=str)
+        logger.info("[tradingagents] Sending %d bytes to tradingagents-service", len(_payload_str))
+
+        effective_timeout = min(float(self.timeout_seconds), 45.0) if fast else max(float(self.timeout_seconds), 900.0)
+
+        def _sync_post():
+            conn = http.client.HTTPConnection("tradingagents-service", 8010, timeout=effective_timeout)
+            try:
+                conn.request("POST", "/analyze", body=_payload_str.encode("utf-8"),
+                             headers={"Content-Type": "application/json"})
+                resp = conn.getresponse()
+                body = _json.loads(resp.read().decode("utf-8"))
+                if resp.status >= 400:
+                    logger.warning("[tradingagents] service returned HTTP %s: %s", resp.status, str(body)[:300])
+                    return None
+                return self._map_to_result(symbol=symbol, raw=body)
+            finally:
+                conn.close()
+
         try:
-            async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
-                async with session.post(url, json=payload) as resp:
-                    body = await resp.json(content_type=None)
-                    if resp.status >= 400:
-                        logger.warning(
-                            "[tradingagents] service returned HTTP %s: %s",
-                            resp.status,
-                            str(body)[:300],
-                        )
-                        return None
+            return await asyncio.to_thread(_sync_post)
         except Exception as exc:
-            logger.warning(
-                "[tradingagents] service call failed: %s: %r",
-                type(exc).__name__,
-                exc,
-            )
+            logger.warning("[tradingagents] service call failed: %s: %r", type(exc).__name__, exc)
             return None
 
-        if str(body.get("status", "")).lower() not in {"ok", "success"}:
-            logger.warning("[tradingagents] service status not ok: %s", body)
-            return None
+        # HTTP 200 = success; status field may vary ("ok"/"success"/"completed")
+        svc_status = str(body.get("status", "")).lower()
+        if svc_status and svc_status not in {"ok", "success", "completed"}:
+            logger.warning("[tradingagents] unexpected status=%s, using response anyway", svc_status)
 
         return self._map_to_result(symbol=symbol, raw=body)
+
+    @staticmethod
+    def _compact_analysis_context(
+        analysis_context: Dict[str, Any],
+        *,
+        symbol: str,
+        interval: str,
+        max_payload_bytes: int = 120_000,
+    ) -> Dict[str, Any]:
+        """Return a bounded but truthful AnalysisContext for TradingAgents.
+
+        Factors, signals and snapshot metadata are never dropped because they
+        are the core decision evidence. When size pressure appears, only
+        high-cardinality bars/news/macro collections are trimmed.
+        """
+        ctx = analysis_context if isinstance(analysis_context, dict) else {}
+        bars = ctx.get("bars") if isinstance(ctx.get("bars"), list) else []
+        news = ctx.get("news_events") if isinstance(ctx.get("news_events"), list) else []
+        macro = ctx.get("macro_events") if isinstance(ctx.get("macro_events"), list) else []
+
+        metadata = ctx.get("metadata") if isinstance(ctx.get("metadata"), dict) else {}
+        compact = {
+            "symbol": ctx.get("symbol") or symbol,
+            "timeframe": ctx.get("timeframe") or interval,
+            "as_of_time": ctx.get("as_of_time"),
+            "schema_version": ctx.get("schema_version") or "analysis_context.v1",
+            "bars": bars[-120:],
+            "latest_factors": ctx.get("latest_factors") if isinstance(ctx.get("latest_factors"), dict) else {},
+            "recent_signals": ctx.get("recent_signals") if isinstance(ctx.get("recent_signals"), list) else [],
+            "news_events": TradingAgentsAdapter._compact_events(news),
+            "macro_events": TradingAgentsAdapter._compact_events(macro),
+            "input_snapshot_ids": ctx.get("input_snapshot_ids") if isinstance(ctx.get("input_snapshot_ids"), dict) else {},
+            "data_versions": ctx.get("data_versions") if isinstance(ctx.get("data_versions"), dict) else {},
+            "metadata": metadata,
+            "backend_api_url": "http://backend:8000",
+        }
+        compact["context_hash"] = (
+            ctx.get("context_hash")
+            or metadata.get("context_hash")
+            or TradingAgentsAdapter._analysis_context_hash(compact)
+        )
+
+        while _json_size_bytes(compact) > max_payload_bytes:
+            if len(compact["bars"]) > 20:
+                compact["bars"] = compact["bars"][-max(20, len(compact["bars"]) // 2):]
+            elif len(compact["news_events"]) > 5:
+                compact["news_events"] = compact["news_events"][:max(5, len(compact["news_events"]) // 2)]
+            elif len(compact["macro_events"]) > 5:
+                compact["macro_events"] = compact["macro_events"][:max(5, len(compact["macro_events"]) // 2)]
+            else:
+                logger.warning(
+                    "[tradingagents] compact AnalysisContext still large (%d bytes); preserving factors/signals/snapshot ids",
+                    _json_size_bytes(compact),
+                )
+                break
+            compact["context_hash"] = (
+                ctx.get("context_hash")
+                or metadata.get("context_hash")
+                or TradingAgentsAdapter._analysis_context_hash(compact)
+            )
+
+        return compact
+
+    @staticmethod
+    def _compact_events(rows: List[Dict[str, Any]], limit: int = 30) -> List[Dict[str, Any]]:
+        compacted: List[Dict[str, Any]] = []
+        for row in rows[:limit]:
+            if not isinstance(row, dict):
+                continue
+            item: Dict[str, Any] = {}
+            for key in (
+                "id",
+                "raw_payload_id",
+                "indicator",
+                "name",
+                "title",
+                "summary",
+                "sentiment",
+                "sentiment_score",
+                "value",
+                "actual",
+                "event_time",
+                "timestamp",
+                "published_at",
+                "available_time",
+                "provider",
+                "source",
+                "schema_version",
+                "source_version",
+            ):
+                if key in row:
+                    item[key] = _truncate_text(row.get(key))
+            if item:
+                compacted.append(item)
+        return compacted
+
+    @staticmethod
+    def _analysis_context_hash(ctx: Dict[str, Any]) -> str:
+        stable = {
+            "symbol": ctx.get("symbol"),
+            "timeframe": ctx.get("timeframe"),
+            "as_of_time": ctx.get("as_of_time"),
+            "input_snapshot_ids": ctx.get("input_snapshot_ids"),
+            "data_versions": ctx.get("data_versions"),
+        }
+        digest = hashlib.sha256(
+            json.dumps(stable, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()[:16]
+        return f"sha256:{digest}"
 
     def _map_to_result(
         self,
@@ -207,19 +331,64 @@ class TradingAgentsAdapter:
         analyst_reports = raw.get("analyst_reports") or []
         if not isinstance(analyst_reports, list):
             analyst_reports = [analyst_reports]
+        raw_payload = raw.get("raw") if isinstance(raw.get("raw"), dict) else {}
+        internal_chain = raw_payload.get("internal_chain")
+        if isinstance(internal_chain, list) and len(internal_chain) > len(analyst_reports):
+            analyst_reports = [
+                {
+                    **report,
+                    "data_source_chain": report.get("data_source_chain")
+                    or "AnalysisContext / OpenBB / CCXT / ClickHouse / L5 因子信号",
+                }
+                for report in internal_chain
+                if isinstance(report, dict)
+            ]
 
         vote_breakdown = raw.get("vote_breakdown") or {"tradingagents": confidence}
         if not isinstance(vote_breakdown, dict):
             vote_breakdown = {"tradingagents": confidence}
 
         risk_flagged = bool(raw.get("risk_flagged", False))
-        raw_payload = raw.get("raw") if isinstance(raw.get("raw"), dict) else {}
         position_advice = raw.get("position_advice") if isinstance(raw.get("position_advice"), dict) else {}
-        internal_chain = raw_payload.get("internal_chain")
         if isinstance(internal_chain, list):
             position_advice = {
                 **position_advice,
                 "tradingagents_internal_chain": internal_chain,
+            }
+
+        def _join_reasoning(opinions: set[str]) -> str:
+            parts = []
+            for report in analyst_reports:
+                if not isinstance(report, dict):
+                    continue
+                opinion = str(report.get("opinion") or "").lower()
+                if opinion in opinions and report.get("reasoning"):
+                    role = str(report.get("role") or "role")
+                    parts.append(f"[{role}] {str(report.get('reasoning'))[:700]}")
+            return "\n".join(parts)
+
+        bull_view = str(raw.get("bull_view") or _join_reasoning({"buy", "bullish", "long"}))
+        bear_view = str(raw.get("bear_view") or _join_reasoning({"sell", "bearish", "short"}))
+        if not bull_view:
+            bull_view = "未形成独立多头结论；看多依据已汇总在角色分析和投票中。"
+        if not bear_view:
+            bear_view = "未形成独立空头结论；看空依据已汇总在角色分析和投票中。"
+
+        risk_notes = str(raw.get("risk_notes") or "")
+        if not risk_notes:
+            if risk_flagged:
+                risk_notes = "TradingAgents 标记风险，本次建议保持 WAIT 或降低仓位。"
+            elif decision == "WAIT":
+                risk_notes = "最终建议为 WAIT：证据不充分或多空分歧，暂不生成实际下单。"
+            else:
+                risk_notes = "未触发风控否决；仍需按账户风险限额控制仓位。"
+
+        if not position_advice:
+            position_advice = {
+                "action": decision,
+                "position_ratio": 0.0 if decision == "WAIT" else round(min(confidence, 0.5), 3),
+                "sizing_note": "WAIT 不建立新仓位。" if decision == "WAIT" else "按置信度和账户风险限额小仓位执行。",
+                "risk_note": risk_notes,
             }
 
         return CoordinationResult(
@@ -231,9 +400,11 @@ class TradingAgentsAdapter:
             vote_breakdown=vote_breakdown,
             risk_veto=risk_flagged,
             data_source="tradingagents-service",
+            bull_view=bull_view,
+            bear_view=bear_view,
             role_opinions=analyst_reports,
             input_snapshot_ids=raw_payload.get("input_snapshot_ids", {}),
-            risk_notes=str(raw.get("risk_notes") or ""),
+            risk_notes=risk_notes,
             position_advice=position_advice,
             timestamp=datetime.now(timezone.utc),
         )

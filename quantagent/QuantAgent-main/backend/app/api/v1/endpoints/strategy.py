@@ -23,7 +23,6 @@ from app.services.database import get_db
 from app.models.db_models import (
     AuditLog,
     BacktestResult,
-    CoordinationHistoryDB,
     OptimizationResult,
     PaperTrade,
     ReplaySession,
@@ -245,60 +244,15 @@ def _trade_entry_action(trade: Dict[str, Any]) -> str:
     return "SELL" if side in {"SHORT", "SELL"} else "BUY"
 
 
-def _build_mock_agent_outputs(
-    *,
-    symbol: str,
-    action: str,
-    confidence: float,
-    trade: Dict[str, Any],
-) -> List[Dict[str, Any]]:
-    pnl_pct = _safe_float(trade.get("pnl_pct", trade.get("realizedPnlPct")), 0.0)
-    entry = _safe_float(trade.get("entry_price", trade.get("entryPrice")), 0.0)
-    exit_price = _safe_float(trade.get("exit_price", trade.get("exitPrice")), 0.0)
-    return [
-        {
-            "role": "technicalAgent",
-            "label": "technical",
-            "signal": action,
-            "confidence": confidence,
-            "output": f"Mock audited backtest signal for {symbol}: entry={entry:.4f}, exit={exit_price:.4f}, pnl_pct={pnl_pct:.4f}.",
-        },
-        {
-            "role": "newsAgent",
-            "label": "news",
-            "signal": "NEUTRAL",
-            "confidence": 0.5,
-            "output": "No live news lookup in audited backtest; PIT-safe cached context only.",
-        },
-        {
-            "role": "macroAgent",
-            "label": "macro",
-            "signal": "NEUTRAL",
-            "confidence": 0.5,
-            "output": "No future macro data is used; available_time must be <= as_of_time.",
-        },
-        {
-            "role": "riskAgent",
-            "label": "risk",
-            "signal": "CHECK_RISKGUARD",
-            "confidence": 0.7,
-            "output": "OrderIntent must pass RiskGuard before any backtest PaperOrder is recorded.",
-        },
-        {
-            "role": "portfolioAgent",
-            "label": "portfolio",
-            "signal": action,
-            "confidence": confidence,
-            "output": "Backtest portfolio sizing uses the strategy trade quantity and local simulated capital.",
-        },
-        {
-            "role": "finalDecision",
-            "label": "final",
-            "signal": action,
-            "confidence": confidence,
-            "output": "Mock TradingAgentsGraph adapter approved this strong strategy signal for audited replay.",
-        },
-    ]
+def _agent_action_to_order_action(value: Any) -> str:
+    action = str(getattr(value, "value", value) or "WAIT").upper()
+    if action in {"BUY", "LONG", "LONG_REVERSAL"}:
+        return "BUY"
+    if action in {"SELL", "SHORT", "SHORT_REVERSAL"}:
+        return "SELL"
+    if action in {"HOLD", "WAIT"}:
+        return action
+    return "WAIT"
 
 
 def _build_order_intent_payload(
@@ -798,6 +752,7 @@ async def _apply_agent_audited_backtest_chain(
     paper_orders = 0
     blocked_count = 0
     skipped_count = 0
+    failed_count = 0
     updated_trades: List[Dict[str, Any]] = []
 
     for index, original_trade in enumerate(trades):
@@ -927,45 +882,69 @@ async def _apply_agent_audited_backtest_chain(
             continue
 
         agent_calls += 1
-        agent_outputs = _build_mock_agent_outputs(symbol=symbol, action=action, confidence=confidence, trade=trade)
-        decision_row = CoordinationHistoryDB(
-            symbol=symbol,
-            timestamp=as_of_time,
-            final_signal=action,
-            confidence=confidence,
-            vote_breakdown={
-                "technicalAgent": action,
-                "newsAgent": "NEUTRAL",
-                "macroAgent": "NEUTRAL",
-                "riskAgent": "CHECK_RISKGUARD",
-                "portfolioAgent": action,
-            },
-            risk_veto=False,
-            summary="Mock/cached AgentDecision for agent_audited backtest strong signal.",
-            agent_signals=agent_outputs,
-            bull_view=agent_outputs[0]["output"],
-            bear_view="RiskGuard may block the OrderIntent if exposure or drawdown limits are exceeded.",
-            input_snapshot_ids={
-                "snapshotId": snapshot_id,
-                "signalEventId": signal_row.id,
-                "backtestId": bt_row.id,
-                "replaySessionId": replay_session_id,
-                "pit": input_summary,
-            },
-            role_opinions=agent_outputs,
-            position_advice={
-                "action": action,
-                "quantity": quantity,
-                "auditedQuantity": risk_sized_quantity,
-                "price": price,
-                "executionMode": EXECUTION_MODE_AGENT_AUDITED,
-            },
-            risk_notes="Local RiskGuard required before recording any PaperOrder.",
-        )
-        session.add(decision_row)
-        await session.flush()
-        decision_id = decision_row.id
+        try:
+            from app.agents.coordinator_agent import CoordinatorAgent
+
+            agent_result = await CoordinatorAgent(fast_mode=True).coordinate_at(
+                symbol=symbol,
+                interval=interval,
+                as_of_time=as_of_time,
+                extra_input_snapshot_ids={
+                    "snapshotId": snapshot_id,
+                    "signalEventId": signal_row.id,
+                    "backtestId": bt_row.id,
+                    "replaySessionId": replay_session_id,
+                    "pit": input_summary,
+                    "strategyAction": action,
+                },
+                audit_metadata={
+                    "backtestId": bt_row.id,
+                    "replaySessionId": replay_session_id,
+                    "signalEventId": signal_row.id,
+                    "executionMode": EXECUTION_MODE_AGENT_AUDITED,
+                    "source": "backtest",
+                    "strategyAction": action,
+                },
+                draft_order_intent=False,
+            )
+            if agent_result.data_source == "error" or not agent_result.decision_id:
+                raise RuntimeError(agent_result.summary or "TradingAgents returned no decision_id")
+        except Exception as exc:
+            failed_count += 1
+            logger.warning("Agent decision failed in agent_audited backtest: %s", exc)
+            failure_audit_id = await _add_backtest_audit_event(
+                session,
+                event_type="AGENT_DECISION_FAILED",
+                symbol=symbol,
+                details={
+                    "asOfTime": _iso(as_of_time),
+                    "availableTime": _iso(as_of_time),
+                    "snapshotId": snapshot_id,
+                    "signalEventId": signal_row.id,
+                    "backtestId": bt_row.id,
+                    "replaySessionId": replay_session_id,
+                    "replayTime": _iso(as_of_time),
+                    "executionMode": EXECUTION_MODE_AGENT_AUDITED,
+                    "action": action,
+                    "source": "backtest",
+                    "inputSummary": input_summary,
+                    "error": str(exc),
+                    "message": "TradingAgents decision failed; no mock/cached decision was generated.",
+                },
+            )
+            audit_ids.append(failure_audit_id)
+            trade_audit_ids.append(failure_audit_id)
+            trade["relatedAuditIds"] = trade_audit_ids
+            updated_trades.append(trade)
+            continue
+
+        decision_id = int(agent_result.decision_id)
+        agent_action = _agent_action_to_order_action(agent_result.final_signal)
+        agent_outputs = agent_result.role_opinions or agent_result.agent_signals or []
+        confidence = round(float(agent_result.confidence or confidence), 4)
         trade["relatedDecisionId"] = decision_id
+        trade["agentAction"] = agent_action
+        trade["strategyAction"] = action
 
         decision_audit_id = await _add_backtest_audit_event(
             session,
@@ -981,22 +960,65 @@ async def _apply_agent_audited_backtest_chain(
                 "replaySessionId": replay_session_id,
                 "replayTime": _iso(as_of_time),
                 "executionMode": EXECUTION_MODE_AGENT_AUDITED,
-                "action": action,
+                "action": agent_action,
+                "strategyAction": action,
                 "source": "backtest",
-                "model": "mock_tradingagents_backtest.v1",
+                "model": agent_result.data_source,
                 "agentGraph": "QuantAgentTradingAgentsGraphAdapter",
+                "contextId": agent_result.context_id,
+                "contextHash": agent_result.context_hash,
                 "inputSummary": input_summary,
                 "agentOutputs": agent_outputs,
                 "decision": {
                     "id": decision_id,
-                    "final_signal": action,
+                    "final_signal": agent_action,
                     "confidence": confidence,
-                    "summary": decision_row.summary,
+                    "summary": agent_result.summary,
+                    "context_id": agent_result.context_id,
+                    "context_hash": agent_result.context_hash,
                 },
             },
         )
         audit_ids.append(decision_audit_id)
         trade_audit_ids.append(decision_audit_id)
+
+        if agent_action in {"WAIT", "HOLD"}:
+            hold_audit_id = await _add_backtest_audit_event(
+                session,
+                event_type="HOLD_RECORDED",
+                symbol=symbol,
+                details={
+                    "asOfTime": _iso(as_of_time),
+                    "availableTime": _iso(as_of_time),
+                    "snapshotId": snapshot_id,
+                    "decisionId": decision_id,
+                    "signalEventId": signal_row.id,
+                    "backtestId": bt_row.id,
+                    "replaySessionId": replay_session_id,
+                    "replayTime": _iso(as_of_time),
+                    "executionMode": EXECUTION_MODE_AGENT_AUDITED,
+                    "action": agent_action,
+                    "strategyAction": action,
+                    "source": "backtest",
+                    "inputSummary": input_summary,
+                    "agentOutputs": agent_outputs,
+                    "decision": {
+                        "id": decision_id,
+                        "final_signal": agent_action,
+                        "confidence": confidence,
+                        "summary": agent_result.summary,
+                    },
+                    "message": "Agent final decision was WAIT/HOLD; no historical simulated PaperOrder was generated.",
+                },
+            )
+            audit_ids.append(hold_audit_id)
+            trade_audit_ids.append(hold_audit_id)
+            trade["relatedAuditIds"] = trade_audit_ids
+            trade["source"] = "agent_hold"
+            updated_trades.append(trade)
+            continue
+
+        action = agent_action
 
         intent_id = f"OI-BT-{bt_row.id}-{index + 1}-{uuid.uuid4().hex[:6]}"[:50]
         intent = _build_order_intent_payload(
@@ -1028,6 +1050,7 @@ async def _apply_agent_audited_backtest_chain(
                 "replayTime": _iso(as_of_time),
                 "executionMode": EXECUTION_MODE_AGENT_AUDITED,
                 "action": action,
+                "strategyAction": trade.get("strategyAction"),
                 "source": "backtest",
                 "inputSummary": input_summary,
                 "agentOutputs": agent_outputs,
@@ -1078,6 +1101,7 @@ async def _apply_agent_audited_backtest_chain(
                 "replayTime": _iso(as_of_time),
                 "executionMode": EXECUTION_MODE_AGENT_AUDITED,
                 "action": action,
+                "strategyAction": trade.get("strategyAction"),
                 "source": "backtest",
                 "inputSummary": input_summary,
                 "agentOutputs": agent_outputs,
@@ -1152,6 +1176,7 @@ async def _apply_agent_audited_backtest_chain(
                         "replayTime": _iso(as_of_time),
                         "executionMode": EXECUTION_MODE_AGENT_AUDITED,
                         "action": action,
+                        "strategyAction": trade.get("strategyAction"),
                         "source": "backtest",
                         "inputSummary": input_summary,
                         "agentOutputs": agent_outputs,
@@ -1178,6 +1203,7 @@ async def _apply_agent_audited_backtest_chain(
             "paperOrderCount": paper_orders,
             "riskBlockedCount": blocked_count,
             "skippedAgentCalls": skipped_count,
+            "failedAgentCalls": failed_count,
             "maxAgentCalls": max_agent_calls,
         },
     }
@@ -1427,6 +1453,7 @@ async def run_backtest(req: BacktestRequest):
         "auditRecordCount": 0,
         "riskBlockedCount": 0,
         "skippedAgentCalls": 0,
+        "failedAgentCalls": 0,
         "maxAgentCalls": max_agent_calls,
     }
     try:
@@ -1548,6 +1575,7 @@ async def run_backtest(req: BacktestRequest):
             "auditRecordCount": len(audit_record_ids),
             "riskBlockedCount": trace_stats.get("riskBlockedCount", 0),
             "skippedAgentCalls": trace_stats.get("skippedAgentCalls", 0),
+            "failedAgentCalls": trace_stats.get("failedAgentCalls", 0),
             "maxAgentCalls": max_agent_calls,
         },
         auditRecordIds=audit_record_ids,

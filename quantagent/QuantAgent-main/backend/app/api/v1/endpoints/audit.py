@@ -1,7 +1,7 @@
 """PRD 10.5 backtest, replay, audit, and comparison overview endpoints."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -152,11 +152,73 @@ def _decision_payload(row: Any) -> Dict[str, Any]:
         "position_advice": _repair_json(_safe_dict(row["position_advice"])),
         "risk_notes": _repair_text(row["risk_notes"] or ""),
         "created_at": _iso(row["created_at"]),
+        "context_id": row["context_id"],
+        "context_hash": row["context_hash"],
+        "available_time": _iso(row["available_time"]),
+        "model_version": row["model_version"],
+        "prompt_version": row["prompt_version"],
+    }
+
+
+def _signal_name(value: Any) -> str:
+    if hasattr(value, "value"):
+        return str(value.value).upper()
+    return str(value or "").upper()
+
+
+def _replay_value(payload: Any, key: str, default: Any = None) -> Any:
+    if isinstance(payload, dict):
+        return payload.get(key, default)
+    return getattr(payload, key, default)
+
+
+def _extract_interval_from_snapshot(snapshot: Dict[str, Any], fallback: str = "1h") -> str:
+    bar_meta = snapshot.get("bar_meta") if isinstance(snapshot, dict) else None
+    if isinstance(bar_meta, list) and bar_meta:
+        bar_meta = bar_meta[0]
+    if isinstance(bar_meta, dict):
+        interval = bar_meta.get("interval") or bar_meta.get("timeframe")
+        if interval:
+            return str(interval)
+    interval = snapshot.get("interval") or snapshot.get("timeframe") if isinstance(snapshot, dict) else None
+    return str(interval or fallback)
+
+
+def _decision_diff_summary(source_decision: Dict[str, Any], replay_result: Any) -> Dict[str, Any]:
+    original_action = _signal_name(source_decision.get("final_signal") or source_decision.get("action"))
+    replay_signal = _replay_value(replay_result, "final_signal")
+    replay_action = _signal_name(replay_signal or _replay_value(replay_result, "action"))
+    original_confidence = _safe_float(source_decision.get("confidence"))
+    replay_confidence = _safe_float(_replay_value(replay_result, "confidence"))
+    original_hash = source_decision.get("context_hash") or source_decision.get("contextHash")
+    replay_hash = _replay_value(replay_result, "context_hash") or _replay_value(replay_result, "contextHash")
+    original_summary = str(source_decision.get("summary") or "")
+    replay_summary = str(_replay_value(replay_result, "summary", "") or "")
+    original_risk = bool(source_decision.get("risk_veto"))
+    replay_risk = bool(_replay_value(replay_result, "risk_veto", False))
+
+    return {
+        "originalAction": original_action,
+        "replayAction": replay_action,
+        "actionChanged": bool(original_action and replay_action and original_action != replay_action),
+        "originalConfidence": round(original_confidence, 4),
+        "replayConfidence": round(replay_confidence, 4),
+        "confidenceDelta": round(replay_confidence - original_confidence, 4),
+        "originalRiskVeto": original_risk,
+        "replayRiskVeto": replay_risk,
+        "riskVetoChanged": original_risk != replay_risk,
+        "originalContextHash": original_hash,
+        "replayContextHash": replay_hash,
+        "contextHashChanged": bool(original_hash and replay_hash and original_hash != replay_hash),
+        "summaryChanged": bool(original_summary and replay_summary and original_summary != replay_summary),
     }
 
 
 AUDIT_EVENT_TYPES = {
     "AGENT_DECISION",
+    "DECISION_REPLAY_REQUESTED",
+    "DECISION_REPLAY_COMPLETED",
+    "DECISION_REPLAY_FAILED",
     "ORDER_INTENT_CREATED",
     "RISK_CHECK_PASSED",
     "RISK_BLOCKED",
@@ -850,6 +912,8 @@ async def list_audit_records(
             """
             (
               details->>'decisionId' = :decision_id
+              OR details->>'sourceDecisionId' = :decision_id
+              OR details->>'replayDecisionId' = :decision_id
               OR details->'intent'->>'decision_id' = :decision_id
               OR details->'intent'->>'sourceDecisionId' = :decision_id
               OR details->'decision'->>'id' = :decision_id
@@ -1076,6 +1140,158 @@ async def export_audit_record(audit_id: int) -> Dict[str, Any]:
     }
 
 
+@router.post("/decisions/{decision_id}/replay")
+async def replay_decision(decision_id: int) -> Dict[str, Any]:
+    """Re-run TradingAgents from the source decision's PIT context.
+
+    The original decision remains immutable; a replay always creates a new
+    coordination_history row and append-only audit events.
+    """
+    async with get_db() as session:
+        source_row = (
+            await session.execute(
+                text(
+                    """
+                    SELECT id, symbol, timestamp, final_signal, confidence,
+                           vote_breakdown, risk_veto, summary, input_snapshot_ids,
+                           role_opinions, agent_signals, created_at,
+                           context_id, context_hash, available_time,
+                           model_version, prompt_version
+                    FROM coordination_history
+                    WHERE id = :decision_id
+                    """
+                ),
+                {"decision_id": decision_id},
+            )
+        ).mappings().first()
+
+    if not source_row:
+        raise HTTPException(status_code=404, detail=f"Decision {decision_id} not found")
+
+    source_decision = _decision_payload(source_row)
+    snapshot_ids = _safe_dict(source_decision.get("input_snapshot_ids"))
+    as_of_time = source_row["available_time"] or source_row["timestamp"]
+    if isinstance(as_of_time, datetime) and as_of_time.tzinfo is None:
+        as_of_time = as_of_time.replace(tzinfo=timezone.utc)
+    interval = _extract_interval_from_snapshot(snapshot_ids)
+
+    from app.services.audit_service import audit_service
+
+    await audit_service.log_event(
+        action="DECISION_REPLAY_REQUESTED",
+        user_id="system",
+        resource=source_decision["symbol"],
+        details={
+            "decisionId": decision_id,
+            "sourceDecisionId": decision_id,
+            "asOfTime": _iso(as_of_time),
+            "contextId": source_decision.get("context_id"),
+            "contextHash": source_decision.get("context_hash"),
+            "snapshotId": snapshot_ids,
+            "source": "audit_decision_replay",
+            "inputSummary": {
+                "sourceDecisionId": decision_id,
+                "originalContextHash": source_decision.get("context_hash"),
+                "snapshot_ids": snapshot_ids,
+                "pitRule": "available_time <= as_of_time",
+            },
+        },
+        ip_address="internal",
+    )
+
+    try:
+        from app.agents.coordinator_agent import CoordinatorAgent
+
+        coordinator = CoordinatorAgent(fast_mode=False)
+        replay_result = await coordinator.coordinate_at(
+            symbol=source_decision["symbol"],
+            interval=interval,
+            as_of_time=as_of_time,
+            extra_input_snapshot_ids={
+                "sourceDecisionId": decision_id,
+                "replayOfDecisionId": decision_id,
+                "original_snapshot_ids": snapshot_ids,
+            },
+            audit_metadata={
+                "source": "audit_decision_replay",
+                "sourceDecisionId": decision_id,
+                "originalContextHash": source_decision.get("context_hash"),
+                "replayKind": "decision_replay",
+            },
+            draft_order_intent=True,
+        )
+        if replay_result.data_source == "error" or not replay_result.decision_id:
+            raise RuntimeError(replay_result.summary or "TradingAgents replay failed")
+
+        diff_summary = _decision_diff_summary(source_decision, replay_result)
+        response = {
+            "sourceDecisionId": decision_id,
+            "replayDecisionId": replay_result.decision_id,
+            "originalContextHash": source_decision.get("context_hash"),
+            "replayContextHash": replay_result.context_hash,
+            "diffSummary": diff_summary,
+            "auditUrl": f"/audit?decision_id={replay_result.decision_id}",
+        }
+        await audit_service.log_event(
+            action="DECISION_REPLAY_COMPLETED",
+            user_id="system",
+            resource=source_decision["symbol"],
+            details={
+                "decisionId": replay_result.decision_id,
+                "sourceDecisionId": decision_id,
+                "replayDecisionId": replay_result.decision_id,
+                "asOfTime": _iso(as_of_time),
+                "contextId": replay_result.context_id,
+                "contextHash": replay_result.context_hash,
+                "originalContextHash": source_decision.get("context_hash"),
+                "replayContextHash": replay_result.context_hash,
+                "snapshotId": replay_result.input_snapshot_ids,
+                "source": "audit_decision_replay",
+                "diffSummary": diff_summary,
+                "inputSummary": {
+                    "sourceDecisionId": decision_id,
+                    "replayDecisionId": replay_result.decision_id,
+                    "originalContextHash": source_decision.get("context_hash"),
+                    "replayContextHash": replay_result.context_hash,
+                    "pitRule": "available_time <= as_of_time",
+                },
+                "decision": {
+                    "id": replay_result.decision_id,
+                    "final_signal": replay_result.final_signal.value,
+                    "confidence": replay_result.confidence,
+                    "context_hash": replay_result.context_hash,
+                    "timestamp": _iso(replay_result.timestamp),
+                    "summary": replay_result.summary,
+                },
+                "agentOutputs": replay_result.role_opinions or replay_result.agent_signals,
+            },
+            ip_address="internal",
+        )
+        return response
+    except Exception as exc:
+        logger.error("Decision replay failed for %s: %s", decision_id, exc, exc_info=True)
+        await audit_service.log_event(
+            action="DECISION_REPLAY_FAILED",
+            user_id="system",
+            resource=source_decision["symbol"],
+            details={
+                "decisionId": decision_id,
+                "sourceDecisionId": decision_id,
+                "asOfTime": _iso(as_of_time),
+                "contextHash": source_decision.get("context_hash"),
+                "source": "audit_decision_replay",
+                "error": str(exc),
+                "inputSummary": {
+                    "sourceDecisionId": decision_id,
+                    "originalContextHash": source_decision.get("context_hash"),
+                    "pitRule": "available_time <= as_of_time",
+                },
+            },
+            ip_address="internal",
+        )
+        raise HTTPException(status_code=502, detail=f"Decision replay failed: {exc}")
+
+
 @router.get("/decisions/{decision_id}")
 async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
     """Return one decision with its immutable audit and execution chain.
@@ -1092,7 +1308,9 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
                     SELECT id, symbol, timestamp, final_signal, confidence,
                            vote_breakdown, risk_veto, summary, agent_signals,
                            bull_view, bear_view, input_snapshot_ids, role_opinions,
-                           position_advice, risk_notes, created_at
+                           position_advice, risk_notes, created_at,
+                           context_id, context_hash, available_time,
+                           model_version, prompt_version
                     FROM coordination_history
                     WHERE id = :decision_id
                     """
@@ -1205,10 +1423,69 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
             )
         ).mappings().all()
 
+        replay_rows = (
+            await session.execute(
+                text(
+                    """
+                    SELECT id, action, user_id, resource, details, ip_address, created_at
+                    FROM audit_logs
+                    WHERE action IN (
+                        'DECISION_REPLAY_REQUESTED',
+                        'DECISION_REPLAY_COMPLETED',
+                        'DECISION_REPLAY_FAILED'
+                    )
+                      AND (
+                        details->>'decisionId' = :decision_id_text
+                        OR details->>'sourceDecisionId' = :decision_id_text
+                        OR details->>'replayDecisionId' = :decision_id_text
+                      )
+                    ORDER BY created_at ASC, id ASC
+                    """
+                ),
+                {"decision_id_text": str(decision_id)},
+            )
+        ).mappings().all()
+
     decision = _decision_payload(decision_row)
     snapshot = _safe_dict(decision.get("input_snapshot_ids"))
-    roles = _safe_list(decision.get("role_opinions")) or _safe_list(decision.get("agent_signals"))
+    role_opinions = _safe_list(decision.get("role_opinions"))
+    agent_signals = _safe_list(decision.get("agent_signals"))
+    roles = agent_signals if len(agent_signals) > len(role_opinions) else (role_opinions or agent_signals)
+    for role in roles:
+        if isinstance(role, dict) and not role.get("data_source_chain"):
+            role["data_source_chain"] = "AnalysisContext / OpenBB / CCXT / ClickHouse / 因子信号（推断）"
     decision_time = decision_row["timestamp"]
+
+    def _role_reasoning_for(opinions: set[str]) -> str:
+        parts = []
+        for role in roles:
+            if not isinstance(role, dict):
+                continue
+            opinion = str(role.get("opinion") or "").lower()
+            reasoning = role.get("reasoning")
+            if opinion in opinions and reasoning:
+                parts.append(f"[{role.get('role') or 'role'}] {str(reasoning)[:700]}")
+        return "\n".join(parts)
+
+    final_signal = str(decision.get("final_signal") or "").upper()
+    if not decision.get("bull_view"):
+        decision["bull_view"] = _role_reasoning_for({"buy", "bullish", "long"}) or "未形成独立多头结论；看多依据已汇总在角色分析和投票中。"
+    if not decision.get("bear_view"):
+        decision["bear_view"] = _role_reasoning_for({"sell", "bearish", "short"}) or "未形成独立空头结论；看空依据已汇总在角色分析和投票中。"
+    if not decision.get("risk_notes"):
+        if decision.get("risk_veto"):
+            decision["risk_notes"] = "本次决策被风险控制标记，建议保持观望或降低仓位。"
+        elif final_signal in {"WAIT", "HOLD"}:
+            decision["risk_notes"] = "最终建议为 WAIT：证据不充分或多空分歧，暂不生成实际下单。"
+        else:
+            decision["risk_notes"] = "未触发风控否决；仍需按账户风险限额控制仓位。"
+    if not decision.get("position_advice"):
+        decision["position_advice"] = {
+            "action": final_signal or "WAIT",
+            "position_ratio": 0.0 if final_signal in {"WAIT", "HOLD"} else min(_safe_float(decision.get("confidence")), 0.5),
+            "sizing_note": "WAIT 不建立新仓位。" if final_signal in {"WAIT", "HOLD"} else "按置信度和账户风险限额小仓位执行。",
+            "risk_note": decision["risk_notes"],
+        }
 
     order_intents = [
         {
@@ -1260,6 +1537,33 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
         )
 
     audit_timeline = [_audit_record_payload(row) for row in audit_rows]
+    replay_runs = []
+    for row in replay_rows:
+        details = _repair_json(_safe_dict(row["details"]))
+        event_type = str(details.get("eventType") or row["action"])
+        status = (
+            "completed" if event_type == "DECISION_REPLAY_COMPLETED"
+            else "failed" if event_type == "DECISION_REPLAY_FAILED"
+            else "requested"
+        )
+        replay_decision_id = _first_present(details.get("replayDecisionId"), details.get("decisionId"))
+        source_decision_id = _first_present(details.get("sourceDecisionId"), decision_id)
+        replay_runs.append(
+            {
+                "id": row["id"],
+                "eventType": event_type,
+                "status": status,
+                "sourceDecisionId": source_decision_id,
+                "replayDecisionId": replay_decision_id,
+                "originalContextHash": details.get("originalContextHash"),
+                "replayContextHash": details.get("replayContextHash") or details.get("contextHash"),
+                "diffSummary": _safe_dict(details.get("diffSummary")),
+                "auditUrl": f"/audit?decision_id={replay_decision_id}" if replay_decision_id else None,
+                "error": details.get("error"),
+                "createdAt": _iso(row["created_at"]),
+                "raw": details,
+            }
+        )
     if not any(item.get("eventType") == "AGENT_DECISION" for item in audit_timeline):
         audit_timeline.insert(
             0,
@@ -1285,6 +1589,16 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
                 "synthetic": True,
             },
         )
+
+    input_summary = {}
+    for record in audit_timeline:
+        input_summary = _safe_dict(record.get("inputSummary"))
+        if input_summary:
+            break
+        raw_details = _safe_dict(_safe_dict(record.get("raw")).get("details"))
+        input_summary = _safe_dict(raw_details.get("inputSummary"))
+        if input_summary:
+            break
 
     latest_intent = {}
     latest_risk = {}
@@ -1340,6 +1654,45 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
                 "pitRulePassed": pit_ok,
             }
         )
+    if not factor_evidence and input_summary:
+        captured_at = decision.get("available_time") or decision.get("timestamp")
+        for name, value in _safe_dict(input_summary.get("factor_snapshot")).items():
+            factor_evidence.append(
+                {
+                    "snapshotId": f"inputSummary.factor_snapshot.{name}",
+                    "factorName": name,
+                    "rawFactorName": name,
+                    "value": _safe_float(value),
+                    "signal": "审计输入因子",
+                    "strength": abs(_safe_float(value)),
+                    "explanation": "决策审计日志 inputSummary 捕获的因子值。",
+                    "availableTime": captured_at,
+                    "asOfTime": decision.get("timestamp"),
+                    "dataProvider": "audit_input_summary",
+                    "dataVersion": "inputSummary.v1",
+                    "pitRulePassed": True,
+                }
+            )
+        for idx, signal in enumerate(_safe_list(input_summary.get("recent_signals")), start=1):
+            if not isinstance(signal, dict):
+                continue
+            signal_name = signal.get("strategy") or signal.get("source_strategy") or f"signal_{idx}"
+            factor_evidence.append(
+                {
+                    "snapshotId": f"inputSummary.recent_signals.{idx}",
+                    "factorName": signal_name,
+                    "rawFactorName": signal_name,
+                    "value": _safe_float(signal.get("conf") or signal.get("confidence")),
+                    "signal": signal.get("type") or signal.get("signal_type") or "SIGNAL",
+                    "strength": _safe_float(signal.get("conf") or signal.get("confidence")),
+                    "explanation": "决策审计日志 inputSummary 捕获的近期策略信号。",
+                    "availableTime": captured_at,
+                    "asOfTime": decision.get("timestamp"),
+                    "dataProvider": "audit_input_summary",
+                    "dataVersion": "inputSummary.v1",
+                    "pitRulePassed": True,
+                }
+            )
 
     def role_output(*keywords: str) -> Dict[str, Any]:
         for role in roles:
@@ -1348,10 +1701,17 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
                 for key in ("role", "agent_type", "agent", "label")
             ).lower()
             if any(keyword in label for keyword in keywords):
+                # Ensure data_source_chain is present even if backend didn't record it
+                if "data_source_chain" not in role:
+                    role["data_source_chain"] = "AnalysisContext / OpenBB / CCXT / ClickHouse / 因子信号（推断）"
                 return role
-        return {"output": "暂无数据", "available": False}
+        return {
+            "output": "暂无数据",
+            "available": False,
+            "data_source_chain": "AnalysisContext / OpenBB / CCXT / ClickHouse（该角色未产生独立输出）",
+        }
 
-    agent_analysis = {
+    raw_agent_analysis = {
         "technicalAgent": role_output("technical", "market", "quantagent_market"),
         "newsAgent": role_output("news", "sentiment", "social"),
         "macroAgent": role_output("macro", "fundamental"),
@@ -1359,17 +1719,24 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
         "portfolioAgent": role_output("portfolio", "trader", "execution"),
         "finalDecision": role_output("final", "judge", "decision"),
     }
+    agent_analysis = {
+        key: value
+        for key, value in raw_agent_analysis.items()
+        if value.get("available", True) is not False
+    }
 
+    final_signal = str(decision.get("final_signal") or "").upper()
+    no_action = final_signal in {"WAIT", "HOLD"}
     order_intent_detail = {
-        "orderIntentId": latest_intent.get("id") or latest_intent.get("intent_id"),
+        "orderIntentId": latest_intent.get("id") or latest_intent.get("intent_id") or ("NO_ACTION" if no_action else None),
         "action": latest_intent.get("action") or decision.get("final_signal"),
-        "side": latest_intent.get("side") or "暂无数据",
+        "side": latest_intent.get("side") or ("flat" if no_action else "暂无数据"),
         "positionRatio": latest_intent.get("positionRatio") or latest_intent.get("position_pct"),
         "quantity": latest_intent.get("quantity"),
         "confidence": latest_intent.get("confidence") or decision.get("confidence"),
         "validUntil": latest_intent.get("validUntil") or latest_intent.get("valid_until"),
-        "reason": latest_intent.get("reason") or latest_intent.get("trigger_reason") or decision.get("summary"),
-        "status": latest_intent.get("status") or "暂无数据",
+        "reason": latest_intent.get("reason") or latest_intent.get("trigger_reason") or decision.get("summary") or ("最终建议为 WAIT，本次不生成下单意图。" if no_action else None),
+        "status": latest_intent.get("status") or ("NO_ACTION" if no_action else "暂无数据"),
         "sourceDecisionId": latest_intent.get("sourceDecisionId") or latest_intent.get("decision_id") or decision_id,
     }
 
@@ -1394,16 +1761,139 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
         if item.get("dataProvider") and item.get("dataProvider") != "暂无数据"
     ]
     data_versions = [item.get("dataVersion") for item in factor_evidence if item.get("dataVersion")]
+    # ── Read bar count from bar_meta if available, else fallback to counting IDs ──
+    raw_bar_meta = snapshot.get("bar_meta", {}) if isinstance(snapshot, dict) else {}
+    bar_meta = raw_bar_meta[0] if isinstance(raw_bar_meta, list) and raw_bar_meta else raw_bar_meta
+    bars_count = bar_meta.get("count") if isinstance(bar_meta, dict) else None
+    if bars_count is None:
+        bars_count = _snapshot_count(snapshot, "bar_ids", "bar_snapshot_ids", "bars")
+    summary_factor_count = len(_safe_dict(input_summary.get("factor_snapshot")))
+    summary_signal_count = len(_safe_list(input_summary.get("recent_signals")))
+    summary_news_count = int(_safe_float(input_summary.get("news_count"), 0.0))
+    summary_macro_count = int(_safe_float(input_summary.get("macro_count"), 0.0))
+    summary_snapshot_ids = _safe_dict(input_summary.get("snapshot_ids")) or snapshot
+    input_materials = {
+        "source": "audit_logs.inputSummary" if input_summary else "coordination_history.input_snapshot_ids",
+        "price": input_summary.get("price"),
+        "riskNotes": input_summary.get("risk_notes"),
+        "snapshotIds": summary_snapshot_ids,
+        "factorSnapshot": _safe_dict(input_summary.get("factor_snapshot")),
+        "recentSignals": _safe_list(input_summary.get("recent_signals")),
+        "barsCount": bars_count,
+        "newsCount": summary_news_count,
+        "macroCount": summary_macro_count,
+        "factorsCount": summary_factor_count,
+        "signalsCount": summary_signal_count,
+    }
+    role_input_materials = [
+        {
+            "role": role.get("role") or role.get("agent") or role.get("label") or f"role_{idx}",
+            "label": role.get("label") or role.get("role") or f"角色 {idx}",
+            "phase": role.get("phase"),
+            "dataSourceChain": role.get("data_source_chain"),
+            "inputMaterialSource": input_materials["source"],
+            "sharedInputSnapshot": summary_snapshot_ids,
+            "visibleData": {
+                "price": input_materials["price"],
+                "factorSnapshot": input_materials["factorSnapshot"],
+                "recentSignals": input_materials["recentSignals"],
+                "newsCount": summary_news_count,
+                "macroCount": summary_macro_count,
+            },
+        }
+        for idx, role in enumerate(roles, start=1)
+        if isinstance(role, dict)
+    ]
+
     input_snapshot = {
-        "snapshotId": snapshot,
+        "snapshotId": summary_snapshot_ids,
         "asOfTime": decision.get("timestamp"),
-        "availableTime": _first_present(*available_times),
+        "availableTime": _first_present(*available_times) or decision.get("available_time"),
         "dataProvider": _first_present(*data_providers) or "暂无数据",
-        "barsCount": _snapshot_count(snapshot, "bar_ids", "bar_snapshot_ids", "bars"),
-        "newsCount": _snapshot_count(snapshot, "news_payload_ids", "news_event_ids"),
-        "factorsCount": _snapshot_count(snapshot, "factor_snapshot_ids", "factor_ids"),
+        "barsCount": bars_count,
+        "newsCount": _snapshot_count(snapshot, "news_payload_ids", "news_event_ids") or summary_news_count,
+        "factorsCount": _snapshot_count(snapshot, "factor_snapshot_ids", "factor_ids") or summary_factor_count,
+        "signalsCount": _snapshot_count(snapshot, "signal_event_ids", "signal_ids") or summary_signal_count,
+        "macroCount": _snapshot_count(snapshot, "macro_keys", "macro_event_ids") or summary_macro_count,
+        "price": input_summary.get("price"),
+        "factorSnapshot": input_materials["factorSnapshot"],
+        "recentSignals": input_materials["recentSignals"],
         "dataVersion": _first_present(*data_versions) or "暂无数据",
         "sourceVersion": _first_present(*data_versions) or "暂无数据",
+        "barMeta": bar_meta if isinstance(bar_meta, dict) and bar_meta else None,
+    }
+
+    def _time_lte(left: Any, right: Any) -> Optional[bool]:
+        if not left or not right:
+            return None
+        try:
+            left_dt = left if isinstance(left, datetime) else datetime.fromisoformat(str(left).replace("Z", "+00:00"))
+            right_dt = right if isinstance(right, datetime) else datetime.fromisoformat(str(right).replace("Z", "+00:00"))
+            if left_dt.tzinfo is not None and right_dt.tzinfo is None:
+                right_dt = right_dt.replace(tzinfo=left_dt.tzinfo)
+            if right_dt.tzinfo is not None and left_dt.tzinfo is None:
+                left_dt = left_dt.replace(tzinfo=right_dt.tzinfo)
+            return left_dt <= right_dt
+        except Exception:
+            return None
+
+    pit_checks = [
+        {
+            "key": "point_in_time_rule",
+            "label": "available_time <= as_of_time",
+            "passed": _time_lte(input_snapshot.get("availableTime"), input_snapshot.get("asOfTime")),
+            "detail": {
+                "availableTime": input_snapshot.get("availableTime"),
+                "asOfTime": input_snapshot.get("asOfTime"),
+            },
+        },
+        {
+            "key": "factor_signal_evidence",
+            "label": "factor/signal evidence has no future data",
+            "passed": all(item.get("pitRulePassed") is not False for item in factor_evidence) if factor_evidence else None,
+            "detail": {
+                "evidence_count": len(factor_evidence),
+                "failed_count": len([item for item in factor_evidence if item.get("pitRulePassed") is False]),
+            },
+        },
+        {
+            "key": "role_outputs",
+            "label": "role outputs persisted",
+            "passed": len(roles) > 0,
+            "detail": {"role_count": len(roles)},
+        },
+        {
+            "key": "context_hash",
+            "label": "context hash persisted",
+            "passed": bool(decision.get("context_hash")),
+            "detail": {
+                "contextId": decision.get("context_id"),
+                "contextHash": decision.get("context_hash"),
+            },
+        },
+    ]
+
+    risk_guard = {
+        "passed": latest_risk.get("passed") if "passed" in latest_risk else latest_risk.get("allowed"),
+        "blockedReason": latest_risk.get("blockedReason") or latest_risk.get("blocked_reason") or latest_risk.get("reason"),
+        "checkedRules": latest_risk.get("checkedRules") or latest_risk.get("checked_rules") or [],
+    }
+    decision_evidence = {
+        "analysis_context": input_snapshot,
+        "input_materials": input_materials,
+        "role_outputs": roles,
+        "agent_analysis": agent_analysis,
+        "final_decision": decision,
+        "draft_order_intent": order_intent_detail,
+        "pit_checks": pit_checks,
+        "replay_runs": replay_runs,
+    }
+    execution_preview_or_result = {
+        "risk_guard": risk_guard,
+        "execution_result": execution_result,
+        "paper_trades": linked_trades,
+        "latest_risk_preview": latest_risk,
+        "latest_execution": latest_execution,
     }
 
     return {
@@ -1418,35 +1908,45 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
             "confidence": decision["confidence"],
             "createdAt": decision.get("created_at") or decision.get("timestamp"),
             "source": "coordination_history",
-            "model": "TradingAgents / QuantAgent agentGraph",
+            "model": decision.get("model_version") or "TradingAgents / QuantAgent agentGraph",
             "agentGraph": "TradingAgentsGraph QuantAgent adapter",
             "status": "risk_veto" if decision.get("risk_veto") else "created",
+            # ── Audit traceability fields ──
+            "contextId": decision.get("context_id") or (f"ctx-{decision['id']}" if decision.get("id") else None),
+            "contextHash": decision.get("context_hash"),
+            "availableTime": decision.get("available_time"),
+            "modelVersion": decision.get("model_version"),
+            "promptVersion": decision.get("prompt_version"),
         },
         "input_snapshot": input_snapshot,
         "factor_evidence": factor_evidence,
         "agent_analysis": agent_analysis,
         "order_intent": order_intent_detail,
-        "risk_guard": {
-            "passed": latest_risk.get("passed") if "passed" in latest_risk else latest_risk.get("allowed"),
-            "blockedReason": latest_risk.get("blockedReason") or latest_risk.get("blocked_reason") or latest_risk.get("reason"),
-            "checkedRules": latest_risk.get("checkedRules") or latest_risk.get("checked_rules") or [],
-        },
+        "risk_guard": risk_guard,
         "execution_result": execution_result,
+        "decision_evidence": decision_evidence,
+        "draft_order_intent": order_intent_detail,
+        "execution_preview_or_result": execution_preview_or_result,
+        "pit_checks": pit_checks,
+        "replay_runs": replay_runs,
         "audit_timeline": audit_timeline,
         "decision": decision,
         "trace_summary": {
-            "input_snapshot_id_groups": len(snapshot),
-            "factor_snapshots": _snapshot_count(snapshot, "factor_snapshot_ids", "factor_ids"),
-            "signal_events": _snapshot_count(snapshot, "signal_event_ids", "signal_ids"),
-            "news_events": _snapshot_count(snapshot, "news_payload_ids", "news_event_ids"),
-            "macro_events": _snapshot_count(snapshot, "macro_keys", "macro_event_ids"),
+            "input_snapshot_id_groups": len(summary_snapshot_ids),
+            "factor_snapshots": _snapshot_count(snapshot, "factor_snapshot_ids", "factor_ids") or summary_factor_count,
+            "signal_events": _snapshot_count(snapshot, "signal_event_ids", "signal_ids") or summary_signal_count,
+            "news_events": _snapshot_count(snapshot, "news_payload_ids", "news_event_ids") or summary_news_count,
+            "macro_events": _snapshot_count(snapshot, "macro_keys", "macro_event_ids") or summary_macro_count,
             "role_outputs": len(roles),
             "order_intent_events": len(order_intents),
             "paper_trades": len(linked_trades),
+            "replay_runs": len(replay_runs),
             "risk_blocked": any(row.get("eventType") == "RISK_BLOCKED" for row in audit_timeline),
             "executed": any(row.get("eventType") == "PAPER_ORDER_FILLED" for row in audit_timeline),
         },
         "role_outputs": roles,
+        "input_materials": input_materials,
+        "role_input_materials": role_input_materials,
         "order_intent_events": order_intents,
         "paper_trades": linked_trades,
         "links": {

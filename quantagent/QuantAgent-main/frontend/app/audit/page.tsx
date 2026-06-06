@@ -1,1835 +1,723 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useState, useEffect, useCallback } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { AppTopNav } from "@/components/navigation/AppTopNav";
 import {
-  Activity,
-  BarChart3,
-  Clock,
-  GitCompare,
-  History,
-  RefreshCw,
-  Shield,
-  ShieldCheck,
-  TimerReset,
+  RefreshCw, ChevronDown, ChevronUp,
+  CheckCircle, Shield, XCircle, AlertTriangle,
+  Database, Layers, ScrollText, Hash, GitCompare, Download, Filter, FileSearch
 } from "lucide-react";
 
-import { AppTopNav } from "@/components/navigation/AppTopNav";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { cn } from "@/lib/utils";
+// ─── Types ────────────────────────────────────────────────────────────────────
+interface AuditRecord {
+  id: number | null; eventType: string; symbol?: string | null;
+  asOfTime?: string | null; decisionId?: number | string | null;
+  action?: string | null; createdAt?: string | null;
+}
+
+interface AgentAnalysisEntry {
+  role?: string; label?: string; opinion?: string; confidence?: number | null;
+  summary?: string; reasoning?: string; data_source_chain?: string; output?: string; available?: boolean;
+  index?: number; phase?: string; risk_flag?: boolean; key_points?: string[];
+}
 
 type JsonRecord = Record<string, unknown>;
 
-interface PrdModule {
+interface AuditTimelineEntry extends Record<string, unknown> {
+  inputSummary?: JsonRecord;
+}
+
+interface AgentRoleView extends AgentAnalysisEntry {
   key: string;
-  title: string;
-  support_level: string;
-  status: "ready" | "partial" | "todo" | string;
-  description: string;
 }
 
-interface BacktestRow {
-  id: number;
-  strategy_type: string;
-  symbol: string;
-  interval: string;
-  pit?: JsonRecord;
-  total_return: number;
-  max_drawdown: number;
-  sharpe_ratio: number;
-  total_trades: number;
-  data_source?: string | null;
-  created_at?: string | null;
+interface InputMaterials {
+  source?: string;
+  price?: unknown;
+  riskNotes?: unknown;
+  snapshotIds?: JsonRecord;
+  factorSnapshot?: JsonRecord;
+  recentSignals?: unknown[];
+  barsCount?: number;
+  newsCount?: number;
+  macroCount?: number;
+  factorsCount?: number;
+  signalsCount?: number;
 }
 
-interface PitView {
-  enabled: boolean;
-  sourceSnapshotId: string;
-  rowCount: number;
-  paramsHash: string;
-}
-
-interface ReplayRow {
-  replay_session_id: string;
-  strategy_type?: string | null;
-  symbol: string;
-  start_time?: string | null;
-  end_time?: string | null;
-  current_timestamp?: string | null;
-  status: string;
-  initial_capital: number;
-  pnl: number;
-  total_return: number;
-  trade_count: number;
-  equity_points: number;
-  backtest_id?: number | null;
-  created_at?: string | null;
-}
-
-interface AuditLogRow {
-  id: number;
-  action: string;
-  user_id?: string | null;
-  resource?: string | null;
-  details: JsonRecord;
-  created_at?: string | null;
-}
-
-type OrderIntentAuditRow = AuditLogRow;
-
-interface StandardAuditRecord {
-  id: number | null;
-  eventType: string;
-  symbol?: string | null;
-  asOfTime?: string | null;
-  snapshotId?: unknown;
-  decisionId?: number | string | null;
-  orderIntentId?: string | null;
-  orderId?: string | null;
-  action?: string | null;
-  executionStatus?: string | null;
-  riskStatus?: string | null;
-  source?: string | null;
-  inputSummary?: unknown;
-  agentOutputs?: unknown;
-  riskCheckResult?: JsonRecord;
-  executionResult?: JsonRecord;
-  backtestId?: number | string | null;
-  replaySessionId?: string | null;
-  executionMode?: string | null;
-  replayTime?: string | null;
+interface ReplayRun {
+  id?: number | null;
+  eventType?: string;
+  status?: string;
+  sourceDecisionId?: number | string | null;
+  replayDecisionId?: number | string | null;
+  originalContextHash?: string | null;
+  replayContextHash?: string | null;
+  diffSummary?: JsonRecord;
+  auditUrl?: string | null;
+  error?: string | null;
   createdAt?: string | null;
-  immutable: boolean;
-  raw?: JsonRecord;
-  synthetic?: boolean;
-}
-
-interface AuditRecordsResponse {
-  schema_version: string;
-  generated_at: string;
-  immutability_note: string;
-  data: StandardAuditRecord[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-interface AuditRecordDetailResponse {
-  audit_record: StandardAuditRecord;
-}
-
-interface AuditFilters {
-  symbol: string;
-  eventType: string;
-  action: string;
-  executionStatus: string;
-  riskStatus: string;
-  source: string;
-  decisionId: string;
-  orderIntentId: string;
-  orderId: string;
-  backtestId: string;
-  replaySessionId: string;
-  executionMode: string;
-  startTime: string;
-  endTime: string;
-}
-
-interface DecisionRow {
-  id: number;
-  symbol: string;
-  timestamp?: string | null;
-  final_signal: string;
-  confidence: number;
-  risk_veto: boolean;
-  summary: string;
-  input_snapshot_ids: JsonRecord;
-}
-
-interface RoleOutput {
-  role?: string;
-  agent_type?: string;
-  agent?: string;
-  opinion?: string;
-  signal?: string;
-  confidence?: number;
-  reasoning?: string;
-  key_points?: string[];
-  risk_flag?: boolean;
-}
-
-interface TradingAgentsChainEntry {
-  index?: number;
-  phase?: string;
-  role?: string;
-  label?: string;
-  opinion?: string;
-  confidence?: number;
-  available?: boolean;
-  reasoning?: string;
 }
 
 interface DecisionAuditDetail {
-  schema_version: string;
-  generated_at: string;
-  immutability_note: string;
-  decision: DecisionRow & {
-    vote_breakdown?: JsonRecord;
-    agent_signals?: RoleOutput[];
-    bull_view?: string;
-    bear_view?: string;
-    role_opinions?: RoleOutput[];
-    position_advice?: JsonRecord;
-    risk_notes?: string;
-    created_at?: string | null;
-  };
-  trace_summary: {
-    input_snapshot_id_groups: number;
-    factor_snapshots: number;
-    signal_events: number;
-    news_events: number;
-    macro_events: number;
-    role_outputs: number;
-    order_intent_events: number;
-    paper_trades: number;
-    risk_blocked: boolean;
-    executed: boolean;
-  };
-  role_outputs: RoleOutput[];
-  order_intent_events: OrderIntentAuditRow[];
-  paper_trades: Array<{
-    id: number;
-    client_order_id?: string | null;
-    symbol: string;
-    exchange_id?: string | null;
-    side: string;
-    order_type: string;
-    quantity: number;
-    price: number;
-    benchmark_price?: number;
-    fee?: number;
-    funding_fee?: number;
-    pnl?: number;
-    status: string;
-    mode?: string | null;
-    session_id?: string | null;
-    data_source?: string | null;
-    created_at?: string | null;
-  }>;
-  links: {
-    research_snapshot?: string;
-    decision_center?: string;
-    audit_export?: string | null;
-  };
+  schema_version?: string; generated_at?: string;
+  basic_info?: { decisionId?: number; symbol?: string; action?: string; confidence?: number; status?: string; createdAt?: string; model?: string; agentGraph?: string; source?: string; contextId?: string; contextHash?: string; availableTime?: string; modelVersion?: string; promptVersion?: string };
+  agent_analysis?: Record<string, AgentAnalysisEntry>;
+  decision?: { final_signal?: string; risk_veto?: boolean; vote_breakdown?: Record<string, number> };
+  input_snapshot?: { snapshotId?: JsonRecord; barsCount?: number; newsCount?: number; factorsCount?: number; signalsCount?: number; macroCount?: number; price?: number; dataProvider?: string; asOfTime?: string; availableTime?: string; factorSnapshot?: JsonRecord; recentSignals?: unknown[] };
+  trace_summary?: { factor_snapshots?: number; signal_events?: number; news_events?: number; macro_events?: number; role_outputs?: number; order_intent_events?: number; paper_trades?: number; risk_blocked?: boolean; input_snapshot_id_groups?: number; replay_runs?: number };
+  risk_guard?: { passed?: boolean | null; blockedReason?: string | null };
+  execution_result?: { paperOrderGenerated?: boolean; orderId?: string | null; fillPrice?: number | null; orderStatus?: string; source?: string };
+  order_intent?: { orderIntentId?: string | null; action?: string; reason?: string };
+  decision_evidence?: Record<string, unknown>;
+  draft_order_intent?: Record<string, unknown>;
+  execution_preview_or_result?: Record<string, unknown>;
+  pit_checks?: Array<Record<string, unknown>>;
+  audit_timeline?: AuditTimelineEntry[];
+  order_intent_events?: Array<Record<string, unknown>>;
+  paper_trades?: Array<Record<string, unknown>>;
+  factor_evidence?: Array<Record<string, unknown>>;
+  role_outputs?: AgentAnalysisEntry[];
+  input_materials?: InputMaterials;
+  role_input_materials?: Array<Record<string, unknown>>;
+  replay_runs?: ReplayRun[];
+  links?: { research_snapshot?: string; audit_export?: string };
 }
 
-interface ComparisonCandidate {
-  replay_session_id: string;
-  symbol: string;
-  strategy_type?: string | null;
-  status: string;
-  backtest_id?: number | null;
-  candidate_backtest_id?: number | null;
-  candidate_interval?: string | null;
-  candidate_data_source?: string | null;
-  candidate_initial_capital?: number | null;
-  match_type?: string | null;
-  match_label?: string | null;
-  ready: boolean;
-  strict?: boolean;
-  needs_review?: boolean;
-  created_at?: string | null;
-}
+const NA = "后端未返回";
+const fmtTime = (t?: string | null) => t ? new Date(t).toLocaleString("zh-CN") : null;
+const formatPct = (v?: number | null) => v != null ? (v * 100).toFixed(0) + "%" : "—";
+const asRecord = (value: unknown): JsonRecord => value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
+const asArray = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
+const formatValue = (value: unknown) => typeof value === "number" ? Number(value).toLocaleString("zh-CN", { maximumFractionDigits: 4 }) : value != null ? String(value) : "—";
+const numericValue = (value: unknown) => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
+  return null;
+};
+const firstUsefulNumber = (...values: unknown[]) => {
+  const numbers = values.map(numericValue).filter((value): value is number => value != null);
+  const positive = numbers.find(value => value > 0);
+  return positive ?? numbers[0] ?? null;
+};
+const compactText = (value: unknown, max = 260) => {
+  const text = value == null ? "" : String(value);
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+};
+const prettyJson = (value: unknown) => {
+  try { return JSON.stringify(value, null, 2); }
+  catch { return String(value); }
+};
 
-interface PointInTimeInfo {
-  rule: string;
-  factor_snapshot_count: number;
-  signal_event_count: number;
-  backtest_count: number;
-  reproducible_backtest_count?: number;
-  symbol_count: number;
-  min_available_time?: string | null;
-  max_available_time?: string | null;
-  sample_context_url: string;
-}
-
-interface NextAction {
-  title: string;
-  href: string;
-  reason: string;
-}
-
-interface AuditOverview {
-  generated_at: string;
-  error?: string;
-  counts: Record<string, number>;
-  replay_status_counts: Record<string, number>;
-  point_in_time?: PointInTimeInfo;
-  modules: PrdModule[];
-  latest_backtests: BacktestRow[];
-  latest_replays: ReplayRow[];
-  latest_audit_logs: AuditLogRow[];
-  latest_order_intents: OrderIntentAuditRow[];
-  latest_decisions: DecisionRow[];
-  comparison_candidates: ComparisonCandidate[];
-  next_actions: NextAction[];
-}
-
-function readNumber(value: unknown, fallback = 0) {
-  const numeric = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(numeric) ? numeric : fallback;
-}
-
-function formatNumber(value: unknown) {
-  return readNumber(value).toLocaleString("zh-CN");
-}
-
-function formatMoney(value: unknown) {
-  return `$${readNumber(value).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}`;
-}
-
-function formatPercent(value: unknown) {
-  return `${readNumber(value).toFixed(2)}%`;
-}
-
-function formatRatioPercent(value: unknown) {
-  return `${(readNumber(value) * 100).toFixed(1)}%`;
-}
-
-function formatTime(value?: string | null) {
-  if (!value) return "暂无";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function shortId(value: string) {
-  if (!value) return "-";
-  return value.length > 14 ? `${value.slice(0, 8)}...${value.slice(-4)}` : value;
-}
-
-function moduleBadge(status: string) {
-  if (status === "ready") return "border-emerald-400/30 bg-emerald-500/15 text-emerald-300";
-  if (status === "partial") return "border-amber-400/30 bg-amber-500/15 text-amber-200";
-  return "border-slate-400/20 bg-slate-500/15 text-slate-300";
-}
-
-function moduleLabel(status: string) {
-  if (status === "ready") return "可使用";
-  if (status === "partial") return "部分可用";
-  if (status === "todo") return "待补齐";
-  return status || "未知";
-}
-
-function replayBadge(status: string) {
-  if (status === "completed") return "border-emerald-400/30 bg-emerald-500/15 text-emerald-300";
-  if (status === "running") return "border-sky-400/30 bg-sky-500/15 text-sky-200";
-  if (status === "failed") return "border-rose-400/30 bg-rose-500/15 text-rose-300";
-  return "border-amber-400/30 bg-amber-500/15 text-amber-200";
-}
-
-function replayLabel(status: string) {
-  if (status === "completed") return "已完成";
-  if (status === "running") return "运行中";
-  if (status === "pending") return "待启动";
-  if (status === "failed") return "失败";
-  if (status === "paused") return "已暂停";
-  return status || "未知";
-}
-
-function comparisonBadge(item: ComparisonCandidate) {
-  if (item.strict) return "border-emerald-400/30 bg-emerald-500/15 text-emerald-300";
-  if (item.ready) return "border-cyan-400/30 bg-cyan-500/15 text-cyan-200";
-  if (item.needs_review) return "border-amber-400/30 bg-amber-500/15 text-amber-200";
-  return "border-slate-400/20 bg-slate-500/15 text-slate-300";
-}
-
-function comparisonLabel(item: ComparisonCandidate) {
-  if (item.strict) return "严格可比";
-  if (item.ready) return "可对比";
-  if (item.needs_review) return "候选参考";
-  return "还不能对比";
-}
-
-function signalLabel(signal: string) {
-  const normalized = signal.toUpperCase();
-  if (normalized === "BUY") return "买入";
-  if (normalized === "SELL") return "卖出";
-  if (normalized === "HOLD") return "持有";
-  return "观望";
-}
-
-function signalClass(signal: string) {
-  const normalized = signal.toUpperCase();
-  if (normalized === "BUY") return "text-emerald-300";
-  if (normalized === "SELL") return "text-rose-300";
-  return "text-slate-300";
-}
-
-function roleLabel(role?: string) {
-  if (!role) return "未标注角色";
-  if (role === "tradingagents_openai_decision") return "TradingAgents 模型裁决";
-  if (role === "tradingagents_context_adapter") return "TradingAgents 上下文基线";
-  if (role === "tradingagents_quantagent_market") return "QuantAgent 市场结构分析";
-  if (role === "tradingagents_quantagent_sentiment") return "QuantAgent 新闻情绪分析";
-  if (role === "tradingagents_quantagent_news") return "QuantAgent 新闻/宏观分析";
-  if (role === "tradingagents_quantagent_context") return "QuantAgent 加密上下文分析";
-  if (role === "tradingagents_quantagent_situation") return "QuantAgent 情景摘要";
-  if (role === "tradingagents_quantagent_trader") return "QuantAgent 交易员";
-  if (role === "tradingagents_quantagent_final_judge") return "QuantAgent 最终裁决";
-  if (role === "technical") return "技术分析师";
-  if (role === "news") return "新闻分析师";
-  if (role === "macro") return "宏观分析师";
-  if (role === "risk") return "风险管理员";
-  if (role.startsWith("tradingagents_native_")) return `原版实验：${role.replace("tradingagents_native_", "")}`;
-  return role;
-}
-
-function roleOpinionLabel(role: RoleOutput) {
-  return readString(role.opinion || role.signal, "未给出方向");
-}
-
-function snapshotCount(snapshot: JsonRecord, key: string) {
-  const value = snapshot[key];
-  return Array.isArray(value) ? value.length : 0;
-}
-
-function snapshotCountAny(snapshot: JsonRecord, keys: string[]) {
-  for (const key of keys) {
-    const count = snapshotCount(snapshot, key);
-    if (count > 0) return count;
-  }
-  return 0;
-}
-
-function jsonObject(value: unknown): JsonRecord {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
-}
-
-function nestedObject(source: JsonRecord | undefined, key: string) {
-  return jsonObject(source?.[key]);
-}
-
-function orderIntentActionLabel(action: string) {
-  if (action === "AGENT_DECISION") return "Agent 决策";
-  if (action === "ORDER_INTENT_CREATED") return "交易意图已创建";
-  if (action === "RISK_CHECK_PASSED") return "风控通过";
-  if (action === "RISK_BLOCKED") return "风控拦截";
-  if (action === "PAPER_ORDER_FILLED") return "模拟成交";
-  if (action === "PAPER_ORDER_REJECTED") return "模拟订单拒绝";
-  if (action === "POSITION_UPDATED") return "持仓已更新";
-  if (action === "PNL_UPDATED") return "盈亏已更新";
-  if (action === "HOLD_RECORDED") return "观望已留痕";
-  if (action === "ORDER_INTENT_NOOP") return "不下单";
-  if (action === "ORDER_INTENT_PREVIEW") return "已预览";
-  if (action === "ORDER_INTENT_BLOCKED") return "风控拦截";
-  if (action === "ORDER_INTENT_EXECUTED") return "模拟盘已执行";
-  return action;
-}
-
-function orderIntentBadge(action: string) {
-  if (action === "PAPER_ORDER_FILLED" || action === "ORDER_INTENT_EXECUTED" || action === "RISK_CHECK_PASSED") return "border-emerald-400/30 bg-emerald-500/15 text-emerald-300";
-  if (action === "RISK_BLOCKED" || action === "PAPER_ORDER_REJECTED" || action === "ORDER_INTENT_BLOCKED") return "border-rose-400/30 bg-rose-500/15 text-rose-300";
-  if (action === "ORDER_INTENT_CREATED" || action === "ORDER_INTENT_PREVIEW") return "border-cyan-400/30 bg-cyan-500/15 text-cyan-200";
-  if (action === "AGENT_DECISION") return "border-fuchsia-400/30 bg-fuchsia-500/15 text-fuchsia-200";
-  if (action === "HOLD_RECORDED") return "border-slate-400/30 bg-slate-500/15 text-slate-200";
-  return "border-slate-400/20 bg-slate-500/15 text-slate-300";
-}
-
-function pitAsOfTime(pit?: JsonRecord) {
-  const value = pit?.as_of_time;
-  return typeof value === "string" ? value : null;
-}
-
-function readString(value: unknown, fallback = "暂无") {
-  return typeof value === "string" && value.trim() ? value : fallback;
-}
-
-function pitString(pit: JsonRecord | undefined, key: string, fallback = "暂无") {
-  return readString(pit?.[key], fallback);
-}
-
-function pitView(pit?: JsonRecord): PitView {
-  return {
-    enabled: pit?.enabled === true,
-    sourceSnapshotId: readString(pit?.source_snapshot_id, ""),
-    rowCount: readNumber(pit?.row_count),
-    paramsHash: readString(pit?.params_hash, ""),
-  };
-}
-
-function backtestSourceLabel(source?: string | null) {
-  if (source === "QUICK_BACKTEST") return "快速回测";
-  if (source === "REPLAY_COMPARE") return "回放对比回测";
-  if (source === "BACKTEST") return "普通回测";
-  return source || "普通回测";
-}
-
-function dataReadSourceLabel(source: string) {
-  if (source === "clickhouse:klines") return "ClickHouse K线缓存";
-  if (source === "market_data_gateway") return "主数据网关";
-  if (source === "market_data_gateway:fallback") return "主数据网关兜底";
-  return source;
-}
-
-function auditExportHref(id: number) {
-  return `/api/v1/audit/records/${id}/export`;
-}
-
-function tradingAgentsInternalChain(detail: DecisionAuditDetail | null): TradingAgentsChainEntry[] {
-  const positionAdvice = detail?.decision.position_advice;
-  const chain = positionAdvice?.tradingagents_internal_chain;
-  return Array.isArray(chain) ? (chain as TradingAgentsChainEntry[]) : [];
-}
-
-function auditResultLines(detail: DecisionAuditDetail) {
-  const materialCount = detail.trace_summary.factor_snapshots
-    + detail.trace_summary.signal_events
-    + detail.trace_summary.news_events
-    + detail.trace_summary.macro_events;
-  const chainCount = tradingAgentsInternalChain(detail).length;
-  const executionText = detail.trace_summary.executed
-    ? "已生成并执行到模拟盘成交记录"
-    : detail.trace_summary.risk_blocked
-      ? "已生成执行意图，但被风控拦截"
-      : detail.trace_summary.order_intent_events > 0
-        ? "已有 OrderIntent / 风控留痕，尚未进入模拟盘成交"
-        : "仅完成决策审计，尚未生成执行意图";
-  return [
-    `结论：${detail.decision.symbol} 本次最终建议为 ${signalLabel(detail.decision.final_signal)}，置信度 ${formatRatioPercent(detail.decision.confidence)}。`,
-    `输入材料：本次审计追踪到 ${formatNumber(materialCount)} 条材料，包括因子、信号、新闻和宏观事件。`,
-    `智能体链路：核心角色输出 ${formatNumber(detail.trace_summary.role_outputs)} 个，完整 TradingAgentsGraph 内部链路 ${formatNumber(chainCount)} 个节点。`,
-    `执行链路：${executionText}。`,
-    `留痕状态：页面已直接展示摘要、角色输出、输入快照、OrderIntent、风控与模拟盘记录；JSON 导出只作为复核和归档。`,
-  ];
-}
-
-function researchSnapshotHref(symbol: string, interval?: string | null, asOfTime?: string | null) {
-  const params = new URLSearchParams({
-    symbol,
-    interval: interval || "1h",
-  });
-  if (asOfTime) params.set("as_of_time", asOfTime);
-  return `/dashboard?${params.toString()}`;
-}
-
-function pitWindowText(pit?: JsonRecord) {
-  const start = pitString(pit, "actual_start_time", "");
-  const end = pitString(pit, "actual_end_time", "");
-  if (!start && !end) return "暂无";
-  return `${formatTime(start)} 到 ${formatTime(end)}`;
-}
-
-function shortHash(value: unknown) {
-  const text = typeof value === "string" ? value : "";
-  if (!text) return "暂无";
-  return text.length > 14 ? `${text.slice(0, 8)}...${text.slice(-6)}` : text;
-}
-
-function StatusCard({
-  title,
-  value,
-  hint,
-  icon: Icon,
-}: {
-  title: string;
-  value: string | number;
-  hint: string;
-  icon: typeof Shield;
-}) {
-  return (
-    <Card className="border-white/10 bg-white/[0.04] shadow-xl">
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm text-slate-400">{title}</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{value}</p>
-            <p className="mt-2 text-xs leading-5 text-slate-500">{hint}</p>
-          </div>
-          <div className="rounded-2xl border border-white/10 bg-white/10 p-3">
-            <Icon className="h-5 w-5 text-cyan-200" />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function friendlyAuditError(error: unknown, fallback = "数据暂不可用，已展示缓存数据 / 暂无数据。") {
-  const raw = error instanceof Error ? error.message : String(error || "");
-  const lower = raw.toLowerCase();
-  if (!raw || lower.includes("failed to fetch") || lower.includes("timeout") || lower.includes("abort") || lower.includes("http 5")) {
-    return fallback;
-  }
-  return raw.length > 120 ? fallback : raw;
-}
-
-function fetchWithTimeout(url: string, timeoutMs = 15000) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  return fetch(url, { cache: "no-store", signal: controller.signal }).finally(() => clearTimeout(timeout));
-}
-
-function AuditPageContent() {
-  const searchParams = useSearchParams();
-  const [overview, setOverview] = useState<AuditOverview | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [selectedDecisionId, setSelectedDecisionId] = useState<number | null>(null);
-  const [decisionDetail, setDecisionDetail] = useState<DecisionAuditDetail | null>(null);
+export default function AuditPage() {
+  const [records, setRecords] = useState<AuditRecord[]>([]);
+  const [recordsLoading, setRecordsLoading] = useState(true);
+  const [filterSymbol, setFilterSymbol] = useState("");
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [detail, setDetail] = useState<DecisionAuditDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState("");
-  const [auditRecords, setAuditRecords] = useState<StandardAuditRecord[]>([]);
-  const [auditRecordsLoading, setAuditRecordsLoading] = useState(false);
-  const [auditRecordsError, setAuditRecordsError] = useState("");
-  const [auditFilters, setAuditFilters] = useState<AuditFilters>({
-    symbol: "",
-    eventType: "",
-    action: "",
-    executionStatus: "",
-    riskStatus: "",
-    source: "",
-    decisionId: "",
-    orderIntentId: "",
-    orderId: "",
-    backtestId: "",
-    replaySessionId: "",
-    executionMode: "",
-    startTime: "",
-    endTime: "",
-  });
-  const [selectedAuditRecord, setSelectedAuditRecord] = useState<StandardAuditRecord | null>(null);
-  const [auditRecordDetailLoading, setAuditRecordDetailLoading] = useState(false);
-  const [copyMessage, setCopyMessage] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [showSnapshot, setShowSnapshot] = useState(true);
+  const [showRoles, setShowRoles] = useState(true);
+  const [showFutureCheck, setShowFutureCheck] = useState(true);
+  const [showChain, setShowChain] = useState(true);
+  const [showRepro, setShowRepro] = useState(true);
 
-  const fetchOverview = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  const fetchRecords = useCallback(async () => {
+    setRecordsLoading(true); setError(null);
     try {
-      const response = await fetchWithTimeout("/api/v1/audit/overview");
-      const data = (await response.json()) as AuditOverview;
-      if (!response.ok || data.error) {
-        throw new Error(data.error || "回测与审计概览加载失败");
-      }
-      setOverview(data);
-    } catch (err) {
-      setError(friendlyAuditError(err));
-    } finally {
-      setLoading(false);
-    }
+      const params = new URLSearchParams({ limit: "50" });
+      if (filterSymbol) params.set("symbol", filterSymbol);
+      const res = await fetch("/api/v1/audit/records?" + params.toString());
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      setRecords(((await res.json()).data || []) as AuditRecord[]);
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : "加载失败"); }
+    finally { setRecordsLoading(false); }
+  }, [filterSymbol]);
+
+  const fetchDetail = useCallback(async (id: number) => {
+    setDetailLoading(true); setSelectedId(id); setError(null);
+    try {
+      const res = await fetch("/api/v1/audit/decisions/" + id);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      setDetail(await res.json());
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : "加载失败"); setDetail(null); }
+    finally { setDetailLoading(false); }
   }, []);
 
+  useEffect(() => { fetchRecords(); }, [fetchRecords]);
   useEffect(() => {
-    void fetchOverview();
-  }, [fetchOverview]);
-
-  const fetchAuditRecords = useCallback(async () => {
-    setAuditRecordsLoading(true);
-    setAuditRecordsError("");
-    const params = new URLSearchParams({ limit: "50" });
-    Object.entries(auditFilters).forEach(([key, value]) => {
-      if (!value) return;
-      if (key === "startTime" || key === "endTime") {
-        params.set(key, new Date(value).toISOString());
-      } else {
-        params.set(key, value);
-      }
-    });
-    try {
-      const response = await fetchWithTimeout(`/api/v1/audit/records?${params.toString()}`, 20000);
-      const data = (await response.json()) as AuditRecordsResponse & { detail?: string };
-      if (!response.ok) {
-        throw new Error(data.detail || "审计记录加载失败");
-      }
-      setAuditRecords(Array.isArray(data.data) ? data.data : []);
-      setSelectedAuditRecord((current) => current || data.data?.[0] || null);
-    } catch (err) {
-      setAuditRecords([]);
-      setAuditRecordsError(friendlyAuditError(err, "数据暂不可用，暂无审计记录。"));
-    } finally {
-      setAuditRecordsLoading(false);
-    }
-  }, [auditFilters]);
-
-  useEffect(() => {
-    void fetchAuditRecords();
-  }, [fetchAuditRecords]);
-
-  const updateAuditFilter = useCallback((key: keyof AuditFilters, value: string) => {
-    setAuditFilters((current) => ({ ...current, [key]: value }));
-  }, []);
-
-  const fetchAuditRecordDetail = useCallback(async (record: StandardAuditRecord) => {
-    if (!record.id) {
-      setSelectedAuditRecord(record);
+    const params = new URLSearchParams(window.location.search);
+    const decisionId = Number(params.get("decision_id"));
+    if (Number.isFinite(decisionId) && decisionId > 0) {
+      fetchDetail(decisionId);
       return;
     }
-    setAuditRecordDetailLoading(true);
-    setCopyMessage("");
-    try {
-      const response = await fetchWithTimeout(`/api/v1/audit/records/${record.id}`, 15000);
-      const data = (await response.json()) as AuditRecordDetailResponse & { detail?: string };
-      if (!response.ok) throw new Error(data.detail || "审计详情加载失败");
-      setSelectedAuditRecord(data.audit_record);
-    } catch (err) {
-      setAuditRecordsError(friendlyAuditError(err, "数据暂不可用，暂无审计详情。"));
-      setSelectedAuditRecord(record);
-    } finally {
-      setAuditRecordDetailLoading(false);
-    }
-  }, []);
 
-  const copyAuditJson = useCallback(async () => {
-    if (!selectedAuditRecord) return;
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(selectedAuditRecord, null, 2));
-      setCopyMessage("已复制 JSON");
-    } catch {
-      setCopyMessage("复制失败，可以手动选中 JSON 内容");
-    }
-  }, [selectedAuditRecord]);
-
-  const fetchDecisionDetail = useCallback(async (decisionId: number) => {
-    setSelectedDecisionId(decisionId);
-    setDetailLoading(true);
-    setDetailError("");
-    try {
-      const response = await fetchWithTimeout(`/api/v1/audit/decisions/${decisionId}`);
-      const data = (await response.json()) as DecisionAuditDetail & { detail?: string };
-      if (!response.ok) {
-        throw new Error(data.detail || "决策审计详情加载失败");
+    const resolveDecisionId = async () => {
+      const firstDecisionId = (value: unknown) => {
+        const n = Number(value);
+        return Number.isFinite(n) && n > 0 ? n : null;
+      };
+      const auditId = Number(params.get("audit_id"));
+      if (Number.isFinite(auditId) && auditId > 0) {
+        const res = await fetch(`/api/v1/audit/records/${auditId}`);
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        return firstDecisionId(data?.audit_record?.decisionId);
       }
-      setDecisionDetail(data);
-    } catch (err) {
-      setDecisionDetail(null);
-      setDetailError(friendlyAuditError(err, "数据暂不可用，暂无决策审计详情。"));
-    } finally {
-      setDetailLoading(false);
-    }
-  }, []);
 
-  const counts = overview?.counts || {};
-  const pit = overview?.point_in_time;
-  const decisionParam = searchParams.get("decision_id");
-  const orderIdParam = searchParams.get("order_id");
-  const orderIntentParam = searchParams.get("order_intent_id");
-  const auditIdParam = searchParams.get("audit_id");
-  const backtestParam = searchParams.get("backtest_id");
-  const replaySessionParam = searchParams.get("replay_session_id") || searchParams.get("session_id");
-  const readyComparisons = useMemo(
-    () => (overview?.comparison_candidates || []).filter((item) => item.ready).length,
-    [overview?.comparison_candidates],
-  );
-  const strictComparisons = readNumber(counts.strict_comparison_ready || counts.comparison_ready);
+      const recordsParams = new URLSearchParams({ limit: "50" });
+      const orderIntentId = params.get("order_intent_id");
+      const orderId = params.get("order_id");
+      const backtestId = params.get("backtest_id");
+      const replaySessionId = params.get("replay_session_id");
+      if (orderIntentId) recordsParams.set("orderIntentId", orderIntentId);
+      else if (orderId) recordsParams.set("orderId", orderId);
+      else if (backtestId) recordsParams.set("backtestId", backtestId);
+      else if (replaySessionId) recordsParams.set("replaySessionId", replaySessionId);
+      else return null;
 
-  useEffect(() => {
-    const decisionId = Number(decisionParam);
-    if (Number.isFinite(decisionId) && decisionId > 0 && selectedDecisionId !== decisionId) {
-      void fetchDecisionDetail(decisionId);
-    }
-  }, [decisionParam, fetchDecisionDetail, selectedDecisionId]);
+      const res = await fetch("/api/v1/audit/records?" + recordsParams.toString());
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      const rows = ((data?.data || []) as AuditRecord[]);
+      setRecords(rows);
+      return rows.map(row => firstDecisionId(row?.decisionId)).find((id): id is number => id != null) ?? null;
+    };
 
-  useEffect(() => {
-    if (!decisionParam && !orderIdParam && !orderIntentParam && !backtestParam && !replaySessionParam) return;
-    setAuditFilters((current) => ({
-      ...current,
-      decisionId: decisionParam || current.decisionId,
-      orderId: orderIdParam || current.orderId,
-      orderIntentId: orderIntentParam || current.orderIntentId,
-      backtestId: backtestParam || current.backtestId,
-      replaySessionId: replaySessionParam || current.replaySessionId,
-    }));
-  }, [backtestParam, decisionParam, orderIdParam, orderIntentParam, replaySessionParam]);
+    resolveDecisionId()
+      .then(id => { if (id) fetchDetail(id); })
+      .catch(e => setError(e instanceof Error ? e.message : "无法解析审计入口"));
+  }, [fetchDetail]);
 
-  useEffect(() => {
-    const auditId = Number(auditIdParam);
-    if (!Number.isFinite(auditId) || auditId <= 0) return;
-    void fetchAuditRecordDetail({
-      id: auditId,
-      eventType: "AUDIT_RECORDED",
-      immutable: true,
-    });
-  }, [auditIdParam, fetchAuditRecordDetail]);
+  const d = detail;
+  const bi = d?.basic_info;
+  const dec = d?.decision;
+  const aa = d?.agent_analysis || {};
+  const snap = d?.input_snapshot;
+  const trace = d?.trace_summary;
+  const evidence = d?.factor_evidence || [];
+  const timeline = d?.audit_timeline || [];
+  const replayRuns = d?.replay_runs || [];
+  const roleRows: AgentRoleView[] = d?.role_outputs?.length
+    ? d.role_outputs.map((entry, index) => ({
+        ...entry,
+        key: String(entry.role || entry.label || `role-${index + 1}`),
+        index: entry.index ?? index + 1,
+      }))
+    : Object.entries(aa).map(([key, entry], index) => ({
+        ...(entry as AgentAnalysisEntry),
+        key,
+        index: (entry as AgentAnalysisEntry).index ?? index + 1,
+      }));
+  const inputSummary = timeline
+    .map(item => asRecord(item.inputSummary))
+    .find(item => Object.keys(item).length > 0) || {};
+  const inputMaterials = d?.input_materials || {};
+  const inputFactorSnapshot = asRecord(inputMaterials.factorSnapshot ?? inputSummary.factor_snapshot ?? snap?.factorSnapshot);
+  const inputSnapshotIds = asRecord(inputMaterials.snapshotIds ?? inputSummary.snapshot_ids ?? snap?.snapshotId);
+  const inputRecentSignals = asArray(inputMaterials.recentSignals ?? inputSummary.recent_signals ?? snap?.recentSignals).filter(item => item && typeof item === "object") as JsonRecord[];
+  const klineCount = firstUsefulNumber(snap?.barsCount, inputMaterials.barsCount);
+  const inputSnapshotGroupCount = firstUsefulNumber(Object.keys(inputSnapshotIds).length, trace?.input_snapshot_id_groups);
+  const inputSummaryCards = [
+    { label: "价格", value: inputMaterials.price ?? inputSummary.price ?? snap?.price },
+    { label: "新闻", value: firstUsefulNumber(inputMaterials.newsCount, inputSummary.news_count, snap?.newsCount, trace?.news_events) },
+    { label: "宏观", value: firstUsefulNumber(inputMaterials.macroCount, inputSummary.macro_count, snap?.macroCount, trace?.macro_events) },
+    { label: "因子键", value: firstUsefulNumber(inputMaterials.factorsCount, Object.keys(inputFactorSnapshot).length, snap?.factorsCount, trace?.factor_snapshots) },
+    { label: "信号", value: firstUsefulNumber(inputMaterials.signalsCount, inputRecentSignals.length, snap?.signalsCount, trace?.signal_events) },
+    { label: "快照组", value: (inputSnapshotGroupCount || 0) > 0 ? inputSnapshotGroupCount : null },
+  ];
+  const snapshotCards = [
+    { l: "K线", v: (klineCount || 0) > 0 ? klineCount : null, n: (klineCount || 0) > 0 ? null : "仅记录价格" },
+    { l: "因子", v: firstUsefulNumber(trace?.factor_snapshots, snap?.factorsCount, inputMaterials.factorsCount, Object.keys(inputFactorSnapshot).length) },
+    { l: "信号", v: firstUsefulNumber(trace?.signal_events, snap?.signalsCount, inputMaterials.signalsCount, inputRecentSignals.length) },
+    { l: "新闻", v: firstUsefulNumber(trace?.news_events, snap?.newsCount, inputMaterials.newsCount, inputSummary.news_count) },
+    { l: "宏观", v: firstUsefulNumber(trace?.macro_events, snap?.macroCount, inputMaterials.macroCount, inputSummary.macro_count) },
+    { l: "角色", v: trace?.role_outputs },
+    { l: "意图", v: trace?.order_intent_events },
+    { l: "成交", v: trace?.paper_trades },
+  ];
 
+  // ── Future function check ──────────────────────────────────────────────────
+  const decisionTime = bi?.createdAt ? new Date(bi.createdAt) : null;
+  const snapTime = snap?.availableTime || snap?.asOfTime;
+  const futureChecks = [
+    {
+      label: "快照时间 ≤ 决策时间",
+      ok: snapTime && decisionTime ? new Date(snapTime) <= decisionTime : null,
+      detail: `availableTime: ${fmtTime(snapTime) || NA} · 决策: ${fmtTime(bi?.createdAt) || NA}`,
+    },
+    {
+      label: "因子证据无未来数据",
+      ok: evidence.length > 0 && decisionTime ? evidence.every(e => {
+        const at = (e as Record<string,unknown>).availableTime as string;
+        return !at || new Date(at) <= decisionTime;
+      }) : null,
+      detail: evidence.length > 0 ? `${evidence.length} 条因子证据` : "后端未返回 factor_evidence",
+    },
+    {
+      label: "风控状态一致性",
+      ok: trace?.risk_blocked === dec?.risk_veto,
+      detail: `trace.risk_blocked=${trace?.risk_blocked ?? "—"} · decision.risk_veto=${dec?.risk_veto ?? "—"}`,
+    },
+    {
+      label: "意图→成交链路一致",
+      ok: d?.execution_result?.paperOrderGenerated ? (d?.paper_trades?.length || 0) > 0 : null,
+      detail: `order_intent: ${d?.order_intent?.orderIntentId || "—"} · paper_trades: ${d?.paper_trades?.length || 0} · exec: ${d?.execution_result?.paperOrderGenerated ?? "—"}`,
+    },
+  ];
+
+  // ── Agent output completeness ──────────────────────────────────────────────
+  const agentCompleteness = roleRows.map((e) => {
+    const hasOpinion = !!(e.opinion);
+    const hasChain = !!(e.data_source_chain);
+    const hasOutput = !!(e.summary || e.reasoning || e.output);
+    return { key: e.key, label: e.label || e.role || e.key, hasOpinion, hasChain, hasOutput, dataSourceChain: e.data_source_chain || null };
+  });
+
+  // ── Reproducibility ───────────────────────────────────────────────────────
+  const snapshotGroupCount = inputSnapshotGroupCount;
+  const factorTraceCount = firstUsefulNumber(trace?.factor_snapshots, snap?.factorsCount, inputMaterials.factorsCount, Object.keys(inputFactorSnapshot).length);
+  const signalTraceCount = firstUsefulNumber(trace?.signal_events, snap?.signalsCount, inputMaterials.signalsCount, inputRecentSignals.length);
+  const reproItems = [
+    { label: "快照 ID 组", ok: (snapshotGroupCount || 0) > 0, detail: snapshotGroupCount ? `${snapshotGroupCount} 组` : NA },
+    { label: "因子快照 ID", ok: (factorTraceCount || 0) > 0, detail: factorTraceCount ? `${factorTraceCount} 条可精确复现` : NA },
+    { label: "信号事件 ID", ok: (signalTraceCount || 0) > 0, detail: signalTraceCount ? `${signalTraceCount} 条可追溯` : NA },
+    { label: "模型版本", ok: !!(bi?.model || bi?.agentGraph), detail: `model=${bi?.model || "—"} agentGraph=${bi?.agentGraph || "—"}` },
+    { label: "schema", ok: !!d?.schema_version, detail: d?.schema_version || NA },
+    { label: "审计时间线", ok: (d?.audit_timeline?.length || 0) > 0, detail: d?.audit_timeline?.length ? `${d.audit_timeline.length} 条` : NA },
+  ];
+
+  // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <AppTopNav
-        activeSection="audit"
-        title="回测与审计"
-        subtitle="PIT 回测、决策回放、执行闭环和审计导出"
-        rightSlot={
-          <Button
-            size="sm"
-            variant="outline"
-            className="border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"
-            onClick={() => void fetchOverview()}
-          >
-            <RefreshCw className={cn("mr-2 h-4 w-4", loading && "animate-spin")} />
-            刷新
+    <>
+      <AppTopNav activeSection="audit" title="决策证据链与可追溯中心" subtitle="能不能被证明 · 能不能回放 · 有没有违规" />
+      <div className="container mx-auto px-4 py-4 space-y-5 max-w-7xl">
+
+        {/* ── Records list ────────────────────────────────────────────────── */}
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={filterSymbol} onChange={e => setFilterSymbol(e.target.value)} className="h-8 rounded border border-slate-700 bg-slate-900/60 px-2 text-xs text-slate-300">
+            <option value="">全部标的</option>
+            {["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","DOGEUSDT"].map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <Button size="sm" variant="outline" onClick={fetchRecords} disabled={recordsLoading} className="h-8 gap-1 text-xs">
+            <RefreshCw className={"h-3 w-3 " + (recordsLoading ? "animate-spin" : "")} />刷新
           </Button>
-        }
-      />
+          {records.length > 0 && <span className="text-[10px] text-slate-500 ml-auto">{records.length} 条记录</span>}
+        </div>
+        {error && <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-400">{error}</div>}
 
-      <main className="container mx-auto space-y-6 px-4 py-6">
-        <section className="overflow-hidden rounded-3xl border border-cyan-400/20 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.22),transparent_36%),linear-gradient(135deg,rgba(15,23,42,0.96),rgba(2,6,23,0.96))] p-6 shadow-2xl">
-          <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-            <div className="max-w-3xl">
-              <Badge className="border-cyan-400/30 bg-cyan-500/15 text-cyan-100">PRD 10.5 工作台</Badge>
-              <h2 className="mt-4 text-3xl font-semibold tracking-tight text-white">把“能回测、能回放、能追溯、能对比”放到同一个页面</h2>
-              <p className="mt-3 text-sm leading-7 text-slate-300">
-                这里展示的是数据库和接口里的真实状态：已有记录会直接列出来；如果某一步还缺完整样例，会提示应该去哪个页面继续跑，而不是把后端能力写成已经完全可用。
-              </p>
-            </div>
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-slate-300">
-              <div className="flex items-center gap-2 text-slate-400">
-                <Clock className="h-4 w-4" />
-                最近刷新
+        <Card className="border-slate-700/50 bg-slate-950/60">
+          <CardHeader className="pb-2"><CardTitle className="text-sm">审计记录列表</CardTitle></CardHeader>
+          <CardContent>
+            {recordsLoading ? <p className="text-xs text-slate-500 py-4 text-center">加载中...</p>
+              : records.length === 0 ? <p className="text-xs text-slate-500 py-4 text-center">暂无记录</p>
+              : <div className="space-y-1 max-h-[250px] overflow-y-auto">
+                {records.map(r => (
+                  <div key={`${r.id}-${r.eventType}`} onClick={() => r.decisionId ? fetchDetail(Number(r.decisionId)) : null}
+                    className={`rounded-lg border p-2 flex items-center justify-between gap-2 text-[11px] cursor-pointer ${selectedId === (r.decisionId ? Number(r.decisionId) : null) ? "border-cyan-500/50 bg-cyan-500/10" : "border-slate-800 bg-slate-900/30 hover:border-slate-700"}`}>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-mono text-slate-600 text-[10px]">#{r.id || "—"}</span>
+                      <Badge className="bg-slate-700/50 text-slate-400 text-[9px]">{r.eventType}</Badge>
+                      <span className="text-slate-300 truncate">{r.symbol || "—"}</span>
+                    </div>
+                    <span className="text-slate-600 text-[10px] shrink-0">{fmtTime(r.createdAt) || "—"}</span>
+                  </div>
+                ))}
               </div>
-              <div className="mt-2 text-lg font-semibold text-white">{formatTime(overview?.generated_at)}</div>
-            </div>
-          </div>
-        </section>
+            }
+          </CardContent>
+        </Card>
 
-        {error && (
-          <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">
-            {error}
-          </div>
-        )}
+        {detailLoading && <p className="text-xs text-slate-500 py-8 text-center"><RefreshCw className="h-4 w-4 animate-spin inline mr-2" />加载审计详情...</p>}
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <StatusCard
-            title="回测结果"
-            value={formatNumber(counts.backtest_results)}
-            hint="来自 backtest_results，用于策略结果复查和后续对比。"
-            icon={BarChart3}
-          />
-          <StatusCard
-            title="历史回放"
-            value={`${formatNumber(counts.completed_replays)} / ${formatNumber(counts.replay_sessions)}`}
-            hint="前面是已完成会话，后面是全部 replay_sessions。"
-            icon={History}
-          />
-          <StatusCard
-            title="审计与决策"
-            value={`${formatNumber(counts.audit_logs)} + ${formatNumber(counts.coordination_history)}`}
-            hint="audit_logs 记录操作，coordination_history 记录智能体决策。"
-            icon={ShieldCheck}
-          />
-          <StatusCard
-            title="执行闭环事件"
-            value={formatNumber(counts.order_intent_events)}
-            hint="TradingAgents 建议生成 OrderIntent、风控检查和模拟盘执行的审计事件。"
-            icon={Shield}
-          />
-          <StatusCard
-            title="可直接对比"
-            value={formatNumber(strictComparisons || readyComparisons)}
-            hint="只统计 completed 回放，并且已经明确关联到回测结果的样例。"
-            icon={GitCompare}
-          />
-        </section>
-
-        <section className="grid gap-4 lg:grid-cols-4">
-          {(overview?.modules || []).map((item) => (
-            <Card key={item.key} className="border-white/10 bg-white/[0.04]">
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between gap-3">
-                  <CardTitle className="text-base text-white">{item.title}</CardTitle>
-                  <Badge className={moduleBadge(item.status)}>{moduleLabel(item.status)}</Badge>
-                </div>
+        {d && !detailLoading && (
+          <>
+            {/* ═══ 1. Decision Identity ════════════════════════════════════ */}
+            <Card className="border-slate-700/50 bg-slate-950/60 overflow-hidden">
+              <div className="h-1 bg-cyan-500" />
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Hash className="w-4 h-4 text-cyan-400" />#{bi?.decisionId || selectedId}
+                  <span className="text-[10px] text-slate-500 font-normal">{bi?.symbol || "—"} · {fmtTime(bi?.createdAt) || "—"}</span>
+                </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-3 text-sm text-slate-300">
-                <p className="font-medium text-cyan-100">{item.support_level}</p>
-                <p className="leading-6 text-slate-400">{item.description}</p>
+              <CardContent>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {[
+                    { l: "模型", v: bi?.modelVersion || bi?.model }, { l: "适配器", v: bi?.agentGraph },
+                    { l: "数据源", v: bi?.source }, { l: "schema", v: d?.schema_version },
+                    { l: "contextId", v: bi?.contextId }, { l: "contextHash", v: bi?.contextHash },
+                    { l: "availableTime", v: fmtTime(bi?.availableTime) || fmtTime(bi?.createdAt) },
+                    { l: "审计时间", v: fmtTime(d?.generated_at) }, { l: "决策状态", v: bi?.status || (dec?.risk_veto ? "risk_veto" : "created") },
+                  ].map(m => (
+                    <div key={m.l} className="rounded border border-slate-800 bg-slate-900/40 p-1.5">
+                      <p className="text-[9px] text-slate-500">{m.l}</p>
+                      <p className={`text-[10px] truncate ${m.v ? "text-slate-300" : "text-slate-600 italic"}`}>{m.v || NA}</p>
+                    </div>
+                  ))}
+                </div>
               </CardContent>
             </Card>
-          ))}
-        </section>
 
-        <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-          <Card className="border-white/10 bg-white/[0.04]">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-white">
-                <TimerReset className="h-5 w-5 text-cyan-200" />
-                Point-in-time 输入规则
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-4 text-sm text-slate-300 md:grid-cols-3">
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <p className="text-slate-500">取数规则</p>
-                <p className="mt-2 font-mono text-cyan-100">{pit?.rule || "available_time <= as_of_time"}</p>
+            {/* ═══ 2. Unified Input Snapshot ════════════════════════════════ */}
+            <Card className="border-slate-700/50 bg-slate-950/60">
+              <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-800/50 bg-slate-900/40 cursor-pointer" onClick={() => setShowSnapshot(!showSnapshot)}>
+                <Database className="w-4 h-4 text-cyan-400" />
+                <p className="text-sm font-semibold text-white flex-1">统一输入快照 — 决策时用了哪些数据</p>
+                {showSnapshot ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
               </div>
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <p className="text-slate-500">PIT 因子 / 信号 / 回测</p>
-                <p className="mt-2 text-lg font-semibold text-white">
-                  {formatNumber(pit?.factor_snapshot_count)} / {formatNumber(pit?.signal_event_count)} / {formatNumber(pit?.backtest_count)}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  其中完整复现包：{formatNumber(pit?.reproducible_backtest_count)} 条
-                </p>
-              </div>
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <p className="text-slate-500">覆盖标的与时间</p>
-                <p className="mt-2 text-white">{formatNumber(pit?.symbol_count)} 个标的</p>
-                <p className="mt-1 text-xs text-slate-500">{formatTime(pit?.min_available_time)} 到 {formatTime(pit?.max_available_time)}</p>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-white/10 bg-white/[0.04]">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-white">
-                <Activity className="h-5 w-5 text-emerald-200" />
-                下一步动作
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {(overview?.next_actions || []).map((action) => (
-                <Link
-                  key={action.title}
-                  href={action.href}
-                  className="block rounded-2xl border border-white/10 bg-black/20 p-4 transition hover:border-cyan-400/30 hover:bg-cyan-500/10"
-                >
-                  <p className="font-medium text-white">{action.title}</p>
-                  <p className="mt-1 text-sm leading-6 text-slate-400">{action.reason}</p>
-                </Link>
-              ))}
-            </CardContent>
-          </Card>
-        </section>
-
-        <section className="grid gap-4 xl:grid-cols-2">
-          <Card className="border-white/10 bg-white/[0.04]">
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-white">最近回测结果</CardTitle>
-              <Link href="/backtest">
-                <Button size="sm" variant="ghost" className="text-cyan-100 hover:bg-cyan-500/10">去回测</Button>
-              </Link>
-            </CardHeader>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-white/10 hover:bg-transparent">
-                    <TableHead className="text-slate-400">时间</TableHead>
-                    <TableHead className="text-slate-400">标的/策略</TableHead>
-                    <TableHead className="text-slate-400">收益</TableHead>
-                    <TableHead className="text-slate-400">交易</TableHead>
-                    <TableHead className="text-slate-400">来源说明</TableHead>
-                    <TableHead className="text-slate-400">PIT</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(overview?.latest_backtests || []).map((row) => {
-                    const pitMeta = pitView(row.pit);
-                    return (
-                    <TableRow key={row.id} className="border-white/10">
-                      <TableCell className="text-slate-400">{formatTime(row.created_at)}</TableCell>
-                      <TableCell>
-                        <div className="font-medium text-white">{row.symbol} · {row.interval}</div>
-                        <div className="text-xs text-slate-500">{row.strategy_type} · ID {row.id}</div>
-                      </TableCell>
-                      <TableCell>
-                        <div className={readNumber(row.total_return) >= 0 ? "text-emerald-300" : "text-rose-300"}>{formatPercent(row.total_return)}</div>
-                        <div className="text-xs text-slate-500">回撤 {formatPercent(row.max_drawdown)}</div>
-                      </TableCell>
-                      <TableCell className="text-slate-300">{formatNumber(row.total_trades)}</TableCell>
-                      <TableCell>
-                        <div className="space-y-1">
-                          <Badge className="border-slate-400/20 bg-slate-500/15 text-slate-300">
-                            {backtestSourceLabel(row.data_source)}
-                          </Badge>
-                          <div className="text-xs leading-5 text-slate-500">
-                            读取：{dataReadSourceLabel(pitString(row.pit, "data_source", "旧记录未保存"))}
-                          </div>
-                          {pitMeta.enabled && (
-                            <div className="text-xs leading-5 text-slate-600">
-                              实际窗口：{pitWindowText(row.pit)}
-                            </div>
-                          )}
-                          {pitMeta.sourceSnapshotId && (
-                            <div className="text-xs leading-5 text-slate-600">
-                              快照ID：{shortHash(pitMeta.sourceSnapshotId)}
-                            </div>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {pitMeta.enabled ? (
-                          <div className="space-y-1">
-                            <Badge className="border-cyan-400/30 bg-cyan-500/15 text-cyan-200">已记录</Badge>
-                            <div className="text-xs text-slate-500">截止：{formatTime(pitAsOfTime(row.pit))}</div>
-                            <div className="text-xs text-slate-600">K线：{formatNumber(pitMeta.rowCount)} 根</div>
-                            <div className="text-xs text-slate-600">参数：{shortHash(pitMeta.paramsHash)}</div>
-                            <div className="text-xs text-slate-600">策略：{pitString(row.pit, "strategy_version")}</div>
-                            <div className="text-xs text-slate-600">引擎：{pitString(row.pit, "engine_version")}</div>
-                            <Link
-                              href={researchSnapshotHref(row.symbol, row.interval, pitAsOfTime(row.pit))}
-                              className="inline-flex text-xs text-cyan-200 hover:text-cyan-100"
-                            >
-                              回看当时上下文
-                            </Link>
-                          </div>
-                        ) : (
-                          <Badge className="border-slate-400/20 bg-slate-500/15 text-slate-400">旧记录</Badge>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                    );
-                  })}
-                  {!loading && !overview?.latest_backtests?.length && (
-                    <TableRow className="border-white/10">
-                      <TableCell colSpan={6} className="py-8 text-center text-slate-500">还没有回测记录，先去“回测”页面跑一个策略。</TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-
-          <Card className="border-white/10 bg-white/[0.04]">
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-white">历史回放会话</CardTitle>
-              <Link href="/replay">
-                <Button size="sm" variant="ghost" className="text-cyan-100 hover:bg-cyan-500/10">去回放</Button>
-              </Link>
-            </CardHeader>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-white/10 hover:bg-transparent">
-                    <TableHead className="text-slate-400">状态</TableHead>
-                    <TableHead className="text-slate-400">会话</TableHead>
-                    <TableHead className="text-slate-400">盈亏</TableHead>
-                    <TableHead className="text-slate-400">数据点</TableHead>
-                    <TableHead className="text-slate-400">对比</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(overview?.latest_replays || []).map((row) => (
-                    <TableRow key={row.replay_session_id} className="border-white/10">
-                      <TableCell><Badge className={replayBadge(row.status)}>{replayLabel(row.status)}</Badge></TableCell>
-                      <TableCell>
-                        <div className="font-medium text-white">{row.symbol} · {row.strategy_type || "未记录策略"}</div>
-                        <div className="text-xs text-slate-500">{shortId(row.replay_session_id)}</div>
-                        <div className="text-xs text-slate-600">{formatTime(row.start_time)} 到 {formatTime(row.end_time)}</div>
-                      </TableCell>
-                      <TableCell>
-                        <div className={readNumber(row.pnl) >= 0 ? "text-emerald-300" : "text-rose-300"}>{formatMoney(row.pnl)}</div>
-                        <div className="text-xs text-slate-500">{formatPercent(row.total_return)}</div>
-                      </TableCell>
-                      <TableCell className="text-slate-300">
-                        {formatNumber(row.trade_count)} 笔
-                        <div className="text-xs text-slate-500">{formatNumber(row.equity_points)} 个权益点</div>
-                      </TableCell>
-                      <TableCell>
-                        {row.backtest_id ? (
-                          <Badge className="border-emerald-400/30 bg-emerald-500/15 text-emerald-300">回测 #{row.backtest_id}</Badge>
-                        ) : (
-                          <Badge className="border-amber-400/30 bg-amber-500/15 text-amber-200">待匹配</Badge>
-                        )}
-                        <div className="mt-2">
-                          <Link
-                            href={researchSnapshotHref(row.symbol, null, row.current_timestamp || row.end_time || row.start_time)}
-                            className="text-xs text-cyan-200 hover:text-cyan-100"
-                          >
-                            回看会话时间点
-                          </Link>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {!loading && !overview?.latest_replays?.length && (
-                    <TableRow className="border-white/10">
-                      <TableCell colSpan={5} className="py-8 text-center text-slate-500">还没有历史回放会话，先创建并启动一个回放。</TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        </section>
-
-        <section className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
-          <Card className="border-white/10 bg-white/[0.04]">
-            <CardHeader>
-              <CardTitle className="text-white">结果对比样例</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {(overview?.comparison_candidates || []).map((item) => (
-                <div key={item.replay_session_id} className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-medium text-white">{item.symbol} · {item.strategy_type || "未记录策略"}</p>
-                      <p className="mt-1 text-xs text-slate-500">{shortId(item.replay_session_id)}</p>
+              {showSnapshot && (
+                <CardContent className="p-4">
+                  <div className="grid grid-cols-4 md:grid-cols-8 gap-2 mb-3">
+                    {snapshotCards.map(s => (
+                      <div key={s.l} className="rounded-lg border border-slate-800 bg-slate-900/40 p-2 text-center">
+                        <p className={`text-lg font-bold ${s.n ? "text-amber-400" : "text-slate-200"}`}>{s.v != null ? s.v : "—"}</p>
+                        <p className="text-[9px] text-slate-500">{s.l}</p>
+                        {s.n && <p className="text-[8px] text-amber-500/80">{s.n}</p>}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="text-[10px] text-slate-500 space-x-4">
+                    <span>provider: {snap?.dataProvider || NA}</span>
+                    <span>availableTime: {fmtTime(snap?.availableTime) || NA}</span>
+                    <span>asOfTime: {fmtTime(snap?.asOfTime) || NA}</span>
+                  </div>
+                  <div className="mt-3 rounded-lg border border-slate-800 bg-slate-900/30 p-3">
+                    <div className="flex flex-wrap items-center gap-2 mb-2">
+                      <p className="text-[11px] font-semibold text-slate-200">具体数据材料</p>
+                      <Badge className="bg-slate-800 text-slate-400 text-[9px]">{inputMaterials.source || "audit input"}</Badge>
                     </div>
-                    <Badge className={comparisonBadge(item)}>
-                      {comparisonLabel(item)}
-                    </Badge>
+                    <div className="grid md:grid-cols-3 gap-2">
+                      <div className="rounded border border-slate-800 bg-slate-950/40 p-2 min-w-0">
+                        <p className="text-[9px] text-slate-500 mb-1">因子快照键值</p>
+                        {Object.keys(inputFactorSnapshot).length > 0 ? (
+                          <div className="space-y-1 max-h-[220px] overflow-auto pr-1">
+                            {Object.entries(inputFactorSnapshot).map(([name, value]) => (
+                              <div key={name} className="flex items-center justify-between gap-2 rounded bg-slate-900/70 px-2 py-1 text-[9px]">
+                                <span className="text-slate-400 truncate">{name}</span>
+                                <span className="text-slate-200 font-mono shrink-0">{formatValue(value)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : <p className="text-[10px] text-slate-600 italic">{NA}</p>}
+                      </div>
+                      <div className="rounded border border-slate-800 bg-slate-950/40 p-2 min-w-0">
+                        <p className="text-[9px] text-slate-500 mb-1">近期信号</p>
+                        {inputRecentSignals.length > 0 ? (
+                          <div className="space-y-1 max-h-[220px] overflow-auto pr-1">
+                            {inputRecentSignals.map((sig, idx) => (
+                              <div key={`${sig.strategy || sig.source_strategy || "signal"}-${idx}`} className="rounded bg-slate-900/70 px-2 py-1 text-[9px] text-slate-300">
+                                <span className="font-mono text-slate-500">#{idx + 1}</span>{" "}
+                                {String(sig.strategy || sig.source_strategy || "strategy")} · {String(sig.type || sig.signal_type || "—")} · {formatValue(sig.conf ?? sig.confidence)}
+                              </div>
+                            ))}
+                          </div>
+                        ) : <p className="text-[10px] text-slate-600 italic">{NA}</p>}
+                      </div>
+                      <div className="rounded border border-slate-800 bg-slate-950/40 p-2 min-w-0">
+                        <p className="text-[9px] text-slate-500 mb-1">Snapshot ID 组</p>
+                        {Object.keys(inputSnapshotIds).length > 0 ? (
+                          <pre className="max-h-[220px] overflow-auto whitespace-pre-wrap break-words text-[9px] leading-4 text-slate-300">{prettyJson(inputSnapshotIds)}</pre>
+                        ) : <p className="text-[10px] text-slate-600 italic">{NA}</p>}
+                      </div>
+                    </div>
                   </div>
-                  <div className="mt-3 grid gap-2 text-sm text-slate-400 sm:grid-cols-2">
-                    <p>回放状态：{replayLabel(item.status)}</p>
-                    <p>匹配方式：{item.match_label || "未知"}</p>
-                    <p>回测记录：{item.candidate_backtest_id ? `#${item.candidate_backtest_id}` : "暂无"}</p>
-                    <p>回测周期：{item.candidate_interval || "暂无"}</p>
-                    <p>回测来源：{item.candidate_data_source || "暂无"}</p>
-                    <p>初始资金：{item.candidate_initial_capital ? formatMoney(item.candidate_initial_capital) : "暂无"}</p>
-                  </div>
-                  {item.needs_review && (
-                    <p className="mt-3 rounded-xl border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-100">
-                      这是候选参考，不是严格关联。可能只是同币种、同策略，但周期、初始资金或参数不完全一致，不能当成最终结论。
-                    </p>
-                  )}
-                  {item.ready && (
-                    <Link
-                      href={`/analytics?replay_session_id=${encodeURIComponent(item.replay_session_id)}${item.candidate_backtest_id ? `&backtest_id=${item.candidate_backtest_id}` : ""}`}
-                      className="mt-3 inline-flex text-sm text-cyan-200 hover:text-cyan-100"
-                    >
-                      打开对比分析
-                    </Link>
-                  )}
-                </div>
-              ))}
-              {!loading && !overview?.comparison_candidates?.length && (
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-8 text-center text-sm text-slate-500">还没有可检查的回放会话。</div>
+                </CardContent>
               )}
-            </CardContent>
-          </Card>
+            </Card>
 
-          <Card className="border-white/10 bg-white/[0.04]">
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-white">最近智能体决策</CardTitle>
-              <Link href="/decisions">
-                <Button size="sm" variant="ghost" className="text-cyan-100 hover:bg-cyan-500/10">去决策中心</Button>
-              </Link>
-            </CardHeader>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-white/10 hover:bg-transparent">
-                    <TableHead className="text-slate-400">时间</TableHead>
-                    <TableHead className="text-slate-400">标的</TableHead>
-                    <TableHead className="text-slate-400">建议</TableHead>
-                    <TableHead className="text-slate-400">材料</TableHead>
-                    <TableHead className="text-slate-400">摘要/操作</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(overview?.latest_decisions || []).map((row) => (
-                    <TableRow key={row.id} className="border-white/10">
-                      <TableCell className="text-slate-400">{formatTime(row.timestamp)}</TableCell>
-                      <TableCell className="font-medium text-white">{row.symbol}</TableCell>
-                      <TableCell>
-                        <div className={cn("font-medium", signalClass(row.final_signal))}>{signalLabel(row.final_signal)}</div>
-                        <div className="text-xs text-slate-500">置信度 {(row.confidence * 100).toFixed(1)}%</div>
-                      </TableCell>
-                      <TableCell className="text-xs text-slate-400">
-                        因子 {snapshotCountAny(row.input_snapshot_ids, ["factor_snapshot_ids", "factor_ids"])}
-                        <br />
-                        信号 {snapshotCountAny(row.input_snapshot_ids, ["signal_event_ids", "signal_ids"])}
-                        <br />
-                        <Link
-                          href={researchSnapshotHref(row.symbol, "1h", row.timestamp)}
-                          className="text-cyan-200 hover:text-cyan-100"
-                        >
-                          回看决策材料
-                        </Link>
-                      </TableCell>
-                      <TableCell className="max-w-[320px]">
-                        <div className="truncate text-slate-400">{row.summary || "暂无摘要"}</div>
-                        <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                          <button
-                            type="button"
-                            onClick={() => void fetchDecisionDetail(row.id)}
-                            className={cn(
-                              "text-cyan-200 hover:text-cyan-100",
-                              selectedDecisionId === row.id && "font-semibold text-cyan-100",
+            {/* ═══ 3. Per-Agent Data Materials ══════════════════════════════ */}
+            <Card className="border-slate-700/50 bg-slate-950/60">
+              <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-800/50 bg-slate-900/40 cursor-pointer" onClick={() => setShowRoles(!showRoles)}>
+                <Layers className="w-4 h-4 text-cyan-400" />
+                <p className="text-sm font-semibold text-white flex-1">Agent 输入材料 — 每个 AI 当时看到了什么</p>
+                <Badge className="text-[10px]">{roleRows.length} 个</Badge>
+                {showRoles ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+              </div>
+              {showRoles && (
+                <CardContent className="p-4 space-y-2">
+                  {roleRows.length === 0 ? <p className="text-xs text-slate-500 py-4 text-center">后端未返回 role_outputs / agent_analysis</p>
+                    : <>
+                      <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3">
+                        <div className="flex flex-wrap items-center gap-2 mb-3">
+                          <p className="text-[11px] font-semibold text-cyan-100">本次决策共享输入快照</p>
+                          <Badge className="bg-cyan-500/10 text-cyan-200 text-[9px]">AnalysisContext</Badge>
+                          <span className="text-[9px] text-cyan-200/60">每个角色使用同一决策时点上下文；下面按角色回放输入管道、可见摘要和完整输出。</span>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+                          {inputSummaryCards.map(item => (
+                            <div key={item.label} className="rounded border border-slate-800 bg-slate-950/40 p-2">
+                              <p className="text-[9px] text-slate-500">{item.label}</p>
+                              <p className="text-[11px] text-slate-200 font-mono truncate">{formatValue(item.value)}</p>
+                            </div>
+                          ))}
+                        </div>
+                        {Object.keys(inputFactorSnapshot).length > 0 && (
+                          <div className="mt-3 rounded border border-slate-800 bg-slate-950/40 p-2">
+                            <p className="text-[9px] text-slate-500 mb-1">AI 可见因子快照</p>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5">
+                              {Object.entries(inputFactorSnapshot).slice(0, 16).map(([name, value]) => (
+                                <div key={name} className="flex items-center justify-between gap-2 rounded bg-slate-900/70 px-2 py-1 text-[9px]">
+                                  <span className="text-slate-400 truncate">{name}</span>
+                                  <span className="text-slate-200 font-mono shrink-0">{formatValue(value)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {inputRecentSignals.length > 0 && (
+                          <div className="mt-2 rounded border border-slate-800 bg-slate-950/40 p-2">
+                            <p className="text-[9px] text-slate-500 mb-1">AI 可见近期信号</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {inputRecentSignals.slice(0, 12).map((sig, idx) => (
+                                <span key={`${sig.strategy || "signal"}-${idx}`} className="rounded bg-slate-900/80 px-2 py-1 text-[9px] text-slate-300">
+                                  {String(sig.strategy || "strategy")} · {String(sig.type || "—")} · {formatValue(sig.conf)}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      {roleRows.map((e) => {
+                      const outputText = e.summary || e.reasoning || e.output;
+                      const keyPoints = e.key_points || [];
+                      return (
+                        <div key={`${e.key}-${e.index || ""}`} className="rounded-lg border border-slate-800 bg-slate-900/30 p-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <p className="text-[11px] font-semibold text-slate-200">{e.label || e.role || e.key}</p>
+                              <p className="text-[9px] text-slate-500 font-mono">
+                                {e.phase ? `${e.phase} · ` : ""}{e.role || e.key}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              {e.index != null && <Badge className="bg-slate-800 text-slate-400 text-[9px]">#{e.index}</Badge>}
+                              {e.opinion ? <Badge className="bg-slate-700/50 text-slate-400 text-[9px]">{e.opinion}</Badge> : <span className="text-[9px] text-slate-600">{NA}</span>}
+                              {e.confidence != null && <span className="text-[9px] text-slate-500">{formatPct(e.confidence)}</span>}
+                              {e.risk_flag && <Badge className="bg-red-500/15 text-red-300 text-[9px]">risk</Badge>}
+                            </div>
+                          </div>
+                          <div className="mt-2 rounded border border-slate-800 bg-slate-950/40 p-2">
+                            <p className="text-[9px] text-slate-500 mb-1">输入 — 系统提供的数据管道</p>
+                            {e.data_source_chain ? (
+                              <p className="text-[10px] text-slate-300 font-mono">{e.data_source_chain}</p>
+                            ) : (
+                              <p className="text-[10px] text-slate-600 italic">后端未记录（data_source_chain 为空）</p>
                             )}
-                          >
-                            查看审计详情
-                          </button>
-                          <Link
-                            href={researchSnapshotHref(row.symbol, "1h", row.timestamp)}
-                            className="text-slate-300 hover:text-white"
-                          >
-                            回看研究台
-                          </Link>
-                          <Link
-                            href={`/decisions?symbol=${encodeURIComponent(row.symbol)}`}
-                            className="text-slate-300 hover:text-white"
-                          >
-                            去决策中心
-                          </Link>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {!loading && !overview?.latest_decisions?.length && (
-                    <TableRow className="border-white/10">
-                      <TableCell colSpan={5} className="py-8 text-center text-slate-500">还没有智能体决策记录。</TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        </section>
-
-        {(detailLoading || detailError || decisionDetail) && (
-          <Card className="border-cyan-400/20 bg-[radial-gradient(circle_at_top_right,rgba(14,165,233,0.16),transparent_34%),rgba(255,255,255,0.04)]">
-            <CardHeader className="flex flex-row items-start justify-between gap-4">
-              <div>
-                <CardTitle className="text-white">单条决策审计详情</CardTitle>
-                <p className="mt-1 text-sm leading-6 text-slate-500">
-                  这里按“输入快照 → Agent 输出 → OrderIntent → RiskGuard → 模拟盘”的顺序展示，不修改任何历史记录。
-                </p>
-              </div>
-              {decisionDetail && (
-                <div className="flex flex-wrap justify-end gap-2">
-                  <Link href={decisionDetail.links.research_snapshot || researchSnapshotHref(decisionDetail.decision.symbol, "1h", decisionDetail.decision.timestamp)}>
-                    <Button size="sm" variant="outline" className="border-cyan-400/30 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/20">
-                      回看研究台
-                    </Button>
-                  </Link>
-                  <Link href={decisionDetail.links.decision_center || `/decisions?symbol=${encodeURIComponent(decisionDetail.decision.symbol)}`}>
-                    <Button size="sm" variant="ghost" className="text-cyan-100 hover:bg-cyan-500/10">
-                      去决策中心
-                    </Button>
-                  </Link>
-                  {decisionDetail.links.audit_export && (
-                    <Link href={decisionDetail.links.audit_export} target="_blank">
-                      <Button size="sm" variant="ghost" className="text-slate-200 hover:bg-white/10">
-                        可选导出 JSON
-                      </Button>
-                    </Link>
-                  )}
-                </div>
-              )}
-            </CardHeader>
-            <CardContent>
-              {detailLoading && (
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-5 text-sm text-slate-300">
-                  <RefreshCw className="mr-2 inline h-4 w-4 animate-spin" />
-                  正在读取决策 #{selectedDecisionId} 的审计详情...
-                </div>
-              )}
-
-              {detailError && (
-                <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">
-                  {detailError}
-                </div>
-              )}
-
-              {decisionDetail && !detailLoading && (
-                <div className="space-y-4">
-                  <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/[0.06] p-4">
-                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                      <div>
-                        <p className="text-sm font-semibold text-emerald-100">审计结果</p>
-                        <p className="mt-1 text-xs leading-5 text-slate-400">
-                          这是给使用者直接看的结论版审计。JSON 仍可导出，但不是唯一查看方式。
-                        </p>
-                      </div>
-                      <Badge className="border border-emerald-400/30 bg-emerald-500/15 text-emerald-200">
-                        可追溯 · 可复核 · 可导出
-                      </Badge>
-                    </div>
-                    <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                      {auditResultLines(decisionDetail).map((line) => (
-                        <div key={line} className="rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-xs leading-5 text-slate-200">
-                          {line}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {tradingAgentsInternalChain(decisionDetail).length > 0 && (
-                    <details className="rounded-2xl border border-amber-300/20 bg-amber-400/[0.04] p-4">
-                      <summary className="cursor-pointer select-none text-sm font-semibold text-amber-100">
-                        完整 TradingAgentsGraph 链路：{tradingAgentsInternalChain(decisionDetail).length} 个内部角色 / 节点
-                      </summary>
-                      <p className="mt-2 text-xs leading-5 text-slate-400">
-                        默认审计先显示核心结果；这里可以展开查看多头、空头、研究经理、三类风险分析员和最终裁决的原始链路。
-                      </p>
-                      <div className="mt-4 grid gap-3 md:grid-cols-2">
-                        {tradingAgentsInternalChain(decisionDetail).map((entry, index) => (
-                          <div key={`${entry.role || "chain"}-${entry.index || index}`} className="rounded-xl border border-white/10 bg-slate-950/45 p-3">
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <p className="text-sm font-medium text-slate-100">
-                                  {entry.index ? `${entry.index}. ` : ""}{entry.label || roleLabel(entry.role)}
-                                </p>
-                                <p className="mt-1 text-xs text-slate-500">{entry.phase || "chain"} · {entry.role}</p>
-                              </div>
-                              <Badge className="border border-amber-300/20 bg-amber-400/10 text-[11px] text-amber-100">
-                                {entry.available ? "有独立输出" : "已折叠"}
-                              </Badge>
+                            <div className="grid grid-cols-2 md:grid-cols-6 gap-1.5 mt-2">
+                              {inputSummaryCards.map(item => (
+                                <div key={`${e.key}-${item.label}`} className="rounded bg-slate-900/60 px-2 py-1">
+                                  <p className="text-[8px] text-slate-600">{item.label}</p>
+                                  <p className="text-[9px] text-slate-300 font-mono truncate">{formatValue(item.value)}</p>
+                                </div>
+                              ))}
                             </div>
-                            <p className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-xs leading-5 text-slate-300">
-                              {entry.reasoning || "本节点没有返回独立文本。"}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    </details>
-                  )}
-
-                  <div className="grid gap-3 md:grid-cols-4">
-                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                      <p className="text-xs text-slate-500">决策</p>
-                      <p className={cn("mt-2 text-lg font-semibold", signalClass(decisionDetail.decision.final_signal))}>
-                        {signalLabel(decisionDetail.decision.final_signal)}
-                      </p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        {decisionDetail.decision.symbol} · {formatTime(decisionDetail.decision.timestamp)}
-                      </p>
-                    </div>
-                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                      <p className="text-xs text-slate-500">输入材料</p>
-                      <p className="mt-2 text-lg font-semibold text-white">
-                        {formatNumber(
-                          decisionDetail.trace_summary.factor_snapshots
-                          + decisionDetail.trace_summary.signal_events
-                          + decisionDetail.trace_summary.news_events
-                          + decisionDetail.trace_summary.macro_events,
-                        )}
-                      </p>
-                      <p className="mt-1 text-xs text-slate-500">因子/信号/新闻/宏观合计</p>
-                    </div>
-                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                      <p className="text-xs text-slate-500">角色输出</p>
-                      <p className="mt-2 text-lg font-semibold text-white">{formatNumber(decisionDetail.trace_summary.role_outputs)}</p>
-                      <p className="mt-1 text-xs text-slate-500">来自 role_opinions 或 agent_signals</p>
-                    </div>
-                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                      <p className="text-xs text-slate-500">执行链</p>
-                      <p className={cn(
-                        "mt-2 text-lg font-semibold",
-                        decisionDetail.trace_summary.executed ? "text-emerald-300" : decisionDetail.trace_summary.risk_blocked ? "text-rose-300" : "text-slate-200",
-                      )}>
-                        {decisionDetail.trace_summary.executed ? "已进模拟盘" : decisionDetail.trace_summary.risk_blocked ? "风控拦截" : "未执行"}
-                      </p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        OrderIntent {formatNumber(decisionDetail.trace_summary.order_intent_events)} 条 · 交易 {formatNumber(decisionDetail.trace_summary.paper_trades)} 笔
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                    <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                      <div>
-                        <p className="text-sm font-semibold text-white">决策摘要</p>
-                        <p className="mt-2 text-sm leading-6 text-slate-300">{decisionDetail.decision.summary || "这条决策没有写入摘要。"}</p>
-                      </div>
-                      <Badge className={decisionDetail.decision.risk_veto ? "border-rose-400/30 bg-rose-500/15 text-rose-300" : "border-emerald-400/30 bg-emerald-500/15 text-emerald-300"}>
-                        {decisionDetail.decision.risk_veto ? "决策层风险否决" : "决策层未否决"}
-                      </Badge>
-                    </div>
-                    <div className="mt-4 grid gap-3 text-xs text-slate-400 md:grid-cols-4">
-                      <p>因子快照：<span className="font-mono text-slate-100">{formatNumber(decisionDetail.trace_summary.factor_snapshots)}</span></p>
-                      <p>信号事件：<span className="font-mono text-slate-100">{formatNumber(decisionDetail.trace_summary.signal_events)}</span></p>
-                      <p>新闻事件：<span className="font-mono text-slate-100">{formatNumber(decisionDetail.trace_summary.news_events)}</span></p>
-                      <p>宏观事件：<span className="font-mono text-slate-100">{formatNumber(decisionDetail.trace_summary.macro_events)}</span></p>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                      <p className="text-sm font-semibold text-white">Agent 角色输出</p>
-                      <div className="mt-3 grid gap-3 md:grid-cols-2">
-                        {decisionDetail.role_outputs.length ? decisionDetail.role_outputs.map((role, index) => (
-                          <div key={`${role.role || role.agent || "role"}-${index}`} className="rounded-xl border border-white/10 bg-slate-950/45 p-3">
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <p className="text-sm font-medium text-slate-100">{roleLabel(role.role || role.agent_type || role.agent)}</p>
-                                <p className="mt-1 text-xs text-slate-500">{roleOpinionLabel(role)}</p>
-                              </div>
-                              <Badge className="border-slate-400/20 bg-slate-500/15 text-[11px] text-slate-300">
-                                {formatRatioPercent(role.confidence)}
-                              </Badge>
-                            </div>
-                            <p className="mt-2 text-xs leading-5 text-slate-300">{readString(role.reasoning, "暂无推理摘要")}</p>
-                            {Array.isArray(role.key_points) && role.key_points.length > 0 && (
-                              <div className="mt-2 flex flex-wrap gap-1">
-                                {role.key_points.slice(0, 5).map((point) => (
-                                  <span key={point} className="rounded-full bg-cyan-400/10 px-2 py-1 text-[10px] text-cyan-100">
-                                    {point}
-                                  </span>
+                            {keyPoints.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-2">
+                                {keyPoints.slice(0, 4).map(point => (
+                                  <span key={point} className="rounded bg-cyan-500/10 px-2 py-0.5 text-[9px] text-cyan-200/80">{point}</span>
                                 ))}
                               </div>
                             )}
                           </div>
-                        )) : (
-                          <div className="rounded-xl border border-white/10 bg-slate-950/45 p-4 text-sm text-slate-500 md:col-span-2">
-                            这条决策没有保存结构化角色输出。
+                          <div className="mt-1 rounded border border-slate-800 bg-slate-950/40 p-2">
+                            <p className="text-[9px] text-slate-500 mb-1">输出 — {outputText ? "已记录" : "无输出"}</p>
+                            {outputText ? (
+                              <>
+                                <p className="text-[10px] text-slate-400 leading-4">{compactText(outputText)}</p>
+                                <details className="mt-2 rounded border border-slate-800 bg-slate-900/50 px-2 py-1">
+                                  <summary className="cursor-pointer text-[9px] text-cyan-300">查看完整输出（{String(outputText).length} 字）</summary>
+                                  <pre className="mt-2 max-h-[420px] overflow-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-slate-300">{String(outputText)}</pre>
+                                </details>
+                              </>
+                            ) : <p className="text-[10px] text-slate-600 italic">该角色未产生输出摘要</p>}
                           </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                      <p className="text-sm font-semibold text-white">输入快照 ID</p>
-                      <p className="mt-1 text-xs leading-5 text-slate-500">
-                        这些 ID 用来证明本次决策引用了哪些历史材料；真正回看内容请点“回看研究台”。
-                      </p>
-                      <pre className="mt-3 max-h-80 overflow-auto rounded-xl bg-slate-950/60 p-3 text-[11px] leading-5 text-slate-400">
-                        {JSON.stringify(decisionDetail.decision.input_snapshot_ids || {}, null, 2)}
-                      </pre>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 xl:grid-cols-2">
-                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                      <p className="text-sm font-semibold text-white">OrderIntent / 风控事件</p>
-                      <div className="mt-3 space-y-3">
-                        {decisionDetail.order_intent_events.length ? decisionDetail.order_intent_events.map((row) => {
-                          const details = row.details || {};
-                          const intent = nestedObject(details, "intent");
-                          const risk = nestedObject(details, "risk_preview");
-                          const lineage = nestedObject(details, "data_lineage");
-                          const riskAllowed = typeof risk.passed === "boolean" ? risk.passed : typeof risk.allowed === "boolean" ? risk.allowed : null;
-                          return (
-                            <div key={row.id} className="rounded-xl border border-white/10 bg-slate-950/45 p-3 text-xs text-slate-400">
-                              <div className="flex items-start justify-between gap-3">
-                                <Badge className={orderIntentBadge(row.action)}>{orderIntentActionLabel(row.action)}</Badge>
-                                <span>{formatTime(row.created_at)}</span>
-                              </div>
-                              <div className="mt-3 grid gap-2 md:grid-cols-2">
-                                <p>Intent：<span className="font-mono text-slate-200">{readString(intent.intent_id, "-")}</span></p>
-                                <p>方向：<span className="font-mono text-slate-200">{readString(intent.side, "NO_ACTION")}</span></p>
-                                <p>仓位：<span className="font-mono text-slate-200">{formatRatioPercent(intent.position_pct)}</span></p>
-                                <p>风控：<span className={riskAllowed === true ? "text-emerald-300" : riskAllowed === false ? "text-rose-300" : "text-slate-300"}>{riskAllowed === true ? "通过" : riskAllowed === false ? "拦截" : "未触发"}</span></p>
-                              </div>
-                              <p className="mt-2 leading-5">价格来源：{readString(lineage.price_source, "未记录")}</p>
-                              <Link href={auditExportHref(row.id)} target="_blank" className="mt-2 inline-flex text-cyan-200 hover:text-cyan-100">
-                                导出该事件 JSON
-                              </Link>
-                            </div>
-                          );
-                        }) : (
-                          <div className="rounded-xl border border-white/10 bg-slate-950/45 p-4 text-sm text-slate-500">
-                            还没有为这条决策生成 OrderIntent。去决策中心展开该标的决策后，可以手动生成。
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                      <p className="text-sm font-semibold text-white">模拟盘成交记录</p>
-                      <div className="mt-3 space-y-3">
-                        {decisionDetail.paper_trades.length ? decisionDetail.paper_trades.map((trade) => (
-                          <div key={trade.id} className="rounded-xl border border-white/10 bg-slate-950/45 p-3 text-xs text-slate-400">
-                            <div className="flex items-start justify-between gap-3">
-                              <p className="font-mono text-slate-100">{trade.client_order_id || `trade-${trade.id}`}</p>
-                              <Badge className="border-emerald-400/30 bg-emerald-500/15 text-emerald-300">{trade.status}</Badge>
-                            </div>
-                            <div className="mt-3 grid gap-2 md:grid-cols-2">
-                              <p>交易所：<span className="font-mono text-slate-200">{trade.exchange_id || "-"}</span></p>
-                              <p>方向：<span className="font-mono text-slate-200">{trade.side}</span></p>
-                              <p>数量：<span className="font-mono text-slate-200">{formatNumber(trade.quantity)}</span></p>
-                              <p>价格：<span className="font-mono text-slate-200">{formatMoney(trade.price)}</span></p>
-                              <p>手续费：<span className="font-mono text-slate-200">{formatMoney(trade.fee)}</span></p>
-                              <p>时间：{formatTime(trade.created_at)}</p>
-                            </div>
-                          </div>
-                        )) : (
-                          <div className="rounded-xl border border-white/10 bg-slate-950/45 p-4 text-sm text-slate-500">
-                            这条决策还没有对应的模拟盘成交。WAIT/观望或风控拦截都不会产生交易。
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                        </div>
+                      );
+                    })}
+                  </>}
+                </CardContent>
               )}
-            </CardContent>
-          </Card>
-        )}
+            </Card>
 
-        <Card className="border-emerald-400/20 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.12),transparent_36%),rgba(255,255,255,0.04)]">
-          <CardHeader>
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <CardTitle className="text-white">审计记录查询</CardTitle>
-                <p className="mt-1 text-sm leading-6 text-slate-500">
-                  审计记录写入后不可修改，后续变化通过新增事件记录追踪。
-                </p>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"
-                onClick={() => void fetchAuditRecords()}
-              >
-                <RefreshCw className={cn("mr-2 h-4 w-4", auditRecordsLoading && "animate-spin")} />
-                查询
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-10">
-              <input
-                value={auditFilters.symbol}
-                onChange={(event) => updateAuditFilter("symbol", event.target.value.toUpperCase())}
-                placeholder="symbol"
-                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
-              />
-              <select
-                value={auditFilters.eventType}
-                onChange={(event) => updateAuditFilter("eventType", event.target.value)}
-                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
-              >
-                <option value="">eventType</option>
-                {["AGENT_DECISION", "ORDER_INTENT_CREATED", "RISK_CHECK_PASSED", "RISK_BLOCKED", "PAPER_ORDER_FILLED", "PAPER_ORDER_REJECTED", "POSITION_UPDATED", "PNL_UPDATED", "HOLD_RECORDED"].map((item) => (
-                  <option key={item} value={item}>{orderIntentActionLabel(item)}</option>
-                ))}
-              </select>
-              <select
-                value={auditFilters.action}
-                onChange={(event) => updateAuditFilter("action", event.target.value)}
-                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
-              >
-                <option value="">action</option>
-                <option value="BUY">买入</option>
-                <option value="SELL">卖出</option>
-                <option value="HOLD">持有/观望</option>
-              </select>
-              <select
-                value={auditFilters.executionStatus}
-                onChange={(event) => updateAuditFilter("executionStatus", event.target.value)}
-                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
-              >
-                <option value="">executionStatus</option>
-                <option value="FILLED">已成交</option>
-                <option value="REJECTED">已拒绝</option>
-                <option value="BLOCKED">已拦截</option>
-              </select>
-              <select
-                value={auditFilters.riskStatus}
-                onChange={(event) => updateAuditFilter("riskStatus", event.target.value)}
-                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
-              >
-                <option value="">riskStatus</option>
-                <option value="passed">风控通过</option>
-                <option value="blocked">风控拦截</option>
-                <option value="not_checked">未触发风控</option>
-              </select>
-              <select
-                value={auditFilters.source}
-                onChange={(event) => updateAuditFilter("source", event.target.value)}
-                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
-              >
-                <option value="">source</option>
-                <option value="manual">manual</option>
-                <option value="coordination_history">agent</option>
-                <option value="backtest">backtest</option>
-              </select>
-              <select
-                value={auditFilters.executionMode}
-                onChange={(event) => updateAuditFilter("executionMode", event.target.value)}
-                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
-              >
-                <option value="">executionMode</option>
-                <option value="rule_only">普通规则回测</option>
-                <option value="agent_audited">Agent 审计回测</option>
-              </select>
-              <input
-                value={auditFilters.backtestId}
-                onChange={(event) => updateAuditFilter("backtestId", event.target.value)}
-                placeholder="backtestId"
-                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
-              />
-              <input
-                value={auditFilters.replaySessionId}
-                onChange={(event) => updateAuditFilter("replaySessionId", event.target.value)}
-                placeholder="replaySessionId"
-                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
-              />
-              <input
-                type="datetime-local"
-                value={auditFilters.startTime}
-                onChange={(event) => updateAuditFilter("startTime", event.target.value)}
-                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
-              />
-              <input
-                type="datetime-local"
-                value={auditFilters.endTime}
-                onChange={(event) => updateAuditFilter("endTime", event.target.value)}
-                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white outline-none focus:border-emerald-300/50"
-              />
-            </div>
-
-            {auditRecordsError && (
-              <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-                {auditRecordsError}
-              </div>
-            )}
-
-            <div className="grid gap-4 xl:grid-cols-[1.25fr_0.75fr]">
-              <div className="overflow-x-auto rounded-2xl border border-white/10 bg-black/20">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="border-white/10 hover:bg-transparent">
-                      <TableHead className="text-slate-400">createdAt</TableHead>
-                      <TableHead className="text-slate-400">symbol</TableHead>
-                      <TableHead className="text-slate-400">eventType</TableHead>
-                      <TableHead className="text-slate-400">decisionId</TableHead>
-                      <TableHead className="text-slate-400">orderIntentId</TableHead>
-                      <TableHead className="text-slate-400">orderId</TableHead>
-                      <TableHead className="text-slate-400">action</TableHead>
-                      <TableHead className="text-slate-400">executionStatus</TableHead>
-                      <TableHead className="text-slate-400">riskStatus</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {auditRecordsLoading ? (
-                      <TableRow className="border-white/10">
-                        <TableCell colSpan={9} className="py-8 text-center text-slate-500">
-                          <RefreshCw className="mr-2 inline h-4 w-4 animate-spin" />
-                          正在读取审计记录...
-                        </TableCell>
-                      </TableRow>
-                    ) : auditRecords.length ? auditRecords.map((record) => (
-                      <TableRow
-                        key={`${record.id}-${record.eventType}`}
-                        className={cn("cursor-pointer border-white/10 hover:bg-white/[0.04]", selectedAuditRecord?.id === record.id && "bg-white/[0.06]")}
-                        onClick={() => void fetchAuditRecordDetail(record)}
-                      >
-                        <TableCell className="text-xs text-slate-400">{formatTime(record.createdAt)}</TableCell>
-                        <TableCell className="font-mono text-xs text-white">{record.symbol || "暂无数据"}</TableCell>
-                        <TableCell><Badge className={orderIntentBadge(record.eventType)}>{orderIntentActionLabel(record.eventType)}</Badge></TableCell>
-                        <TableCell className="font-mono text-xs text-slate-300">
-                          {record.decisionId ? <Link href={`/audit?decision_id=${record.decisionId}`} className="text-cyan-200 hover:text-cyan-100">{String(record.decisionId)}</Link> : "暂无关联记录"}
-                        </TableCell>
-                        <TableCell className="max-w-[160px] truncate font-mono text-xs text-slate-400">{record.orderIntentId || "暂无关联记录"}</TableCell>
-                        <TableCell className="font-mono text-xs text-slate-400">{record.orderId || "暂无关联记录"}</TableCell>
-                        <TableCell className="text-xs text-slate-300">{record.action || "暂无数据"}</TableCell>
-                        <TableCell className="text-xs text-slate-300">{record.executionStatus || "暂无数据"}</TableCell>
-                        <TableCell className="text-xs text-slate-300">{record.riskStatus || "暂无数据"}</TableCell>
-                      </TableRow>
-                    )) : (
-                      <TableRow className="border-white/10">
-                        <TableCell colSpan={9} className="py-8 text-center text-slate-500">暂无审计记录。</TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-white">审计详情</p>
-                    <p className="mt-1 text-xs text-slate-500">点击左侧记录查看完整 JSON 和友好摘要。</p>
-                  </div>
-                  <Button size="sm" variant="outline" className="border-white/10 bg-white/5 text-xs text-slate-100" onClick={() => void copyAuditJson()} disabled={!selectedAuditRecord}>
-                    复制 JSON
-                  </Button>
+            {/* ═══ 4. Agent Output Completeness ════════════════════════════ */}
+            <Card className="border-slate-700/50 bg-slate-950/60">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2"><FileSearch className="w-4 h-4 text-cyan-400" />Agent 输出完整性</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-1">
+                  {agentCompleteness.map(a => (
+                    <div key={a.key} className="flex items-center gap-3 text-[10px] py-1">
+                      <span className="text-slate-300 w-32 truncate">{a.label}</span>
+                      <span className="flex items-center gap-1">{a.hasOpinion ? <CheckCircle className="w-3 h-3 text-green-400" /> : <XCircle className="w-3 h-3 text-red-400" />}方向</span>
+                      <span className="flex items-center gap-1">{a.hasChain ? <CheckCircle className="w-3 h-3 text-green-400" /> : <XCircle className="w-3 h-3 text-slate-500" />}数据源</span>
+                      <span className="flex items-center gap-1">{a.hasOutput ? <CheckCircle className="w-3 h-3 text-green-400" /> : <XCircle className="w-3 h-3 text-red-400" />}输出</span>
+                    </div>
+                  ))}
                 </div>
-                {copyMessage && <p className="mt-2 text-xs text-emerald-300">{copyMessage}</p>}
-                {auditRecordDetailLoading ? (
-                  <div className="py-10 text-center text-sm text-slate-500">
-                    <RefreshCw className="mr-2 inline h-4 w-4 animate-spin" />
-                    正在读取审计详情...
-                  </div>
-                ) : selectedAuditRecord ? (
-                  <div className="mt-4 space-y-3">
-                    <div className="rounded-xl border border-white/10 bg-slate-950/50 p-3 text-xs leading-5 text-slate-400">
-                      <p>事件：<span className="text-slate-100">{orderIntentActionLabel(selectedAuditRecord.eventType)}</span></p>
-                      <p>标的：<span className="font-mono text-slate-100">{selectedAuditRecord.symbol || "暂无数据"}</span></p>
-                      <p>决策：<span className="font-mono text-slate-100">{selectedAuditRecord.decisionId || "暂无关联记录"}</span></p>
-                      <p>OrderIntent：<span className="font-mono text-slate-100">{selectedAuditRecord.orderIntentId || "暂无关联记录"}</span></p>
-                      <p>订单：<span className="font-mono text-slate-100">{selectedAuditRecord.orderId || "暂无关联记录"}</span></p>
-                      <p>回测：<span className="font-mono text-slate-100">{selectedAuditRecord.backtestId || "暂无关联记录"}</span></p>
-                      <p>回放：<span className="font-mono text-slate-100">{selectedAuditRecord.replaySessionId || "暂无关联记录"}</span></p>
-                      <p>模式：<span className="font-mono text-slate-100">{selectedAuditRecord.executionMode || "暂无数据"}</span></p>
-                      <p>不可修改：{selectedAuditRecord.immutable ? "是" : "否"}</p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {selectedAuditRecord.decisionId ? (
-                        <Link href={`/audit?decision_id=${selectedAuditRecord.decisionId}`}>
-                          <Button size="sm" variant="outline" className="h-7 border-cyan-500/30 text-xs text-cyan-200">查看决策详情</Button>
-                        </Link>
-                      ) : <span className="text-[11px] text-slate-500">暂无关联决策</span>}
-                      {selectedAuditRecord.backtestId ? (
-                        <Link href={`/backtest?backtest_id=${selectedAuditRecord.backtestId}`}>
-                          <Button size="sm" variant="outline" className="h-7 border-indigo-500/30 text-xs text-indigo-200">返回回测详情</Button>
-                        </Link>
-                      ) : <span className="text-[11px] text-slate-500">暂无关联回测</span>}
-                      {selectedAuditRecord.replaySessionId ? (
-                        <Link href={`/replay?session_id=${selectedAuditRecord.replaySessionId}${selectedAuditRecord.replayTime ? `&as_of_time=${encodeURIComponent(selectedAuditRecord.replayTime)}` : ""}`}>
-                          <Button size="sm" variant="outline" className="h-7 border-emerald-500/30 text-xs text-emerald-200">定位历史回放</Button>
-                        </Link>
-                      ) : <span className="text-[11px] text-slate-500">暂无关联回放</span>}
-                      {selectedAuditRecord.orderIntentId ? (
-                        <Link href={`/audit?order_intent_id=${selectedAuditRecord.orderIntentId}`}>
-                          <Button size="sm" variant="outline" className="h-7 border-fuchsia-500/30 text-xs text-fuchsia-200">查看 OrderIntent</Button>
-                        </Link>
-                      ) : <span className="text-[11px] text-slate-500">暂无关联 OrderIntent</span>}
-                    </div>
-                    <details className="rounded-xl border border-white/10 bg-slate-950/50 p-3">
-                      <summary className="cursor-pointer text-sm font-semibold text-white">完整 JSON</summary>
-                      <pre className="mt-3 max-h-[520px] overflow-auto rounded-lg bg-black/40 p-3 text-[11px] leading-5 text-slate-400">
-                        {JSON.stringify(selectedAuditRecord, null, 2)}
-                      </pre>
-                    </details>
-                  </div>
-                ) : (
-                  <div className="mt-4 rounded-xl border border-white/10 bg-slate-950/40 p-6 text-center text-sm text-slate-500">
-                    暂无数据。
-                  </div>
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+                {agentCompleteness.length === 0 && <p className="text-xs text-slate-600 py-4 text-center">{NA}（agent_analysis）</p>}
+              </CardContent>
+            </Card>
 
-        <Card className="border-cyan-400/20 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.14),transparent_34%),rgba(255,255,255,0.04)]">
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle className="text-white">TradingAgents 执行闭环审计</CardTitle>
-              <p className="mt-1 text-sm text-slate-500">
-                展示“决策 → OrderIntent → RiskGuard → 模拟盘”的最近记录。这里不会代表真实交易，只追踪模拟盘和手动执行动作。
-              </p>
-            </div>
-            <Link href="/decisions">
-              <Button size="sm" variant="ghost" className="text-cyan-100 hover:bg-cyan-500/10">去生成 OrderIntent</Button>
-            </Link>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-3 lg:grid-cols-2">
-              {(overview?.latest_order_intents || []).map((row) => {
-                const details = row.details || {};
-                const intent = nestedObject(details, "intent");
-                const decision = nestedObject(details, "decision");
-                const sizing = nestedObject(details, "sizing");
-                const risk = nestedObject(details, "risk_preview");
-                const lineage = nestedObject(details, "data_lineage");
-                const execution = nestedObject(details, "execution");
-                const side = readString(intent.side, "NO_ACTION");
-                const decisionId = readNumber(intent.decision_id || decision.id);
-                const riskAllowed = typeof risk.passed === "boolean" ? risk.passed : typeof risk.allowed === "boolean" ? risk.allowed : null;
-                return (
-                  <div key={row.id} className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                    <div className="flex items-start justify-between gap-3">
+            {/* ═══ 5. Future Function Check ════════════════════════════════ */}
+            <Card className="border-slate-700/50 bg-slate-950/60">
+              <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-800/50 bg-slate-900/40 cursor-pointer" onClick={() => setShowFutureCheck(!showFutureCheck)}>
+                <Filter className="w-4 h-4 text-amber-400" />
+                <p className="text-sm font-semibold text-white flex-1">未来函数检查</p>
+                <Badge className={`text-[10px] ${futureChecks.some(c => c.ok === false) ? "bg-red-500/15 text-red-400" : futureChecks.some(c => c.ok === null) ? "bg-amber-500/15 text-amber-400" : "bg-green-500/15 text-green-400"}`}>
+                  {futureChecks.filter(c => c.ok === false).length > 0 ? "有风险" : "通过"}
+                </Badge>
+                {showFutureCheck ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+              </div>
+              {showFutureCheck && (
+                <CardContent className="p-4 space-y-2">
+                  {futureChecks.map((c, i) => (
+                    <div key={i} className={`rounded-lg border p-2.5 flex items-start gap-2 ${c.ok === true ? "border-green-500/20 bg-green-500/5" : c.ok === false ? "border-red-500/20 bg-red-500/5" : "border-slate-800 bg-slate-900/30"}`}>
+                      {c.ok === true ? <CheckCircle className="w-4 h-4 text-green-400 shrink-0 mt-0.5" /> : c.ok === false ? <XCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" /> : <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />}
                       <div>
-                        <Badge className={orderIntentBadge(row.action)}>{orderIntentActionLabel(row.action)}</Badge>
-                        <p className="mt-2 font-mono text-sm text-white">{readString(intent.symbol || row.resource, "未知标的")}</p>
-                        <p className="mt-1 text-xs text-slate-500">决策 #{decisionId || "-"} · {formatTime(row.created_at)}</p>
-                      </div>
-                      <div className="text-right text-xs text-slate-400">
-                        <p>方向 <span className="font-mono text-slate-100">{side}</span></p>
-                        <p>仓位 <span className="font-mono text-slate-100">{formatRatioPercent(intent.position_pct)}</span></p>
+                        <p className="text-[11px] font-semibold text-slate-300">{c.label}</p>
+                        <p className="text-[10px] text-slate-500 mt-0.5">{c.detail}</p>
                       </div>
                     </div>
-
-                    <div className="mt-4 grid gap-3 text-xs text-slate-400 sm:grid-cols-2">
-                      <div className="rounded-xl border border-white/10 bg-slate-950/50 p-3">
-                        <p className="text-slate-500">OrderIntent</p>
-                        <p className="mt-1">ID：<span className="font-mono text-slate-200">{readString(intent.intent_id, "-")}</span></p>
-                        <p>置信度：<span className="font-mono text-slate-200">{formatRatioPercent(intent.confidence)}</span></p>
-                        <p>有效期：{formatTime(readString(intent.valid_until, ""))}</p>
-                      </div>
-                      <div className="rounded-xl border border-white/10 bg-slate-950/50 p-3">
-                        <p className="text-slate-500">RiskGuard / 模拟盘</p>
-                        <p>风控：<span className={riskAllowed === true ? "text-emerald-300" : riskAllowed === false ? "text-rose-300" : "text-slate-300"}>{riskAllowed === true ? "通过" : riskAllowed === false ? "拦截" : "未触发下单检查"}</span></p>
-                        <p>规则：<span className="font-mono text-slate-200">{readString(risk.rule, "-")}</span></p>
-                        <p>数量：<span className="font-mono text-slate-200">{formatNumber(sizing.quantity)}</span></p>
-                        <p>订单：<span className="font-mono text-slate-200">{readString(details.order_id || execution.order_id, "-")}</span></p>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/40 p-3 text-xs leading-5 text-slate-400">
-                      <p>决策摘要：{readString(decision.summary, "暂无摘要")}</p>
-                      <p>价格来源：{readString(lineage.price_source, "新记录会写入 MarketDataGateway / OpenBB/yfinance / CCXT fallback 说明")}</p>
-                      <div className="mt-2">
-                        <Link href={auditExportHref(row.id)} target="_blank" className="text-cyan-200 hover:text-cyan-100">
-                          导出这条审计 JSON
-                        </Link>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-              {!loading && !overview?.latest_order_intents?.length && (
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-8 text-center text-sm text-slate-500 lg:col-span-2">
-                  还没有 OrderIntent 审计记录。去“决策中心”展开一条建议，点击“生成 OrderIntent”后这里会出现记录。
-                </div>
+                  ))}
+                </CardContent>
               )}
-            </div>
-          </CardContent>
-        </Card>
+            </Card>
 
-        <Card className="border-white/10 bg-white/[0.04]">
-          <CardHeader>
-            <CardTitle className="text-white">最近审计日志</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow className="border-white/10 hover:bg-transparent">
-                  <TableHead className="text-slate-400">时间</TableHead>
-                  <TableHead className="text-slate-400">动作</TableHead>
-                  <TableHead className="text-slate-400">对象</TableHead>
-                  <TableHead className="text-slate-400">用户</TableHead>
-                  <TableHead className="text-slate-400">详情</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(overview?.latest_audit_logs || []).map((row) => (
-                  <TableRow key={row.id} className="border-white/10">
-                    <TableCell className="text-slate-400">{formatTime(row.created_at)}</TableCell>
-                    <TableCell><Badge className="border-slate-400/20 bg-slate-500/15 text-slate-300">{row.action}</Badge></TableCell>
-                    <TableCell className="text-white">{row.resource || "未记录"}</TableCell>
-                    <TableCell className="text-slate-300">{row.user_id || "system"}</TableCell>
-                    <TableCell className="max-w-[520px]">
-                      <div className="truncate font-mono text-xs text-slate-500">{JSON.stringify(row.details || {})}</div>
-                      <Link href={auditExportHref(row.id)} target="_blank" className="mt-1 inline-flex text-xs text-cyan-200 hover:text-cyan-100">
-                        导出 JSON
-                      </Link>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {!loading && !overview?.latest_audit_logs?.length && (
-                  <TableRow className="border-white/10">
-                    <TableCell colSpan={5} className="py-8 text-center text-slate-500">还没有审计日志。后续配置修改、关键操作和策略动作需要继续写入 audit_logs。</TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+            {/* ═══ 6. Decision Chain ════════════════════════════════════════ */}
+            <Card className="border-slate-700/50 bg-slate-950/60">
+              <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-800/50 bg-slate-900/40 cursor-pointer" onClick={() => setShowChain(!showChain)}>
+                <ScrollText className="w-4 h-4 text-cyan-400" />
+                <p className="text-sm font-semibold text-white flex-1">决策链路</p>
+                {showChain ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+              </div>
+              {showChain && (
+                <CardContent className="p-4 space-y-3">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {[
+                      { l: "OrderIntent", ok: !!d?.order_intent?.orderIntentId, veto: dec?.risk_veto, d: d?.order_intent?.orderIntentId || (dec?.risk_veto ? "风控否决" : NA) },
+                      { l: "风控检查", ok: d?.risk_guard?.passed === true, veto: d?.risk_guard?.passed === false, d: `passed=${d?.risk_guard?.passed} · ${d?.risk_guard?.blockedReason || "无"}` },
+                      { l: "Paper Trade", ok: !!d?.execution_result?.paperOrderGenerated, veto: dec?.risk_veto, d: d?.execution_result?.paperOrderGenerated ? `${d.execution_result.orderId || "—"} @ ${d.execution_result.fillPrice || "—"}` : NA },
+                      { l: "Audit", ok: (d?.audit_timeline?.length || 0) > 0, veto: false, d: d?.audit_timeline?.length ? `${d.audit_timeline.length} 条` : NA },
+                    ].map(s => (
+                      <div key={s.l} className={`rounded-xl border p-3 ${s.ok ? "border-green-500/30 bg-green-500/5" : s.veto ? "border-red-500/30 bg-red-500/5" : "border-slate-800 bg-slate-900/30"}`}>
+                        <div className="flex items-center justify-between mb-1">
+                          <p className="text-[10px] text-slate-400 font-semibold">{s.l}</p>
+                          {s.ok ? <CheckCircle className="w-3 h-3 text-green-400" /> : s.veto ? <Shield className="w-3 h-3 text-red-400" /> : <XCircle className="w-3 h-3 text-slate-500" />}
+                        </div>
+                        <p className="text-[10px] text-slate-500">{String(s.d)}</p>
+                      </div>
+                    ))}
+                  </div>
+                  {d?.order_intent?.reason && (
+                    <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-2">
+                      <p className="text-[9px] text-slate-500 mb-1">OrderIntent reason</p>
+                      <p className="text-[10px] text-slate-400">{d.order_intent.reason}</p>
+                    </div>
+                  )}
+                </CardContent>
+              )}
+            </Card>
 
-        {loading && (
-          <div className="fixed bottom-6 right-6 rounded-full border border-white/10 bg-black/60 px-4 py-2 text-sm text-slate-300 shadow-xl backdrop-blur">
-            <RefreshCw className="mr-2 inline h-4 w-4 animate-spin" />
-            正在加载真实数据
-          </div>
+            {/* ═══ 7. Reproducibility ═══════════════════════════════════════ */}
+            <Card className="border-slate-700/50 bg-slate-950/60">
+              <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-800/50 bg-slate-900/40 cursor-pointer" onClick={() => setShowRepro(!showRepro)}>
+                <GitCompare className="w-4 h-4 text-purple-400" />
+                <p className="text-sm font-semibold text-white flex-1">可复现性</p>
+                <Badge className={`text-[10px] ${reproItems.filter(r => r.ok).length >= 4 ? "bg-green-500/15 text-green-400" : "bg-amber-500/15 text-amber-400"}`}>
+                  {reproItems.filter(r => r.ok).length}/{reproItems.length}
+                </Badge>
+                {showRepro ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+              </div>
+              {showRepro && (
+                <CardContent className="p-4 space-y-1.5">
+                  {reproItems.map((r, i) => (
+                    <div key={i} className="flex items-center gap-2 text-[10px]">
+                      {r.ok ? <CheckCircle className="w-3.5 h-3.5 text-green-400 shrink-0" /> : <XCircle className="w-3.5 h-3.5 text-slate-500 shrink-0" />}
+                      <span className="text-slate-400 w-24 shrink-0">{r.label}</span>
+                      <span className="text-slate-500">{r.detail}</span>
+                    </div>
+                  ))}
+                </CardContent>
+              )}
+            </Card>
+
+            {/* ═══ 8. Replay Runs ═══════════════════════════════════════════ */}
+            <Card className="border-slate-700/50 bg-slate-950/60">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <GitCompare className="w-4 h-4 text-cyan-400" />复跑结果
+                  <Badge className="bg-slate-800 text-slate-400 text-[9px]">{replayRuns.length} 条</Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-4 space-y-2">
+                {replayRuns.length === 0 ? <p className="text-xs text-slate-600 py-2">{NA}（replay_runs）</p>
+                  : replayRuns.map((run, index) => {
+                    const diff = asRecord(run.diffSummary);
+                    const actionChanged = diff.actionChanged === true;
+                    const contextChanged = diff.contextHashChanged === true;
+                    return (
+                      <div key={`${run.id || "replay"}-${index}`} className="rounded-lg border border-slate-800 bg-slate-900/30 p-2.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge className={`${run.status === "completed" ? "bg-green-500/15 text-green-300" : run.status === "failed" ? "bg-red-500/15 text-red-300" : "bg-amber-500/15 text-amber-300"} text-[9px]`}>
+                            {run.status || run.eventType || "replay"}
+                          </Badge>
+                          <span className="text-[10px] text-slate-400">source #{run.sourceDecisionId || "—"}</span>
+                          <span className="text-[10px] text-slate-500">→</span>
+                          {run.replayDecisionId ? (
+                            <button onClick={() => fetchDetail(Number(run.replayDecisionId))} className="text-[10px] text-cyan-300 hover:text-cyan-200">
+                              replay #{run.replayDecisionId}
+                            </button>
+                          ) : <span className="text-[10px] text-slate-500">replay —</span>}
+                          <span className="ml-auto text-[10px] text-slate-600">{fmtTime(run.createdAt) || "—"}</span>
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-2">
+                          <div className="rounded border border-slate-800 bg-slate-950/40 p-2">
+                            <p className="text-[9px] text-slate-500">动作变化</p>
+                            <p className={`text-[10px] ${actionChanged ? "text-amber-300" : "text-slate-300"}`}>
+                              {String(diff.originalAction || "—")} → {String(diff.replayAction || "—")}
+                            </p>
+                          </div>
+                          <div className="rounded border border-slate-800 bg-slate-950/40 p-2">
+                            <p className="text-[9px] text-slate-500">置信度差</p>
+                            <p className="text-[10px] text-slate-300 font-mono">{formatValue(diff.confidenceDelta)}</p>
+                          </div>
+                          <div className="rounded border border-slate-800 bg-slate-950/40 p-2">
+                            <p className="text-[9px] text-slate-500">上下文变化</p>
+                            <p className={`text-[10px] ${contextChanged ? "text-amber-300" : "text-slate-300"}`}>{contextChanged ? "changed" : "same/unknown"}</p>
+                          </div>
+                          <div className="rounded border border-slate-800 bg-slate-950/40 p-2">
+                            <p className="text-[9px] text-slate-500">风险否决</p>
+                            <p className="text-[10px] text-slate-300">{String(diff.originalRiskVeto ?? "—")} → {String(diff.replayRiskVeto ?? "—")}</p>
+                          </div>
+                        </div>
+                        {run.error && <p className="mt-2 text-[10px] text-red-300">{run.error}</p>}
+                      </div>
+                    );
+                  })}
+              </CardContent>
+            </Card>
+
+            {/* ═══ 9. Export ════════════════════════════════════════════════ */}
+            <Card className="border-slate-700/50 bg-slate-950/60">
+              <CardContent className="p-3 flex flex-wrap items-center gap-3">
+                <span className="text-xs text-slate-400">导出：</span>
+                {d?.links?.audit_export && <a href={d.links.audit_export} target="_blank" className="text-cyan-500 hover:text-cyan-400 text-xs flex items-center gap-1"><Download className="w-3 h-3" />审计 JSON</a>}
+                <Button size="sm" variant="outline" className="h-7 text-[10px] gap-1"
+                  onClick={() => { const blob = new Blob([JSON.stringify(d, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `audit-${selectedId || "export"}.json`; a.click(); URL.revokeObjectURL(url); }}>
+                  <Download className="w-3 h-3" />导出当前审计详情
+                </Button>
+              </CardContent>
+            </Card>
+          </>
         )}
-      </main>
-    </div>
-  );
-}
-
-export default function AuditPage() {
-  return (
-    <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><p className="text-muted-foreground">Loading audit page...</p></div>}>
-      <AuditPageContent />
-    </Suspense>
+      </div>
+    </>
   );
 }

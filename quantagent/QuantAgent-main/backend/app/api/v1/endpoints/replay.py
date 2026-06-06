@@ -755,6 +755,8 @@ async def create_replay_session(
                 "data_source": "clickhouse:klines",
                 "range_min": _iso(range_info.get("min_date")),
                 "range_max": _iso(range_info.get("max_date")),
+                "backtestId": request.backtest_id,
+                "backtest_id": request.backtest_id,
             },
         )
     )
@@ -926,6 +928,23 @@ async def start_replay(
                         .where(ReplaySession.replay_session_id == replay_session_id)
                         .values(status="completed", current_timestamp=end_time_val)
                     )
+                    session_db.add(AuditLog(
+                        action="REPLAY_COMPLETED",
+                        user_id="system",
+                        resource=symbol_val,
+                        details={
+                            "eventType": "REPLAY_COMPLETED",
+                            "replaySessionId": replay_session_id,
+                            "replay_session_id": replay_session_id,
+                            "strategy_type": strategy_type_val,
+                            "interval": interval_val,
+                            "backtestId": backtest_id_val,
+                            "backtest_id": backtest_id_val,
+                            "buy_signals": getattr(strategy, '_total_buy_signals', 0) if hasattr(strategy, '_total_buy_signals') else 0,
+                            "sell_signals": getattr(strategy, '_total_sell_signals', 0) if hasattr(strategy, '_total_sell_signals') else 0,
+                            "bars_processed": getattr(strategy, '_total_bars_processed', 0) if hasattr(strategy, '_total_bars_processed') else 0,
+                        },
+                    ))
                     await session_db.commit()
                     
             except Exception as e:
@@ -939,6 +958,21 @@ async def start_replay(
                             .where(ReplaySession.replay_session_id == replay_session_id)
                             .values(status="failed")
                         )
+                        session_db.add(AuditLog(
+                            action="REPLAY_FAILED",
+                            user_id="system",
+                            resource=symbol_val,
+                            details={
+                                "eventType": "REPLAY_FAILED",
+                                "replaySessionId": replay_session_id,
+                                "replay_session_id": replay_session_id,
+                                "strategy_type": strategy_type_val,
+                                "interval": interval_val,
+                                "backtestId": backtest_id_val,
+                                "backtest_id": backtest_id_val,
+                                "error": str(e)[:1000],
+                            },
+                        ))
                         await session_db.commit()
                 except Exception as db_e:
                     logger.error(f"Failed to update session status to failed: {db_e}")

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 import json
 import re
 import logging
+import uuid
 
 from app.services.binance_service import binance_service
 from app.services.coingecko_service import coingecko_service
@@ -19,6 +20,8 @@ from app.models.market_data import KlineData, KlineResponse, TickerData, MarketO
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+_coordinate_full_jobs: Dict[str, Dict[str, Any]] = {}
+_coordinate_full_jobs_lock = asyncio.Lock()
 
 
 def _clean_think_tags(text: str) -> str:
@@ -873,6 +876,157 @@ async def coordinate_agents(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Coordination failed: {str(e)}")
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _json_safe(value: Any) -> Any:
+    return json.loads(json.dumps(value, default=str))
+
+
+def _public_full_job(job: Dict[str, Any]) -> Dict[str, Any]:
+    public = {key: value for key, value in job.items() if key != "task"}
+    return _json_safe(public)
+
+
+async def _update_full_job(job_id: str, **updates: Any) -> Dict[str, Any]:
+    async with _coordinate_full_jobs_lock:
+        job = _coordinate_full_jobs.get(job_id)
+        if not job:
+            raise KeyError(job_id)
+        job.update(updates)
+        job["updatedAt"] = _utc_now_iso()
+        return dict(job)
+
+
+async def _latest_decision_id_for_symbol(symbol: str) -> Optional[int]:
+    from sqlalchemy import text
+    from app.services.database import get_db
+
+    async with get_db() as session:
+        row = await session.execute(
+            text("""
+                SELECT id
+                FROM coordination_history
+                WHERE symbol = :symbol
+                ORDER BY id DESC
+                LIMIT 1
+            """),
+            {"symbol": symbol},
+        )
+        value = row.scalar()
+        return int(value) if value is not None else None
+
+
+async def _run_full_coordinate_job(
+    job_id: str,
+    symbol: str,
+    interval: str,
+    provider: Optional[str],
+    use_tradingagents: Optional[bool],
+) -> None:
+    from app.agents.coordinator_agent import CoordinatorAgent
+
+    started_at = _utc_now_iso()
+    canonical_symbol = Instrument.from_raw(symbol).symbol
+    await _update_full_job(
+        job_id,
+        status="running",
+        phase="full_graph",
+        startedAt=started_at,
+        message="Full TradingAgentsGraph is running in backend",
+    )
+    try:
+        coordinator = CoordinatorAgent(
+            provider_name=provider,
+            use_tradingagents=use_tradingagents,
+            fast_mode=False,
+        )
+        result = await coordinator.coordinate(canonical_symbol, interval)
+        payload = result.to_dict()
+        if payload.get("data_source") == "error":
+            await _update_full_job(
+                job_id,
+                status="failed",
+                phase="failed",
+                finishedAt=_utc_now_iso(),
+                error=payload.get("summary") or "TradingAgents service returned an error",
+                result=payload,
+            )
+            return
+
+        decision_id = payload.get("decision_id") or payload.get("decisionId")
+        if decision_id is None:
+            decision_id = await _latest_decision_id_for_symbol(canonical_symbol)
+        await _update_full_job(
+            job_id,
+            status="completed",
+            phase="completed",
+            finishedAt=_utc_now_iso(),
+            message="Full TradingAgentsGraph completed",
+            decisionId=decision_id,
+            detailUrl=f"/api/v1/audit/decisions/{decision_id}" if decision_id else None,
+            result=payload,
+        )
+    except Exception as exc:
+        logger.exception("[coordinate-full] job %s failed", job_id)
+        await _update_full_job(
+            job_id,
+            status="failed",
+            phase="failed",
+            finishedAt=_utc_now_iso(),
+            error=str(exc)[:1000],
+        )
+
+
+@router.post("/coordinate/full/{symbol}")
+async def start_full_coordinate_job(
+    symbol: str,
+    interval: str = Query("1h"),
+    provider: Optional[str] = Query(None, description="LLM Provider (ollama, openai, openrouter)"),
+    use_tradingagents: Optional[bool] = Query(None, description="Override USE_TRADINGAGENTS for this request"),
+    wait: bool = Query(False, description="Wait for completion before returning. Prefer false for UI use."),
+) -> Dict[str, Any]:
+    canonical_symbol = Instrument.from_raw(symbol).symbol
+    job_id = uuid.uuid4().hex
+    job = {
+        "jobId": job_id,
+        "status": "queued",
+        "phase": "queued",
+        "symbol": canonical_symbol,
+        "interval": interval,
+        "mode": "full_tradingagents_graph",
+        "createdAt": _utc_now_iso(),
+        "updatedAt": _utc_now_iso(),
+        "message": "Queued full TradingAgentsGraph job",
+    }
+    async with _coordinate_full_jobs_lock:
+        _coordinate_full_jobs[job_id] = job
+        completed = [
+            jid for jid, item in _coordinate_full_jobs.items()
+            if item.get("status") in {"completed", "failed"} and jid != job_id
+        ]
+        for old_id in completed[:-50]:
+            _coordinate_full_jobs.pop(old_id, None)
+
+    task = asyncio.create_task(
+        _run_full_coordinate_job(job_id, canonical_symbol, interval, provider, use_tradingagents)
+    )
+    job["task"] = task
+    if wait:
+        await task
+    return _public_full_job(_coordinate_full_jobs[job_id])
+
+
+@router.get("/coordinate/full/jobs/{job_id}")
+async def get_full_coordinate_job(job_id: str) -> Dict[str, Any]:
+    async with _coordinate_full_jobs_lock:
+        job = _coordinate_full_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Full coordinate job not found")
+        return _public_full_job(job)
 
 
 class NativeTradingAgentsRequest(BaseModel):
@@ -1879,6 +2033,10 @@ async def get_market_news(
             "summary": a.get("summary", ""),
             "date": str(a.get("published_at", "")),
             "symbol": symbol.upper(),
+            "sentiment_score": a.get("sentiment_score"),
+            "topics": a.get("topics", []) or [],
+            "event_tags": a.get("event_tags", []) or [],
+            "provider": a.get("provider", ""),
         })
 
     return {"symbol": symbol.upper(), "articles": remapped, "total": len(remapped), "source": "duckdb"}
@@ -1964,15 +2122,97 @@ async def get_research_snapshot(
         symbol=canonical_symbol,
         interval=interval,
         as_of_time=as_of_time,
-        bar_limit=120,
-        factor_limit=40,
-        signal_limit=40,
-        news_limit=20,
-        macro_limit=30,
+        bar_limit=200,
+        factor_limit=60,
+        signal_limit=60,
+        news_limit=30,
+        macro_limit=50,
     )
     payload = context.to_agent_payload()
     cutoff = context.as_of_time
     cutoff_for_sql = cutoff.replace(tzinfo=timezone.utc) if cutoff.tzinfo is None else cutoff
+
+    # ── DB total counts (per symbol/interval, not time-filtered) ──────────
+    db_total: Dict[str, int] = {}
+
+    async def _fetch_db_totals():
+        from app.services.clickhouse_service import clickhouse_service as ch_svc
+        from app.pipeline.storage.duckdb_store import pipeline_store
+
+        async def _bars_total():
+            try:
+                return await ch_svc.count_klines(canonical_symbol, interval)
+            except Exception:
+                return 0
+
+        async def _pg_counts():
+            counts = {}
+            try:
+                async with get_db() as sess:
+                    r = await sess.execute(text(
+                        "SELECT COUNT(*) FROM factor_snapshots WHERE symbol = :sym AND (interval = :intv OR parameters->>'interval' = :intv)"
+                    ), {"sym": canonical_symbol, "intv": interval})
+                    counts["factors_total"] = r.scalar() or 0
+
+                    r = await sess.execute(text(
+                        "SELECT COUNT(*) FROM signal_events WHERE symbol = :sym AND (interval = :intv OR extra_data->>'interval' = :intv)"
+                    ), {"sym": canonical_symbol, "intv": interval})
+                    counts["signals_total"] = r.scalar() or 0
+
+                    r = await sess.execute(text(
+                        "SELECT COUNT(*) FROM coordination_history WHERE symbol = :sym"
+                    ), {"sym": canonical_symbol})
+                    counts["decisions_total"] = r.scalar() or 0
+            except Exception:
+                counts.setdefault("factors_total", 0)
+                counts.setdefault("signals_total", 0)
+                counts.setdefault("decisions_total", 0)
+            return counts
+
+        def _duckdb_counts():
+            counts = {}
+            try:
+                conn = pipeline_store._get_conn() if hasattr(pipeline_store, '_get_conn') else None
+                if conn is None:
+                    # fallback: query all and len
+                    news_rows = pipeline_store.query_news(symbol=canonical_symbol, limit=99999)
+                    counts["news_total"] = len(news_rows)
+                    macro_rows = pipeline_store.query_macro(limit=99999)
+                    counts["macro_total"] = len(macro_rows)
+                else:
+                    import duckdb
+                    try:
+                        r = conn.sql(f"SELECT COUNT(*) FROM news_articles WHERE list_contains(symbols, '{canonical_symbol}')").fetchone()
+                        counts["news_total"] = int(r[0]) if r else 0
+                    except Exception:
+                        counts["news_total"] = 0
+                    try:
+                        r = conn.sql("SELECT COUNT(*) FROM macro_indicators").fetchone()
+                        counts["macro_total"] = int(r[0]) if r else 0
+                    except Exception:
+                        counts["macro_total"] = 0
+            except Exception:
+                counts.setdefault("news_total", 0)
+                counts.setdefault("macro_total", 0)
+            return counts
+
+        import asyncio
+        bars_task = _bars_total()
+        pg_task = _pg_counts()
+        bars_result = await bars_task
+        pg_result = await pg_task
+        duck_result = _duckdb_counts()
+
+        return {
+            "bars_total": bars_result,
+            **pg_result,
+            **duck_result,
+        }
+
+    try:
+        db_total = await _fetch_db_totals()
+    except Exception:
+        db_total = {}
 
     latest_decision = None
     async with get_db() as session:
@@ -2044,21 +2284,44 @@ async def get_research_snapshot(
             "replay_note": "所有研究面板都用同一个 as_of_time 截止，便于回看任意历史时刻。",
         },
         "counts": {
-            "bars": len(bars),
+            # ── Tier 1: 当前前端展示量 ──
             "bars_displayed": bar_panel["displayed"],
-            "factors": len(factors),
             "factors_displayed": len(factor_items),
+            "signals_displayed": len(signal_panel),
+            "news_displayed": len(news_panel),
+            "macro_displayed": len(macro_events[:6]),
+            "decisions_displayed": 1 if latest_decision else 0,
+            "tradingagents_roles_displayed": tradingagents_panel.get("role_count", 0) if tradingagents_panel else 0,
+
+            # ── Tier 2: 当前回看窗口可用量（受 as_of_time + limit 约束）──
+            "bars_available": len(bars),
+            "factors_available": len(factors),
+            "signals_available": len(signals),
+            "news_available": len(news_events),
+            "macro_available": len(macro_events),
+            "decisions_available": 1 if latest_decision else 0,
+            "tradingagents_roles_available": tradingagents_panel.get("role_count", 0) if tradingagents_panel else 0,
+
+            # ── Tier 3: 数据库累计总量（不限时间、不限 limit）──
+            "bars_total": db_total.get("bars_total", 0),
+            "factors_total": db_total.get("factors_total", 0),
+            "signals_total": db_total.get("signals_total", 0),
+            "news_total": db_total.get("news_total", 0),
+            "macro_total": db_total.get("macro_total", 0),
+            "decisions_total": db_total.get("decisions_total", 0),
+            "tradingagents_roles_total": db_total.get("decisions_total", 0),
+
+            # ── Deprecated (backward compat) ──
+            "bars": len(bars),
+            "factors": len(factors),
+            "signals": len(signals),
+            "news": len(news_events),
+            "macro": len(macro_events),
+            "decisions": 1 if latest_decision else 0,
+            "tradingagents_roles": tradingagents_panel.get("role_count", 0) if tradingagents_panel else 0,
             "technical_factors": len(factor_panel["groups"]["technical"]),
             "sentiment_factors": len(factor_panel["groups"]["sentiment"]),
             "macro_factors": len(factor_panel["groups"]["macro"]),
-            "signals": len(signals),
-            "signals_displayed": len(signal_panel),
-            "news": len(news_events),
-            "news_displayed": len(news_panel),
-            "macro": len(macro_events),
-            "macro_displayed": len(macro_events[:6]),
-            "decisions": 1 if latest_decision else 0,
-            "tradingagents_roles": tradingagents_panel.get("role_count", 0) if tradingagents_panel else 0,
         },
         "latest_bar": bars[-1] if bars else None,
         "bar_panel": bar_panel,
