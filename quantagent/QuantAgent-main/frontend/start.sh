@@ -12,5 +12,5 @@ fi
 echo "Building production bundle..."
 npx next build
 
-echo "Starting production server..."
-exec npx next start -H 0.0.0.0 -p 3000
+echo "Starting production server with 10min proxy timeout..."
+exec node server.js

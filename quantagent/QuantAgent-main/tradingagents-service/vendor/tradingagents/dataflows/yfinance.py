@@ -152,11 +152,15 @@ _CACHE_FRESH_HOURS = 12
 
 def _read_cached_history(data_file: Path) -> pd.DataFrame:
     """Read a cached yfinance history CSV."""
-    candidate_data = pd.read_csv(data_file)
-    candidate_data["Date"] = pd.to_datetime(candidate_data["Date"])
-    if candidate_data["Date"].dt.tz is not None:
-        candidate_data["Date"] = candidate_data["Date"].dt.tz_localize(None)
-    return candidate_data
+    try:
+        candidate_data = pd.read_csv(data_file)
+        candidate_data["Date"] = pd.to_datetime(candidate_data["Date"])
+        if candidate_data["Date"].dt.tz is not None:
+            candidate_data["Date"] = candidate_data["Date"].dt.tz_localize(None)
+        return candidate_data
+    except (KeyError, ValueError):
+        # Cache format mismatch (e.g. crypto CSV without Date column)
+        return pd.DataFrame()
 
 
 def _download_history(candidate: str, start_date: str, end_date: str) -> pd.DataFrame:

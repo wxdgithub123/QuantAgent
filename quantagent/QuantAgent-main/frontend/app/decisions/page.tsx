@@ -1,1320 +1,572 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState } from "react";
-import Link from "next/link";
-import {
-  ArrowDown,
-  ArrowUp,
-  Brain,
-  CheckCircle2,
-  ChevronDown,
-  ChevronUp,
-  Minus,
-  PieChart,
-  RefreshCw,
-  Shield,
-  Sparkles,
-  TrendingUp,
-} from "lucide-react";
-import {
-  CartesianGrid,
-  Cell,
-  Legend,
-  Line,
-  LineChart,
-  Pie,
-  PieChart as RPieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-
-import { AppTopNav } from "@/components/navigation/AppTopNav";
-import { Prd104StatusPanel } from "@/components/prd/Prd104StatusPanel";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { AppTopNav } from "@/components/navigation/AppTopNav";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { cn } from "@/lib/utils";
+  Brain, ChevronDown, ChevronUp, RefreshCw,
+  CheckCircle, Clock, Shield, Zap,
+  ArrowRight, ArrowDown, ArrowUp, Minus,
+  Layers, ScrollText, Hash, Swords, Gavel, Target
+} from "lucide-react";
 
-interface RoleOpinion {
-  role?: string;
-  opinion?: string;
-  confidence?: number;
-  risk_flag?: boolean;
-  reasoning?: string;
-  key_points?: string[];
+// ─── Types ────────────────────────────────────────────────────────────────────
+interface DecisionHistoryItem {
+  id: number; symbol: string; timestamp: string; final_signal: string;
+  confidence: number; risk_veto?: boolean; summary?: string;
+  vote_breakdown?: { bullish?: number; bearish?: number; neutral?: number };
 }
 
-interface TradingAgentsChainEntry {
-  index?: number;
+interface AgentAnalysisEntry {
+  role?: string; label?: string; opinion?: string; confidence?: number | null;
+  reasoning?: string; summary?: string; data_source_chain?: string;
+  risk_flag?: string; key_points?: string[]; output?: string; available?: boolean;
+}
+
+interface DecisionDetail {
+  basic_info?: { decisionId?: number; symbol?: string; action?: string; confidence?: number; status?: string; createdAt?: string; model?: string; agentGraph?: string; source?: string; contextId?: string; contextHash?: string; availableTime?: string; modelVersion?: string };
+  agent_analysis?: Record<string, AgentAnalysisEntry>;
+  role_outputs?: Array<AgentAnalysisEntry>;
+  decision?: { final_signal?: string; summary?: string; risk_veto?: boolean; confidence?: number; vote_breakdown?: Record<string, number>; bull_view?: string; bear_view?: string; position_advice?: Record<string, unknown>; risk_notes?: string };
+  trace_summary?: { factor_snapshots?: number; signal_events?: number; news_events?: number; macro_events?: number; role_outputs?: number; order_intent_events?: number; paper_trades?: number; risk_blocked?: boolean };
+  risk_guard?: { passed?: boolean | null; blockedReason?: string | null };
+  execution_result?: { paperOrderGenerated?: boolean; orderId?: string | null; fillPrice?: number | null; orderStatus?: string };
+  order_intent?: { orderIntentId?: string | null; action?: string; reason?: string };
+  audit_timeline?: Array<Record<string, unknown>>;
+  schema_version?: string;
+}
+
+interface FullCoordinateJob {
+  jobId: string;
+  status: "queued" | "running" | "completed" | "failed" | string;
   phase?: string;
-  role?: string;
-  label?: string;
-  opinion?: string;
-  confidence?: number;
-  available?: boolean;
-  reasoning?: string;
-}
-
-interface DecisionRow {
-  id: number;
-  symbol: string;
-  timestamp: string | null;
-  final_signal: string;
-  confidence: number;
-  vote_breakdown: Record<string, number>;
-  risk_veto: boolean;
-  summary: string;
-  agent_signals: Array<RoleOpinion & { agent_type?: string; agent?: string; signal?: string; type?: string }>;
-  bull_view?: string;
-  bear_view?: string;
-  input_snapshot_ids?: Record<string, unknown>;
-  role_opinions?: RoleOpinion[];
-  position_advice?: Record<string, unknown> & {
-    tradingagents_internal_chain?: TradingAgentsChainEntry[];
-  };
-  risk_notes?: string;
-}
-
-interface Stats {
-  total: number;
-  recent_7d: number;
-  avg_confidence: number;
-  veto_count: number;
-  by_signal: Record<string, number>;
-  by_symbol: Record<string, number>;
-  error?: string;
-}
-
-interface NativeTradingAgentsResult {
-  status?: string;
-  symbol?: string;
-  decision?: string;
-  confidence?: number;
-  reasoning?: string;
-  analyst_reports?: RoleOpinion[];
-  error?: string;
-  raw?: {
-    native_symbol?: string;
-    selected_analysts?: string[];
-    data_source_note?: string;
-    openai_base_url?: string;
-    quick_model?: string;
-    deep_model?: string;
-    trade_date?: string;
-  };
-}
-
-interface BackfillStatusRow {
-  symbol?: string;
-  interval?: string;
-  status?: string;
-}
-
-interface OrderIntentResult {
-  status?: string;
   message?: string;
-  data_lineage?: Record<string, string>;
-  intent?: {
-    id?: string;
-    intent_id?: string;
-    decision_id?: number;
-    symbol?: string;
-    action?: string;
-    direction?: string;
-    side?: string | null;
-    positionRatio?: number;
-    position_pct?: number;
-    quantity?: number | null;
-    confidence?: number;
-    validUntil?: string;
-    valid_until?: string;
-    reason?: string;
-    trigger_reason?: string;
-    sourceDecisionId?: number | null;
-    createdAt?: string;
-    exchange_id?: string;
-    order_type?: string;
-    status?: string;
-  };
-  price?: number;
-  sizing?: {
-    total_equity?: number;
-    target_notional?: number;
-    quantity?: number;
-    position_pct?: number;
-  };
-  risk_preview?: {
-    allowed?: boolean;
-    passed?: boolean;
-    rule?: string;
-    reason?: string;
-    blockedReason?: string | null;
-    checkedRules?: Array<{
-      ruleName?: string;
-      rule_name?: string;
-      currentValue?: string | number | null;
-      current_value?: string | number | null;
-      limitValue?: string | number | null;
-      limit_value?: string | number | null;
-      passed?: boolean;
-      message?: string;
-    }>;
-    checked_at?: string;
-  };
-  execution?: {
-    order_id?: string;
-    trade_id?: string;
-    status?: string;
-    message?: string;
-  } | null;
+  error?: string;
+  decisionId?: number;
 }
 
-interface OrderIntentAuditRow {
-  id: number;
-  action: string;
-  symbol: string;
-  created_at: string | null;
-  details?: {
-    intent?: OrderIntentResult["intent"];
-    price?: number;
-    sizing?: OrderIntentResult["sizing"];
-    risk_preview?: OrderIntentResult["risk_preview"];
-  };
-}
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const fmtPct = (v: number | null | undefined) => v != null ? (v * 100).toFixed(0) + "%" : "—";
+const fmtTime = (t: string | undefined | null) => t ? new Date(t).toLocaleString("zh-CN") : "—";
+const NA = "后端未返回该字段";
 
-const PIE_COLORS = ["#34d399", "#fb7185", "#94a3b8", "#38bdf8", "#fbbf24", "#a78bfa"];
-const FALLBACK_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT", "XRPUSDT"];
-const NATIVE_TRADINGAGENTS_ANALYSTS = ["market", "news", "social", "fundamentals"];
-const PREFERRED_SYMBOL_ORDER = new Map(FALLBACK_SYMBOLS.map((symbol, index) => [symbol, index]));
-const VOTE_LABELS: Record<string, string> = {
-  bullish: "看多",
-  bearish: "看空",
-  neutral: "观望",
+const signalBadge = (s: string | undefined | null) => {
+  const t = (s || "").toUpperCase();
+  if (t === "BUY") return <Badge className="bg-green-500/15 text-green-400">买入 BUY</Badge>;
+  if (t === "SELL") return <Badge className="bg-red-500/15 text-red-400">卖出 SELL</Badge>;
+  return <Badge className="bg-slate-500/15 text-slate-400">观望 WAIT</Badge>;
 };
-const VOTE_COLORS: Record<string, string> = {
-  bullish: "#34d399",
-  bearish: "#fb7185",
-  neutral: "#94a3b8",
+
+const opinionBadge = (o: string | undefined | null) => {
+  const t = (o || "").toLowerCase();
+  if (t === "sell" || t === "bearish") return <Badge className="bg-red-500/15 text-red-400 text-[10px]">看空</Badge>;
+  if (t === "buy" || t === "bullish") return <Badge className="bg-green-500/15 text-green-400 text-[10px]">看多</Badge>;
+  if (t === "wait" || t === "hold") return <Badge className="bg-amber-500/15 text-amber-400 text-[10px]">观望</Badge>;
+  return <Badge className="bg-slate-500/15 text-slate-400 text-[10px]">中性</Badge>;
 };
-const FRIENDLY_DATA_UNAVAILABLE = "数据暂不可用，已展示缓存数据 / 暂无数据。";
 
-function sanitizeFetchError(error: unknown, fallback = FRIENDLY_DATA_UNAVAILABLE) {
-  const raw = error instanceof Error ? error.message : String(error || "");
-  const lower = raw.toLowerCase();
-  if (
-    !raw ||
-    lower.includes("failed to fetch") ||
-    lower.includes("network") ||
-    lower.includes("timeout") ||
-    lower.includes("abort") ||
-    lower.includes("econnrefused") ||
-    lower.includes("http 5")
-  ) {
-    return fallback;
-  }
-  return raw.length > 120 ? fallback : raw;
-}
+const opinionIcon = (o: string | undefined | null) => {
+  const t = (o || "").toLowerCase();
+  if (t === "sell" || t === "bearish") return <ArrowDown className="w-4 h-4 text-red-400 shrink-0" />;
+  if (t === "buy" || t === "bullish") return <ArrowUp className="w-4 h-4 text-green-400 shrink-0" />;
+  return <Minus className="w-4 h-4 text-slate-500 shrink-0" />;
+};
 
-async function fetchJsonWithTimeout<T>(url: string, options: RequestInit = {}, timeoutMs = 12000): Promise<T> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, { ...options, signal: options.signal ?? controller.signal });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const detail = typeof data?.detail === "string" ? data.detail : typeof data?.error === "string" ? data.error : `HTTP ${response.status}`;
-      throw new Error(detail);
-    }
-    return data as T;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
+// ─── Stage definitions ─────────────────────────────────────────────────────────
+const STAGES = [
+  { key: "analysts", label: "分析师层", icon: Layers, desc: "市场/新闻/宏观/情绪独立分析" },
+  { key: "debate", label: "多空辩论层", icon: Swords, desc: "多头与空头研究员交锋论证" },
+  { key: "plan", label: "交易计划层", icon: Target, desc: "交易员综合研判，生成仓位计划" },
+  { key: "risk", label: "风险管理层", icon: Shield, desc: "风控经理评估风险，决定是否否决" },
+  { key: "coordinator", label: "最终协调层", icon: Gavel, desc: "综合各方意见做出最终决策" },
+];
 
-function formatPercent(value?: number) {
-  if (typeof value !== "number" || Number.isNaN(value)) return "--";
-  return `${(value * 100).toFixed(1)}%`;
-}
-
-function formatMoney(value?: number) {
-  if (typeof value !== "number" || Number.isNaN(value)) return "--";
-  return value.toLocaleString(undefined, { maximumFractionDigits: value >= 100 ? 2 : 6 });
-}
-
-function signalLabel(signal?: string) {
-  const normalized = String(signal || "WAIT").toUpperCase();
-  if (normalized === "BUY") return "买入";
-  if (normalized === "SELL") return "卖出";
-  if (normalized === "HOLD") return "持有";
-  return "观望";
-}
-
-function signalBadgeClass(signal?: string) {
-  const normalized = String(signal || "WAIT").toUpperCase();
-  if (normalized === "BUY") return "border-emerald-400/30 bg-emerald-500/15 text-emerald-300";
-  if (normalized === "SELL") return "border-rose-400/30 bg-rose-500/15 text-rose-300";
-  return "border-slate-400/20 bg-slate-500/15 text-slate-300";
-}
-
-function orderIntentStatusLabel(status?: string) {
-  if (status === "READY") return "可手动执行";
-  if (status === "BLOCKED") return "风控拦截";
-  if (status === "NO_ACTION") return "不下单";
-  if (status === "FILLED") return "已成交";
-  if (status === "EXECUTED") return "已执行";
-  return status || "--";
-}
-
-function orderIntentStatusClass(status?: string) {
-  if (status === "READY") return "border-emerald-400/30 bg-emerald-500/15 text-emerald-200";
-  if (status === "BLOCKED") return "border-rose-400/30 bg-rose-500/15 text-rose-200";
-  if (status === "FILLED" || status === "EXECUTED") return "border-cyan-400/30 bg-cyan-500/15 text-cyan-200";
-  return "border-slate-400/20 bg-slate-500/15 text-slate-300";
-}
-
-function roleLabel(role?: string) {
-  if (!role) return "未标注角色";
-  if (role === "tradingagents_openai_decision") return "TradingAgents + DMXAPI / gpt-4o-mini";
-  if (role === "tradingagents_context_adapter") return "TradingAgents 基线评分";
-  if (role === "tradingagents_native_market") return "原版 TradingAgents 市场分析";
-  if (role === "tradingagents_native_news") return "原版 TradingAgents 新闻分析";
-  if (role === "tradingagents_native_situation") return "原版 TradingAgents 情景摘要";
-  if (role === "tradingagents_native_trader") return "原版 TradingAgents 交易员";
-  if (role === "tradingagents_native_final_judge") return "原版 TradingAgents 最终裁决";
-  if (role === "tradingagents_quantagent_market") return "QuantAgent 市场结构分析";
-  if (role === "tradingagents_quantagent_sentiment") return "QuantAgent 新闻情绪分析";
-  if (role === "tradingagents_quantagent_news") return "QuantAgent 新闻/宏观分析";
-  if (role === "tradingagents_quantagent_context") return "QuantAgent 加密上下文分析";
-  if (role === "tradingagents_quantagent_situation") return "QuantAgent 情景摘要";
-  if (role === "tradingagents_quantagent_trader") return "QuantAgent 交易员";
-  if (role === "tradingagents_quantagent_final_judge") return "QuantAgent 最终裁决";
-  if (role === "technical") return "技术面 Agent";
-  if (role === "news") return "新闻 Agent";
-  if (role === "macro") return "宏观 Agent";
-  if (role === "risk") return "风险 Agent";
-  return role;
-}
-
-function roleDescription(role?: string) {
-  if (role === "tradingagents_openai_decision") return "实际调用 OpenAI 兼容接口，由 DMXAPI 转发到 gpt-4o-mini 输出最终结构化判断。";
-  if (role === "tradingagents_context_adapter") return "不调用大模型的本地基线判断，用来兜底和解释输入上下文。";
-  if (role?.startsWith("tradingagents_quantagent_")) return "来自已修改源码的 TradingAgentsGraph；原版工具名保留，但数据读取已改为 QuantAgent AnalysisContext。";
-  if (role?.startsWith("tradingagents_native_")) return "来自原版 TradingAgentsGraph 沙盒，使用原版 yfinance / Google News RSS 工具链。";
-  return "参与本次决策的结构化分析结果。";
-}
-
-function roleScoreLabel(role?: string) {
-  if (role === "tradingagents_context_adapter") return "基线参考分";
-  if (role === "tradingagents_openai_decision") return "模型置信度";
-  return "置信度";
-}
-
-function chainPhaseLabel(phase?: string) {
-  if (phase === "core_report") return "核心报告";
-  if (phase === "synthesis") return "情景压缩";
-  if (phase === "investment_debate") return "多空辩论";
-  if (phase === "execution_plan") return "交易计划";
-  if (phase === "risk_debate") return "风险辩论";
-  if (phase === "final_judge") return "最终裁决";
-  return phase || "完整链路";
-}
-
-function getTradingAgentsInternalChain(decision: DecisionRow) {
-  const chain = decision.position_advice?.tradingagents_internal_chain;
-  return Array.isArray(chain) ? chain : [];
-}
-
-function publicPositionAdvice(positionAdvice?: DecisionRow["position_advice"]) {
-  if (!positionAdvice) return {};
-  const { tradingagents_internal_chain: _internalChain, ...rest } = positionAdvice;
-  return rest;
-}
-
-function primaryEngine(decision?: DecisionRow) {
-  const roles = decision?.agent_signals || decision?.role_opinions || [];
-  const firstRole = roles[0]?.role;
-  if (firstRole === "tradingagents_openai_decision") return "TradingAgents + DMXAPI / gpt-4o-mini";
-  if (firstRole === "tradingagents_context_adapter") return "TradingAgents 基线";
-  if (firstRole?.startsWith("tradingagents_quantagent_")) return "TradingAgentsGraph QuantAgent 源码适配版";
-  return firstRole ? roleLabel(firstRole) : "未记录";
-}
-
-function snapshotCount(snapshot: Record<string, unknown> | undefined, key: string) {
-  const value = snapshot?.[key];
-  return Array.isArray(value) ? value.length : 0;
-}
-
-function contextCountFromKeyPoints(decision?: DecisionRow, key?: string) {
-  if (!decision || !key) return null;
-  const points = decision.agent_signals.flatMap((signal) => signal.key_points || []);
-  const match = points.map(String).find((point) => point.startsWith(`${key}=`));
-  if (!match) return null;
-  const [, raw] = match.split("=");
-  const count = Number(raw);
-  return Number.isFinite(count) ? count : null;
-}
-
-function normalizeSymbol(value: string) {
-  return value.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
-}
-
-function buildSymbolOptions(rows: BackfillStatusRow[]) {
-  const available = rows
-    .filter((row) => row.status === "ok" && typeof row.symbol === "string")
-    .map((row) => normalizeSymbol(row.symbol || ""))
-    .filter((symbol) => symbol.endsWith("USDT") && symbol !== "SOURCE");
-  const unique = Array.from(new Set([...available, ...FALLBACK_SYMBOLS]));
-  return unique.sort((left, right) => {
-    const leftRank = PREFERRED_SYMBOL_ORDER.get(left) ?? 999;
-    const rightRank = PREFERRED_SYMBOL_ORDER.get(right) ?? 999;
-    if (leftRank !== rightRank) return leftRank - rightRank;
-    return left.localeCompare(right);
-  });
-}
-
-function researchSnapshotHref(symbol: string, interval = "1h", asOfTime?: string | null) {
-  const params = new URLSearchParams({ symbol, interval });
-  if (asOfTime) params.set("as_of_time", asOfTime);
-  return `/dashboard?${params.toString()}`;
-}
-
-function StatCard({
-  label,
-  value,
-  detail,
-  accent,
-}: {
-  label: string;
-  value: string | number;
-  detail: string;
-  accent: string;
-}) {
-  return (
-    <Card className="border-white/10 bg-slate-900/55 shadow-xl shadow-black/10">
-      <CardContent className="p-4">
-        <p className="text-xs text-slate-400">{label}</p>
-        <p className={cn("mt-2 text-2xl font-bold", accent)}>{value}</p>
-        <p className="mt-2 text-[11px] leading-relaxed text-slate-500">{detail}</p>
-      </CardContent>
-    </Card>
-  );
+function classifyStage(key: string, label: string): string {
+  const s = `${key} ${label}`.toLowerCase();
+  if (/macro|news|market|sentiment|social|context|situation|技术|新闻|情绪|宏观|情景|上下文/.test(s)) return "analysts";
+  if (/bull|bear|多头|空头/.test(s)) return "debate";
+  if (/trader|portfolio|交易|组合|plan/.test(s)) return "plan";
+  if (/risk|风控/.test(s)) return "risk";
+  if (/final|judge|coordinator|裁决|协调|最终/.test(s)) return "coordinator";
+  return "analysts";
 }
 
 export default function DecisionsPage() {
-  const [decisions, setDecisions] = useState<DecisionRow[]>([]);
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [history, setHistory] = useState<DecisionHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [running, setRunning] = useState(false);
-  const [runFast, setRunFast] = useState(true);
-  const [error, setError] = useState("");
-  const [filterSymbol, setFilterSymbol] = useState("BTCUSDT");
-  const [symbolOptions, setSymbolOptions] = useState(FALLBACK_SYMBOLS);
-  const [nativeRunning, setNativeRunning] = useState(false);
-  const [nativeTradeDate, setNativeTradeDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [nativeResult, setNativeResult] = useState<NativeTradingAgentsResult | null>(null);
-  const [nativeError, setNativeError] = useState("");
-  const [intentResults, setIntentResults] = useState<Record<number, OrderIntentResult>>({});
-  const [intentLoading, setIntentLoading] = useState<Record<number, "preview" | "execute" | undefined>>({});
-  const [intentError, setIntentError] = useState<Record<number, string>>({});
-  const [intentAudits, setIntentAudits] = useState<OrderIntentAuditRow[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [filterSymbol, setFilterSymbol] = useState("");
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [detail, setDetail] = useState<DecisionDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [triggering, setTriggering] = useState(false);
+  const [fullJobStatus, setFullJobStatus] = useState<string | null>(null);
+  const [triggerSymbol, setTriggerSymbol] = useState("BTCUSDT");
+  const symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"];
 
-  const fetchDecisions = useCallback(async () => {
+  const fetchHistory = useCallback(async () => {
+    setLoading(true); setError(null);
     try {
-      const params = new URLSearchParams({ limit: "50" });
+      const params = new URLSearchParams(); params.set("limit", "20");
       if (filterSymbol) params.set("symbol", filterSymbol);
-      const d = await fetchJsonWithTimeout<{ data?: DecisionRow[] }>(`/api/v1/coordination/history?${params}`, { cache: "no-store" }, 12000);
-      setDecisions(Array.isArray(d.data) ? d.data : []);
-      setError("");
-    } catch (e: unknown) {
-      setDecisions([]);
-      setError(sanitizeFetchError(e));
-    }
+      const res = await fetch("/api/v1/coordination/history?" + params.toString());
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const rows = (await res.json()).data || [];
+      setHistory(rows);
+      return rows as DecisionHistoryItem[];
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : "加载失败"); return []; }
+    finally { setLoading(false); }
   }, [filterSymbol]);
 
-  const fetchStats = useCallback(async () => {
+  const fetchDetail = useCallback(async (id: number) => {
+    setDetailLoading(true); setSelectedId(id); setExpanded({});
     try {
-      setStats(await fetchJsonWithTimeout<Stats>("/api/v1/coordination/stats", { cache: "no-store" }, 12000));
-    } catch {
-      setStats(null);
-      // Stats are helpful, but the history table can still render without them.
-    }
+      const res = await fetch("/api/v1/audit/decisions/" + id);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      setDetail(await res.json());
+    } catch { setDetail(null); }
+    finally { setDetailLoading(false); }
   }, []);
 
-  const fetchIntentAudits = useCallback(async () => {
+  useEffect(() => { fetchHistory(); }, []);
+  useEffect(() => { if (history.length > 0 && !selectedId) fetchDetail(history[0].id); }, [history]);
+
+  const triggerDecision = async () => {
+    setTriggering(true); setError(null); setFullJobStatus("完整 TradingAgentsGraph 已提交...");
     try {
-      const params = new URLSearchParams({ limit: "6" });
-      if (filterSymbol) params.set("symbol", filterSymbol);
-      const data = await fetchJsonWithTimeout<{ data?: OrderIntentAuditRow[] }>(`/api/v1/execution/order-intents/latest?${params}`, { cache: "no-store" }, 12000);
-      setIntentAudits(Array.isArray(data?.data) ? data.data : []);
-    } catch {
-      setIntentAudits([]);
-    }
-  }, [filterSymbol]);
+      const res = await fetch(`/api/v1/market/coordinate/full/${triggerSymbol}?interval=1h`, { method: "POST" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const created = await res.json() as FullCoordinateJob;
+      setFullJobStatus(`完整图任务运行中：${created.jobId.slice(0, 8)}`);
 
-  const fetchSymbolOptions = useCallback(async () => {
-    try {
-      const data = await fetchJsonWithTimeout<{ intervals?: BackfillStatusRow[] }>("/api/v1/market/backfill/status", { cache: "no-store" }, 12000);
-      const rows = Array.isArray(data?.intervals) ? data.intervals : [];
-      setSymbolOptions(buildSymbolOptions(rows));
-    } catch {
-      setSymbolOptions(FALLBACK_SYMBOLS);
-    }
-  }, []);
-
-  const refreshAll = useCallback(async () => {
-    await Promise.allSettled([fetchDecisions(), fetchStats(), fetchSymbolOptions(), fetchIntentAudits()]);
-  }, [fetchDecisions, fetchStats, fetchSymbolOptions, fetchIntentAudits]);
-
-  const runFullDecision = useCallback(async () => {
-    const symbol = (filterSymbol || "BTCUSDT").toUpperCase();
-    setRunning(true);
-    setError("");
-    try {
-      const params = new URLSearchParams({ interval: "1h", fast: String(runFast) });
-      await fetchJsonWithTimeout(`/api/v1/market/coordinate/${symbol}?${params.toString()}`, { cache: "no-store" }, 60000);
-      await refreshAll();
-      setExpandedId(null);
-    } catch (e: unknown) {
-      setError(sanitizeFetchError(e, "数据暂不可用，暂时无法生成新的交易建议。请稍后刷新或检查后端服务。"));
-    } finally {
-      setRunning(false);
-    }
-  }, [filterSymbol, refreshAll, runFast]);
-
-  const runNativeTradingAgents = useCallback(async () => {
-    const symbol = (filterSymbol || "BTCUSDT").toUpperCase();
-    setNativeRunning(true);
-    setNativeError("");
-    setNativeResult(null);
-    try {
-      const data = await fetchJsonWithTimeout<NativeTradingAgentsResult>("/api/tradingagents-native/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          symbol,
-          interval: "1h",
-          trade_date: nativeTradeDate || undefined,
-          selected_analysts: NATIVE_TRADINGAGENTS_ANALYSTS,
-        }),
-      }, 90000);
-      if (data?.status === "error") {
-        throw new Error(data?.error || "原版 TradingAgentsGraph 实验运行失败");
-      }
-      setNativeResult(data);
-    } catch (e: unknown) {
-      setNativeError(sanitizeFetchError(e, "数据暂不可用，原版 TradingAgentsGraph 实验入口暂时无法运行。"));
-    } finally {
-      setNativeRunning(false);
-    }
-  }, [filterSymbol, nativeTradeDate]);
-
-  const runOrderIntent = useCallback(async (decisionId: number, mode: "preview" | "execute") => {
-    setIntentLoading((prev) => ({ ...prev, [decisionId]: mode }));
-    setIntentError((prev) => ({ ...prev, [decisionId]: "" }));
-    try {
-      const data = await fetchJsonWithTimeout<OrderIntentResult>(`/api/v1/execution/order-intents/${mode}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decision_id: decisionId, exchange_id: "okx" }),
-      }, 30000);
-      setIntentResults((prev) => ({ ...prev, [decisionId]: data }));
-      await Promise.allSettled([fetchIntentAudits(), fetchStats()]);
-    } catch (e: unknown) {
-      setIntentError((prev) => ({
-        ...prev,
-        [decisionId]: sanitizeFetchError(e, "数据暂不可用，暂时无法生成或执行 OrderIntent。请稍后刷新。"),
-      }));
-    } finally {
-      setIntentLoading((prev) => ({ ...prev, [decisionId]: undefined }));
-    }
-  }, [fetchIntentAudits, fetchStats]);
-
-  useEffect(() => {
-    refreshAll().finally(() => setLoading(false));
-  }, [refreshAll]);
-
-  const latestDecision = decisions[0];
-  const latestSnapshot = latestDecision?.input_snapshot_ids;
-  const latestSignalCount = contextCountFromKeyPoints(latestDecision, "signals") ?? snapshotCount(latestSnapshot, "signal_event_ids");
-  const latestNewsCount = contextCountFromKeyPoints(latestDecision, "news_events") ?? snapshotCount(latestSnapshot, "news_payload_ids");
-  const latestMacroCount = contextCountFromKeyPoints(latestDecision, "macro_events") ?? snapshotCount(latestSnapshot, "macro_keys");
-  const latestFactorCount = snapshotCount(latestSnapshot, "factor_snapshot_ids");
-
-  const signalPieData = stats?.by_signal
-    ? Object.entries(stats.by_signal).map(([name, value]) => ({ name: signalLabel(name), raw: name, value }))
-    : [];
-  const confidenceTrendData = [...decisions]
-    .reverse()
-    .slice(-30)
-    .map((decision) => ({
-      time: decision.timestamp ? new Date(decision.timestamp).toLocaleDateString() : "",
-      confidence: Number((decision.confidence * 100).toFixed(1)),
-      signal: signalLabel(decision.final_signal),
-    }));
-
-  return (
-    <div className="min-h-screen bg-background text-foreground">
-      <AppTopNav
-        activeSection="decisions"
-        title="决策中心"
-        subtitle="查看交易建议、模型判断依据与 TradingAgents 结果"
-        rightSlot={
-            <Button size="icon" variant="ghost" className="h-8 w-8 text-slate-300 hover:text-white" onClick={refreshAll}>
-              <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
-            </Button>
+      let completed: FullCoordinateJob | null = null;
+      for (let i = 0; i < 180; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        const statusRes = await fetch(`/api/v1/market/coordinate/full/jobs/${created.jobId}`);
+        if (!statusRes.ok) throw new Error(`任务状态 HTTP ${statusRes.status}`);
+        const job = await statusRes.json() as FullCoordinateJob;
+        if (job.status === "failed") throw new Error(job.error || "完整图任务失败");
+        setFullJobStatus(job.status === "running" ? `完整 TradingAgentsGraph 运行中：${job.phase || "running"}` : job.message || job.status);
+        if (job.status === "completed") {
+          completed = job;
+          break;
         }
-      />
+      }
+      if (!completed) throw new Error("完整图任务仍在运行，请稍后刷新历史");
 
-      <main className="container mx-auto px-4 py-6">
-        {error && (
-          <div className="mb-4 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-            {error}
-          </div>
+      const rows = await fetchHistory();
+      const latest = completed.decisionId ? rows.find(r => r.id === completed?.decisionId) : rows.find(r => r.symbol === triggerSymbol) || rows[0];
+      if (latest) await fetchDetail(latest.id);
+      setFullJobStatus(`完整图已完成：#${completed.decisionId || latest?.id || ""}`);
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : "触发失败"); }
+    finally { setTriggering(false); }
+  };
+
+  const toggle = (k: string) => setExpanded(p => ({ ...p, [k]: !p[k] }));
+
+  // ── Derived data ───────────────────────────────────────────────────────────
+  const d = detail;
+  const bi = d?.basic_info;
+  const dec = d?.decision;
+  const aa = d?.agent_analysis || {};
+
+  // Merge agent_analysis + role_outputs — role_outputs has the richest data
+  const roleOutputs: AgentAnalysisEntry[] = d?.role_outputs || [];
+  const allRoles: Array<{
+    key: string; label: string; stage: string;
+    opinion?: string; confidence: number | null;
+    reasoning: string | null; summary: string | null;
+    keyPoints: string[]; dataSourceChain: string | null; riskFlag: string | null;
+  }> = [];
+
+  // First, add from role_outputs (best data)
+  for (const ro of roleOutputs) {
+    allRoles.push({
+      key: ro.role || `role-${allRoles.length}`,
+      label: ro.label || ro.role || `角色 ${allRoles.length + 1}`,
+      stage: classifyStage(ro.role || "", ro.label || ""),
+      opinion: ro.opinion || undefined,
+      confidence: ro.confidence ?? null,
+      reasoning: ro.reasoning || null,
+      summary: ro.summary || null,
+      keyPoints: ro.key_points || [],
+      dataSourceChain: ro.data_source_chain || null,
+      riskFlag: ro.risk_flag || null,
+    });
+  }
+
+  // Then add agents from agent_analysis that aren't already covered
+  for (const [key, entry] of Object.entries(aa)) {
+    const e = entry as AgentAnalysisEntry;
+    // Skip if already covered by role_outputs
+    const covered = allRoles.some(r => {
+      const rl = (r.key || "").toLowerCase();
+      const el = (e.role || key).toLowerCase();
+      return rl.includes(el) || el.includes(rl) || r.label === (e.label || key);
+    });
+    if (covered) continue;
+
+    const isSpecial = key === "macroAgent" || key === "riskAgent";
+    // Skip empty synthetic agents (backend fallback when no matching role found)
+    if (isSpecial && e.available === false && !e.output) continue;
+    if (isSpecial && String(e.output || "").includes("暂无数据") && e.available === false) continue;
+
+    allRoles.push({
+      key,
+      label: e.label || key,
+      stage: classifyStage(key, e.label || key),
+      opinion: isSpecial ? undefined : (e.opinion || undefined),
+      confidence: isSpecial ? null : (e.confidence ?? null),
+      reasoning: isSpecial ? (e.output || null) : (e.reasoning || null),
+      summary: isSpecial ? (e.output ? String(e.output).slice(0, 200) + (String(e.output).length > 200 ? "…" : "") : (e.available ? "数据可用 · 无输出摘要" : "数据不可用")) : (e.summary || null),
+      keyPoints: e.key_points || [],
+      dataSourceChain: e.data_source_chain || null,
+      riskFlag: e.risk_flag || null,
+    });
+  }
+
+  const stageGroups: Record<string, typeof allRoles> = {};
+  for (const r of allRoles) {
+    if (!stageGroups[r.stage]) stageGroups[r.stage] = [];
+    stageGroups[r.stage].push(r);
+  }
+
+  // Chain steps
+  const isVeto = dec?.risk_veto || d?.risk_guard?.passed === false;
+  const finalAction = (bi?.action || dec?.final_signal || "").toUpperCase();
+  const isNoAction = finalAction === "WAIT" || d?.order_intent?.orderIntentId === "NO_ACTION";
+  const chainSteps = [
+    { label: "coordination_history", ok: !!bi, veto: false, info: bi ? `#${bi.decisionId} · ${bi.action || "—"} · conf ${fmtPct(bi.confidence)}` : NA },
+    { label: "OrderIntent", ok: !!d?.order_intent?.orderIntentId || isNoAction, veto: isVeto, info: d?.order_intent?.orderIntentId === "NO_ACTION" || isNoAction ? "WAIT，无需下单意图" : d?.order_intent?.orderIntentId ? d.order_intent.orderIntentId : isVeto ? "风控否决" : NA },
+    { label: "Paper Trade", ok: !!d?.execution_result?.paperOrderGenerated || isNoAction, veto: isVeto, info: d?.execution_result?.paperOrderGenerated ? `${d.execution_result.orderId || "—"} @ ${d.execution_result.fillPrice || "—"}` : isNoAction ? "WAIT，无需成交" : isVeto ? "风控否决" : NA },
+    { label: "Audit 记录", ok: (d?.audit_timeline?.length || 0) > 0, veto: false, info: d?.audit_timeline?.length ? `${d.audit_timeline.length} 条` : NA },
+  ];
+
+  // ── Render ──────────────────────────────────────────────────────────────────
+  return (
+    <>
+      <AppTopNav activeSection="decisions" title="TradingAgents 决策中心" subtitle="AI 怎么想 · 为什么这么判断" />
+      <div className="container mx-auto px-4 py-4 space-y-5 max-w-7xl">
+
+        {/* ── Top Bar ────────────────────────────────────────────────────── */}
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={filterSymbol} onChange={e => setFilterSymbol(e.target.value)} className="h-8 rounded border border-slate-700 bg-slate-900/60 px-2 text-xs text-slate-300">
+            <option value="">全部标的</option>
+            {symbols.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <Button size="sm" variant="outline" onClick={fetchHistory} disabled={loading} className="h-8 gap-1 text-xs">
+            <RefreshCw className={"h-3 w-3 " + (loading ? "animate-spin" : "")} />刷新
+          </Button>
+          <select value={triggerSymbol} onChange={e => setTriggerSymbol(e.target.value)} className="h-8 rounded border border-cyan-500/30 bg-cyan-500/10 px-2 text-xs text-cyan-300">
+            {symbols.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <Button size="sm" onClick={triggerDecision} disabled={triggering} className="h-8 gap-1 text-xs bg-cyan-600 hover:bg-cyan-500 text-white">
+            <Zap className={"h-3 w-3 " + (triggering ? "animate-pulse" : "")} />{triggering ? "生成中..." : "生成决策"}
+          </Button>
+          {history.length > 0 && <span className="text-[10px] text-slate-500 ml-auto">共 {history.length} 条</span>}
+        </div>
+        {error && <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-400">{error}</div>}
+        {fullJobStatus && <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3 text-xs text-cyan-300">{fullJobStatus}</div>}
+
+        {/* ── Loading / Empty ────────────────────────────────────────────── */}
+        {(loading || detailLoading) && !d && (
+          <Card className="border-slate-700/50 bg-slate-950/60"><CardContent className="py-12 text-center">
+            <RefreshCw className="h-6 w-6 animate-spin mx-auto text-slate-500 mb-3" /><p className="text-sm text-slate-400">加载决策数据...</p>
+          </CardContent></Card>
+        )}
+        {!loading && history.length === 0 && (
+          <Card className="border-2 border-cyan-400/30 bg-cyan-400/5"><CardContent className="py-16 text-center">
+            <Brain className="h-10 w-10 mx-auto text-slate-600 mb-4" /><p className="text-slate-400 font-semibold mb-2">暂无 AI 决策记录</p>
+            <p className="text-xs text-slate-500 mb-4">选择标的后点击生成决策，触发 TradingAgents AI 决策流程</p>
+            <div className="flex items-center justify-center gap-2">
+              <select value={triggerSymbol} onChange={e => setTriggerSymbol(e.target.value)} className="h-8 rounded border border-cyan-500/30 bg-cyan-500/10 px-2 text-xs text-cyan-300">
+                {symbols.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <Button size="sm" onClick={triggerDecision} disabled={triggering} className="h-8 gap-1 text-xs bg-cyan-600 hover:bg-cyan-500 text-white">
+                <Zap className={"h-3 w-3 " + (triggering ? "animate-pulse" : "")} />{triggering ? "生成中..." : "生成决策"}
+              </Button>
+            </div>
+          </CardContent></Card>
         )}
 
-        <section className="mb-6 overflow-hidden rounded-[28px] border border-cyan-400/20 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.20),transparent_34%),linear-gradient(135deg,rgba(15,23,42,0.96),rgba(24,31,67,0.92))] p-5 shadow-2xl shadow-cyan-950/30">
-          <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
-            <div>
-              <Badge className="border border-cyan-300/30 bg-cyan-400/10 text-cyan-200">智能决策中心</Badge>
-              <h2 className="mt-4 text-2xl font-bold tracking-tight text-white">查看交易建议和判断依据</h2>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
-                系统会汇总行情、技术因子、策略信号、新闻和宏观背景，
-                交给 TradingAgents 生成可追溯的交易建议，方便你判断是否继续研究或执行。
-              </p>
-              <div className="mt-4 grid gap-3 sm:grid-cols-4">
-                <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
-                  <p className="text-[11px] text-slate-400">当前标的</p>
-                  <p className="mt-1 font-mono text-lg font-semibold text-white">{latestDecision?.symbol || filterSymbol}</p>
-                </div>
-                <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
-                  <p className="text-[11px] text-slate-400">最新建议</p>
-                  <p className="mt-1 text-lg font-semibold text-white">{latestDecision ? signalLabel(latestDecision.final_signal) : "--"}</p>
-                </div>
-                <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
-                  <p className="text-[11px] text-slate-400">置信度</p>
-                  <p className="mt-1 text-lg font-semibold text-emerald-300">{formatPercent(latestDecision?.confidence)}</p>
-                </div>
-                <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
-                  <p className="text-[11px] text-slate-400">决策引擎</p>
-                  <p className="mt-1 text-sm font-semibold text-fuchsia-200">{primaryEngine(latestDecision)}</p>
-                </div>
-              </div>
-            </div>
-
-            <Card className="border-fuchsia-400/20 bg-slate-950/45">
-              <CardContent className="p-4">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-fuchsia-300" />
-                  <h3 className="text-sm font-semibold text-white">生成一次新的交易建议</h3>
-                </div>
-                <p className="mt-2 text-xs leading-5 text-slate-400">
-                  点击后会读取当前已有数据并生成一条建议记录。这里不会自动下单。
-                </p>
-                <div className="mt-4 space-y-3">
-                  <div className="space-y-2">
-                    <label className="text-xs text-slate-400">选择币种</label>
-                    <select
-                      value={symbolOptions.includes(filterSymbol) ? filterSymbol : symbolOptions[0] || "BTCUSDT"}
-                      onChange={(event) => setFilterSymbol(event.target.value)}
-                      className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 font-mono text-sm text-white outline-none transition focus:border-cyan-300/50"
-                    >
-                      {symbolOptions.map((symbol) => (
-                        <option key={symbol} value={symbol}>
-                          {symbol}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="text-[11px] leading-5 text-slate-500">
-                      下拉列表来自当前已有行情缓存，只展示系统已有数据的交易对。
-                    </p>
+        {d && (
+          <>
+            {/* ═══ 1. 最新 AI 决策总览 ═══════════════════════════════════ */}
+            <Card className="border-slate-700/50 bg-slate-950/60 overflow-hidden">
+              <div className={`h-1 ${isVeto ? "bg-red-500" : (bi?.action || "").toUpperCase() === "SELL" ? "bg-red-500" : (bi?.action || "").toUpperCase() === "BUY" ? "bg-green-500" : "bg-slate-500"}`} />
+              <CardHeader className="pb-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Hash className="w-4 h-4 text-cyan-400" />#{bi?.decisionId || selectedId} · {bi?.symbol || "—"}
+                    <span className="text-[10px] text-slate-500 font-normal">{fmtTime(bi?.createdAt)}</span>
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    {signalBadge(bi?.action || dec?.final_signal)}
+                    <Badge variant="outline" className="border-slate-700 text-slate-400 text-[10px]">置信度 {fmtPct(bi?.confidence ?? dec?.confidence)}</Badge>
+                    {isVeto && <Badge className="bg-red-500/15 text-red-400 text-[10px]">风控否决</Badge>}
                   </div>
-                  <label className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-slate-300">
-                    <input
-                      type="checkbox"
-                      checked={runFast}
-                      onChange={(event) => setRunFast(event.target.checked)}
-                      className="mt-0.5"
-                    />
-                    <span>
-                      快速模式：更快返回结果，适合查看当前建议。关闭后会做更完整的分析。
-                    </span>
-                  </label>
-                  <Button
-                    className="w-full bg-gradient-to-r from-fuchsia-500 to-cyan-400 font-semibold text-white hover:from-fuchsia-400 hover:to-cyan-300"
-                    disabled={running}
-                    onClick={runFullDecision}
-                  >
-                    {running ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Brain className="mr-2 h-4 w-4" />}
-                    {running ? "正在生成建议..." : "生成交易建议"}
-                  </Button>
                 </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {/* Model version info */}
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                  {[
+                    { l: "模型", v: bi?.modelVersion || bi?.model },
+                    { l: "适配器", v: bi?.agentGraph },
+                    { l: "contextId", v: bi?.contextId },
+                    { l: "contextHash", v: bi?.contextHash },
+                    { l: "availableTime", v: fmtTime(bi?.availableTime) },
+                  ].map(m => (
+                    <div key={m.l} className="rounded border border-slate-800 bg-slate-900/40 p-1.5">
+                      <p className="text-[9px] text-slate-500">{m.l}</p>
+                      <p className={`text-[10px] truncate ${m.v && m.v !== NA ? "text-slate-300" : "text-slate-600 italic"}`}>{m.v || NA}</p>
+                    </div>
+                  ))}
+                </div>
+                {/* Summary */}
+                <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-3">
+                  <p className="text-[10px] text-slate-500 mb-1">决策摘要</p>
+                  {dec?.summary ? (
+                    <p className="text-[11px] text-slate-300 leading-relaxed">{dec.summary}</p>
+                  ) : (
+                    <p className="text-[11px] text-slate-600 italic">{NA}（summary）</p>
+                  )}
+                </div>
+                {/* Vote breakdown */}
+                {dec?.vote_breakdown && Object.keys(dec.vote_breakdown).length > 0 && (
+                  <div className="flex items-center gap-4 text-[11px] text-slate-400">
+                    {Object.entries(dec.vote_breakdown).map(([k, v]) => (
+                      <span key={k}>{k === "bullish" ? "🟢 多头" : k === "bearish" ? "🔴 空头" : "⚪ 中立"} {typeof v === "number" ? (v * 100).toFixed(0) + "%" : String(v)}</span>
+                    ))}
+                  </div>
+                )}
+                {/* Position advice */}
+                {dec?.position_advice && Object.keys(dec.position_advice).length > 0 && (
+                  <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
+                    <div className="flex items-center gap-2 mb-2"><Target className="w-4 h-4 text-blue-400" /><p className="text-xs font-semibold text-blue-400">仓位建议</p></div>
+                    {Object.entries(dec.position_advice).map(([k, v]) => {
+                      if (Array.isArray(v) && v.length > 0) {
+                        return (
+                          <div key={k} className="rounded border border-slate-800 bg-slate-950/40 p-2 mb-2">
+                            <p className="text-[9px] text-slate-500 mb-1">{k}（{v.length} 条）</p>
+                            <div className="space-y-1 max-h-32 overflow-y-auto">
+                              {v.map((item, i) => {
+                                const it = item as Record<string,unknown>;
+                                const itLabel = String(it.label || it.role || `#${i}`);
+                                const itOpinion = String(it.opinion || "—");
+                                const itConf = it.confidence != null ? Number(it.confidence) : null;
+                                const itPhase = it.phase != null ? String(it.phase) : null;
+                                return (
+                                  <div key={i} className="text-[10px] text-slate-400 border-l-2 border-slate-700 pl-2">
+                                    <span className="text-slate-300">{itLabel}</span>
+                                    {" · "}<span className={itOpinion.toLowerCase()==="sell"?"text-red-400":itOpinion.toLowerCase()==="buy"?"text-green-400":"text-slate-400"}>{itOpinion}</span>
+                                    {itConf != null && <span className="text-slate-600"> · conf {String((itConf*100).toFixed(0))}%</span>}
+                                    {itPhase && <span className="text-slate-600"> · {itPhase}</span>}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div key={k} className="rounded border border-slate-800 bg-slate-950/40 p-1.5 inline-block mr-2 mb-2">
+                          <p className="text-[9px] text-slate-500">{k}</p>
+                          <p className="text-[10px] text-slate-300 font-mono">{typeof v === "object" ? JSON.stringify(v).slice(0, 120) : String(v)}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </CardContent>
             </Card>
-          </div>
-        </section>
 
-        <Prd104StatusPanel className="mb-6" />
-
-        <Card className="mb-6 overflow-hidden border-amber-300/20 bg-[radial-gradient(circle_at_top_left,rgba(251,191,36,0.18),transparent_34%),linear-gradient(135deg,rgba(30,41,59,0.92),rgba(15,23,42,0.96))] shadow-xl shadow-amber-950/10">
-          <CardContent className="p-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div className="max-w-3xl">
-                <Badge className="border border-amber-300/30 bg-amber-400/10 text-amber-200">实验环境</Badge>
-                <h3 className="mt-3 flex items-center gap-2 text-lg font-semibold text-white">
-                  <Shield className="h-5 w-5 text-amber-300" />
-                  原版 TradingAgentsGraph 实验运行
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-slate-300">
-                  这个入口会调用原版 TradingAgentsGraph。它主要使用 yfinance 和 Google News RSS，
-                  不读取我们主链路里的 OpenBB / CCXT / ClickHouse / 因子信号，也不会写入正式决策历史。
-                </p>
-                <p className="mt-2 text-xs leading-5 text-amber-100/80">
-                  适合做对比研究，预计耗时约 2-5 分钟；当前启用 market、news、social、fundamentals 全部原版角色。
-                  其中 fundamentals 偏股票基本面，仅作为原版框架对比参考。
-                </p>
-                <p className="mt-2 text-xs leading-5 text-slate-400">
-                  当前角色：market 市场分析、news 新闻分析、social 情绪分析、fundamentals 基本面分析。
-                </p>
-              </div>
-
-              <div className="w-full rounded-2xl border border-white/10 bg-slate-950/40 p-4 lg:max-w-sm">
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
-                  <div className="space-y-2">
-                    <label className="text-xs text-slate-400">实验币种</label>
-                    <select
-                      value={symbolOptions.includes(filterSymbol) ? filterSymbol : symbolOptions[0] || "BTCUSDT"}
-                      onChange={(event) => setFilterSymbol(event.target.value)}
-                      className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 font-mono text-sm text-white outline-none transition focus:border-amber-300/50"
-                    >
-                      {symbolOptions.map((symbol) => (
-                        <option key={symbol} value={symbol}>
-                          {symbol}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs text-slate-400">分析日期</label>
-                    <input
-                      type="date"
-                      value={nativeTradeDate}
-                      onChange={(event) => setNativeTradeDate(event.target.value)}
-                      className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-white outline-none transition focus:border-amber-300/50"
-                    />
-                  </div>
+            {/* ═══ 2. TradingAgents 决策流程 ══════════════════════════════ */}
+            <div>
+              <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+                <Layers className="w-4 h-4 text-cyan-400" /> TradingAgents 决策流程
+              </h3>
+              {allRoles.length === 0 ? (
+                <p className="text-xs text-slate-600 py-8 text-center">后端未返回 agent_analysis 数据</p>
+              ) : (
+                <div className="space-y-4">
+                  {STAGES.map(stage => {
+                    const stageRoles = stageGroups[stage.key] || [];
+                    if (stageRoles.length === 0) return null;
+                    const Icon = stage.icon;
+                    return (
+                      <div key={stage.key} className="rounded-2xl border border-slate-700/50 bg-slate-950/60 overflow-hidden">
+                        <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/50 bg-slate-900/40">
+                          <div className="w-8 h-8 rounded-lg bg-cyan-500/10 flex items-center justify-center"><Icon className="w-4 h-4 text-cyan-400" /></div>
+                          <div className="flex-1"><p className="text-sm font-semibold text-white">{stage.label}</p><p className="text-[10px] text-slate-500">{stage.desc}</p></div>
+                          <Badge variant="outline" className="border-slate-700 text-slate-400 text-[10px]">{stageRoles.length} 个角色</Badge>
+                        </div>
+                        <div className="p-3 space-y-2">
+                          {stageRoles.map(role => {
+                            const isExpanded = expanded[role.key] || false;
+                            const hasDetail = !!(role.reasoning || role.keyPoints.length > 0);
+                            return (
+                              <div key={role.key} className={`rounded-xl border bg-slate-900/30 ${hasDetail ? "border-slate-800 hover:border-slate-700 cursor-pointer" : "border-slate-800/50"}`}
+                                onClick={() => hasDetail && toggle(role.key)}>
+                                <div className="p-3">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      {opinionIcon(role.opinion)}
+                                      <div className="min-w-0">
+                                        <p className="text-xs font-semibold text-slate-200 truncate">{role.label}</p>
+                                        <p className="text-[9px] text-slate-500 font-mono">{role.key} · 置信度 {role.confidence != null ? fmtPct(role.confidence) : "—"}</p>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      {role.opinion ? opinionBadge(role.opinion) : <span className="text-[10px] text-slate-600">{NA}</span>}
+                                      {role.riskFlag && <Badge className="bg-amber-500/15 text-amber-400 text-[10px]">⚠</Badge>}
+                                      {hasDetail && (isExpanded ? <ChevronUp className="w-3.5 h-3.5 text-slate-500" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-500" />)}
+                                    </div>
+                                  </div>
+                                  {/* Summary */}
+                                  {role.summary && <p className="mt-2 text-[11px] text-slate-400 leading-relaxed line-clamp-2">{role.summary}</p>}
+                                  {/* Data scope (compact) */}
+                                  <p className="mt-1 text-[9px] text-slate-600">
+                                    数据管道：{role.dataSourceChain || "后端未记录"}
+                                  </p>
+                                </div>
+                                {/* Expanded detail */}
+                                {isExpanded && hasDetail && (
+                                  <div className="border-t border-slate-800 bg-slate-950/40 px-4 py-3 space-y-3">
+                                    {role.reasoning && (
+                                      <div>
+                                        <p className="text-[10px] text-slate-500 mb-1">完整分析</p>
+                                        <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 max-h-72 overflow-y-auto">
+                                          <p className="text-[11px] text-slate-300 leading-relaxed whitespace-pre-wrap">{role.reasoning}</p>
+                                        </div>
+                                      </div>
+                                    )}
+                                    {role.keyPoints.length > 0 && (
+                                      <div>
+                                        <p className="text-[10px] text-slate-500 mb-1">关键论点（{role.keyPoints.length} 条）</p>
+                                        <ul className="space-y-1">
+                                          {role.keyPoints.map((kp, i) => (
+                                            <li key={i} className="text-[11px] text-slate-400 flex items-start gap-2"><ArrowRight className="w-3 h-3 text-slate-600 mt-0.5 shrink-0" />{kp}</li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-                <Button
-                  className="mt-4 w-full bg-gradient-to-r from-amber-400 to-orange-500 font-semibold text-slate-950 hover:from-amber-300 hover:to-orange-400"
-                  disabled={nativeRunning}
-                  onClick={runNativeTradingAgents}
-                >
-                  {nativeRunning ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-                  {nativeRunning ? "原版实验运行中..." : "运行原版实验"}
-                </Button>
-              </div>
+              )}
             </div>
 
-            {nativeError && (
-              <div className="mt-4 rounded-xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-                {nativeError}
-              </div>
-            )}
-
-            {nativeResult && (
-              <div className="mt-5 grid gap-4 lg:grid-cols-[0.7fr_1.3fr]">
-                <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                  <p className="text-xs text-slate-400">原版结果</p>
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <Badge className={cn("border text-sm", signalBadgeClass(nativeResult.decision))}>
-                      {signalLabel(nativeResult.decision)}
-                    </Badge>
-                    <span className="text-sm text-slate-300">置信度 {formatPercent(nativeResult.confidence)}</span>
+            {/* ═══ 3. 多空辩论与最终裁决 ════════════════════════════════════ */}
+            <Card className="border-slate-700/50 bg-slate-950/60 overflow-hidden">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2"><Swords className="w-4 h-4 text-amber-400" />多空辩论与最终裁决</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="rounded-xl border border-green-500/20 bg-green-500/5 p-3">
+                    <div className="flex items-center gap-2 mb-1"><ArrowUp className="w-4 h-4 text-green-400" /><p className="text-xs font-semibold text-green-400">多头观点</p></div>
+                    {dec?.bull_view ? <p className="text-[11px] text-slate-300 leading-relaxed whitespace-pre-wrap">{dec.bull_view}</p>
+                      : <p className="text-[11px] text-slate-600 italic">后端未生成独立多头辩论文本，多空观点分散在各角色分析中</p>}
                   </div>
-                  <div className="mt-4 space-y-2 text-xs leading-5 text-slate-400">
-                    <p>原版识别代码：<span className="font-mono text-slate-200">{nativeResult.raw?.native_symbol || "--"}</span></p>
-                    <p>启用角色：{nativeResult.raw?.selected_analysts?.join(", ") || NATIVE_TRADINGAGENTS_ANALYSTS.join(", ")}</p>
-                    <p>模型：{nativeResult.raw?.quick_model || "gpt-4o-mini"}</p>
-                    <p>来源：yfinance / Google News RSS</p>
+                  <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3">
+                    <div className="flex items-center gap-2 mb-1"><ArrowDown className="w-4 h-4 text-red-400" /><p className="text-xs font-semibold text-red-400">空头观点</p></div>
+                    {dec?.bear_view ? <p className="text-[11px] text-slate-300 leading-relaxed whitespace-pre-wrap">{dec.bear_view}</p>
+                      : <p className="text-[11px] text-slate-600 italic">后端未生成独立空头辩论文本，多空观点分散在各角色分析中</p>}
                   </div>
                 </div>
-                <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                  <p className="text-xs text-slate-400">原版解释</p>
-                  <p className="mt-2 text-sm leading-6 text-slate-200">
-                    {nativeResult.reasoning || nativeResult.error || "原版 TradingAgentsGraph 没有返回解释。"}
-                  </p>
-                  {nativeResult.analyst_reports && nativeResult.analyst_reports.length > 0 && (
-                    <div className="mt-4 grid gap-3 md:grid-cols-2">
-                      {nativeResult.analyst_reports.slice(0, 4).map((report, index) => (
-                        <div key={`${report.role || "native"}-${index}`} className="rounded-xl border border-white/10 bg-slate-950/35 p-3">
-                          <p className="text-xs font-semibold text-amber-200">{roleLabel(report.role)}</p>
-                          <p className="mt-1 line-clamp-3 text-xs leading-5 text-slate-400">{report.reasoning}</p>
-                        </div>
-                      ))}
+
+                {/* Risk ruling */}
+                <div className={`rounded-xl border p-3 ${isVeto ? "border-red-500/30 bg-red-500/10" : "border-amber-500/20 bg-amber-500/5"}`}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <Shield className={`w-4 h-4 ${isVeto ? "text-red-400" : "text-amber-400"}`} />
+                    <p className="text-xs font-semibold text-white">风险裁决</p>
+                    <Badge className={isVeto ? "bg-red-500/15 text-red-400 text-[10px]" : "bg-amber-500/15 text-amber-400 text-[10px]"}>{isVeto ? "已否决" : (d?.risk_guard?.passed === true ? "已通过" : "未裁决")}</Badge>
+                  </div>
+                  {d?.risk_guard?.blockedReason ? <p className="text-[11px] text-red-300">{d.risk_guard.blockedReason}</p>
+                    : dec?.risk_notes ? <p className="text-[11px] text-slate-400">{dec.risk_notes}</p>
+                    : <p className="text-[11px] text-slate-600 italic">{NA}（risk_notes）</p>}
+                </div>
+
+                {/* Final coordinator opinion */}
+                <div className="rounded-xl border border-purple-500/20 bg-purple-500/5 p-3">
+                  <div className="flex items-center gap-2 mb-1"><Gavel className="w-4 h-4 text-purple-400" /><p className="text-xs font-semibold text-purple-400">最终协调意见</p></div>
+                  {dec?.summary ? <p className="text-[11px] text-slate-300 leading-relaxed">{dec.summary}</p>
+                    : <p className="text-[11px] text-slate-600 italic">{NA}</p>}
+                  {d?.order_intent?.reason && (
+                    <div className="mt-2 rounded border border-slate-800 bg-slate-950/40 p-2">
+                      <p className="text-[9px] text-slate-500">OrderIntent 原因</p>
+                      <p className="text-[10px] text-slate-400">{d.order_intent.reason}</p>
                     </div>
                   )}
                 </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {stats && !stats.error && (
-          <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-5">
-            <StatCard label="历史建议记录" value={stats.total} detail="系统生成过的建议数量，不代表真实下单次数。" accent="text-cyan-300" />
-            <StatCard label="近 7 天新增" value={stats.recent_7d} detail="最近 7 天新增的交易建议记录。" accent="text-fuchsia-300" />
-            <StatCard label="平均置信度" value={formatPercent(stats.avg_confidence)} detail="所有历史决策 confidence 的平均值。" accent="text-emerald-300" />
-            <StatCard label="风险否决次数" value={stats.veto_count} detail="风险模块触发 veto 或风险标记的次数。" accent="text-rose-300" />
-            <StatCard label="覆盖交易对" value={Object.keys(stats.by_symbol || {}).length} detail="已有决策记录的 symbol 数量。" accent="text-amber-300" />
-          </div>
-        )}
-
-        <div className="mb-6 grid gap-4 lg:grid-cols-4">
-          <Card className="border-white/10 bg-slate-900/55 lg:col-span-4">
-            <CardContent className="grid gap-4 p-4 md:grid-cols-4">
-              <div>
-                <p className="text-xs text-slate-400">策略信号</p>
-                <p className="mt-1 text-xl font-bold text-white">{latestSignalCount}</p>
-                <p className="mt-1 text-[11px] text-slate-500">本次建议参考的最近策略判断</p>
-              </div>
-              <div>
-                <p className="text-xs text-slate-400">技术因子</p>
-                <p className="mt-1 text-xl font-bold text-white">{latestFactorCount}</p>
-                <p className="mt-1 text-[11px] text-slate-500">本次建议使用的最新指标记录</p>
-              </div>
-              <div>
-                <p className="text-xs text-slate-400">相关新闻</p>
-                <p className="mt-1 text-xl font-bold text-white">{latestNewsCount}</p>
-                <p className="mt-1 text-[11px] text-slate-500">用于判断市场情绪和事件风险</p>
-              </div>
-              <div>
-                <p className="text-xs text-slate-400">宏观背景</p>
-                <p className="mt-1 text-xl font-bold text-white">{latestMacroCount}</p>
-                <p className="mt-1 text-[11px] text-slate-500">利率、通胀、就业等市场背景</p>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <div className="lg:col-span-2">
-            <Card className="border-white/10 bg-slate-900/60">
-              <CardHeader className="pb-3">
-                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <CardTitle className="flex items-center gap-2 text-base text-white">
-                      <Brain className="h-4 w-4 text-fuchsia-300" />
-                      决策历史
-                    </CardTitle>
-                    <p className="mt-1 text-xs text-slate-400">点击任意一行可以展开，查看模型、信号、新闻、宏观和风险说明。</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={symbolOptions.includes(filterSymbol) ? filterSymbol : symbolOptions[0] || "BTCUSDT"}
-                      onChange={(event) => setFilterSymbol(event.target.value)}
-                      className="w-32 rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1.5 font-mono text-xs text-white outline-none focus:border-cyan-300/50"
-                    >
-                      {symbolOptions.map((symbol) => (
-                        <option key={symbol} value={symbol}>
-                          {symbol}
-                        </option>
-                      ))}
-                    </select>
-                    <Button size="sm" variant="outline" className="h-8 border-white/10 text-xs text-slate-200" onClick={fetchDecisions}>
-                      筛选
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="border-white/10 hover:bg-transparent">
-                      <TableHead className="text-xs text-slate-400">交易对</TableHead>
-                      <TableHead className="text-xs text-slate-400">建议</TableHead>
-                      <TableHead className="text-xs text-slate-400">置信度</TableHead>
-                      <TableHead className="text-xs text-slate-400">决策引擎</TableHead>
-                      <TableHead className="text-xs text-slate-400">风险</TableHead>
-                      <TableHead className="text-xs text-slate-400">时间</TableHead>
-                      <TableHead className="text-xs text-slate-400">联动</TableHead>
-                      <TableHead className="w-10" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {loading ? (
-                      <TableRow className="border-white/10">
-                        <TableCell colSpan={8} className="py-12 text-center text-sm text-slate-400">
-                          <RefreshCw className="mr-2 inline h-4 w-4 animate-spin" />
-                          正在读取决策记录...
-                        </TableCell>
-                      </TableRow>
-                    ) : decisions.length === 0 ? (
-                      <TableRow className="border-white/10">
-                        <TableCell colSpan={8} className="py-12 text-center text-sm text-slate-400">
-                          {error ? FRIENDLY_DATA_UNAVAILABLE : "暂无建议记录。点击上方“生成交易建议”后，这里会出现结果。"}
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      decisions.map((decision) => {
-                        const expanded = expandedId === decision.id;
-                        const roles = decision.role_opinions?.length ? decision.role_opinions : decision.agent_signals;
-                        const internalChain = getTradingAgentsInternalChain(decision);
-                        const intentResult = intentResults[decision.id];
-                        const intentBusy = intentLoading[decision.id];
-                        const intentErrorMessage = intentError[decision.id];
-                        const canExecuteIntent = intentResult?.status === "READY";
-                        const intent = intentResult?.intent;
-                        const intentId = intent?.id || intent?.intent_id || "--";
-                        const intentAction = intent?.action || (intent?.side ? String(intent.side).toUpperCase() : "HOLD");
-                        const intentPositionRatio =
-                          typeof intent?.positionRatio === "number" ? intent.positionRatio : intent?.position_pct;
-                        const intentValidUntil = intent?.validUntil || intent?.valid_until;
-                        const sourceDecisionId = intent?.sourceDecisionId ?? intent?.decision_id ?? decision.id;
-                        const riskPassed =
-                          typeof intentResult?.risk_preview?.passed === "boolean"
-                            ? intentResult.risk_preview.passed
-                            : intentResult?.risk_preview?.allowed;
-                        const riskBlockedReason =
-                          intentResult?.risk_preview?.blockedReason ||
-                          intentResult?.risk_preview?.reason ||
-                          intentResult?.risk_preview?.rule ||
-                          "--";
-                        return (
-                          <Fragment key={decision.id}>
-                            <TableRow
-                              className="cursor-pointer border-white/10 hover:bg-white/[0.04]"
-                              onClick={() => setExpandedId(expanded ? null : decision.id)}
-                            >
-                              <TableCell className="font-mono text-xs text-white">{decision.symbol}</TableCell>
-                              <TableCell>
-                                <Badge className={cn("border text-[11px]", signalBadgeClass(decision.final_signal))}>
-                                  {decision.final_signal === "BUY" ? <ArrowUp className="mr-1 h-3 w-3" /> : decision.final_signal === "SELL" ? <ArrowDown className="mr-1 h-3 w-3" /> : <Minus className="mr-1 h-3 w-3" />}
-                                  {signalLabel(decision.final_signal)}
-                                </Badge>
-                              </TableCell>
-                              <TableCell className="text-xs text-slate-200">{formatPercent(decision.confidence)}</TableCell>
-                              <TableCell className="text-xs text-fuchsia-200">{primaryEngine(decision)}</TableCell>
-                              <TableCell>
-                                {decision.risk_veto ? (
-                                  <Badge className="border border-rose-400/30 bg-rose-500/15 text-[11px] text-rose-200">
-                                    <Shield className="mr-1 h-3 w-3" />
-                                    已否决
-                                  </Badge>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 text-xs text-slate-400">
-                                    <CheckCircle2 className="h-3.5 w-3.5" />
-                                    未触发
-                                  </span>
-                                )}
-                              </TableCell>
-                              <TableCell className="text-[11px] text-slate-400">
-                                {decision.timestamp ? new Date(decision.timestamp).toLocaleString() : "-"}
-                              </TableCell>
-                              <TableCell>
-                                <div className="flex flex-col gap-1 text-[11px]">
-                                  <Link
-                                    href={`/audit?decision_id=${decision.id}`}
-                                    onClick={(event) => event.stopPropagation()}
-                                    className="text-cyan-200 hover:text-cyan-100"
-                                  >
-                                    查看详情
-                                  </Link>
-                                  <Link
-                                    href={researchSnapshotHref(decision.symbol, "1h", decision.timestamp)}
-                                    onClick={(event) => event.stopPropagation()}
-                                    className="text-slate-300 hover:text-white"
-                                  >
-                                    回看研究台
-                                  </Link>
-                                </div>
-                              </TableCell>
-                              <TableCell>
-                                {expanded ? <ChevronUp className="h-4 w-4 text-slate-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}
-                              </TableCell>
-                            </TableRow>
-                            {expanded && (
-                              <TableRow className="border-white/10 bg-slate-950/35">
-                                <TableCell colSpan={8} className="p-4">
-                                  <div className="grid gap-4 lg:grid-cols-2">
-                                    <div className="rounded-2xl border border-fuchsia-400/20 bg-fuchsia-500/5 p-4 lg:col-span-2">
-                                      <h4 className="text-sm font-semibold text-fuchsia-100">最终说明</h4>
-                                      <p className="mt-2 text-sm leading-6 text-slate-200">{decision.summary || "本次决策没有返回说明。"}</p>
-                                    </div>
-
-                                    <div className="rounded-2xl border border-cyan-400/20 bg-cyan-500/5 p-4 lg:col-span-2">
-                                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                                        <div>
-                                          <h4 className="flex items-center gap-2 text-sm font-semibold text-cyan-100">
-                                            <Shield className="h-4 w-4" />
-                                            二阶段执行闭环：OrderIntent / RiskGuard / 模拟盘
-                                          </h4>
-                                          <p className="mt-2 text-xs leading-5 text-slate-400">
-                                            这里会把当前 TradingAgents 建议转换成标准 OrderIntent，再交给 RiskGuard 做风控检查。
-                                            只有你手动点击执行，且风控允许时，才会写入模拟盘订单；不会触发真实交易。
-                                          </p>
-                                        </div>
-                                          <div className="flex shrink-0 flex-wrap gap-2">
-                                          <Link href={`/audit?decision_id=${decision.id}`}>
-                                            <Button
-                                              size="sm"
-                                              variant="outline"
-                                              className="h-8 border-white/10 bg-white/5 text-xs text-slate-100 hover:bg-white/10"
-                                            >
-                                              查看决策详情
-                                            </Button>
-                                          </Link>
-                                          <Link href={researchSnapshotHref(decision.symbol, "1h", decision.timestamp)}>
-                                            <Button
-                                              size="sm"
-                                              variant="ghost"
-                                              className="h-8 text-xs text-slate-200 hover:bg-white/10"
-                                            >
-                                              回看研究台
-                                            </Button>
-                                          </Link>
-                                          <Button
-                                            size="sm"
-                                            variant="outline"
-                                            className="h-8 border-cyan-300/25 bg-cyan-400/10 text-xs text-cyan-100 hover:bg-cyan-400/20"
-                                            disabled={!!intentBusy}
-                                            onClick={() => runOrderIntent(decision.id, "preview")}
-                                          >
-                                            {intentBusy === "preview" ? <RefreshCw className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-                                            生成 OrderIntent
-                                          </Button>
-                                          <Button
-                                            size="sm"
-                                            className="h-8 bg-emerald-500 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:bg-slate-700 disabled:text-slate-400"
-                                            disabled={!!intentBusy || !canExecuteIntent}
-                                            onClick={() => runOrderIntent(decision.id, "execute")}
-                                          >
-                                            {intentBusy === "execute" ? <RefreshCw className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-                                            手动执行模拟盘
-                                          </Button>
-                                        </div>
-                                      </div>
-
-                                      {intentErrorMessage && (
-                                        <div className="mt-3 rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
-                                          {intentErrorMessage}
-                                        </div>
-                                      )}
-
-                                      {intentResult ? (
-                                        <div className="mt-4 grid gap-3 lg:grid-cols-3">
-                                          <div className="rounded-xl border border-white/10 bg-slate-950/45 p-3">
-                                            <div className="flex items-center justify-between gap-2">
-                                              <p className="text-xs text-slate-400">OrderIntent 状态</p>
-                                              <Badge className={cn("border text-[11px]", orderIntentStatusClass(intentResult.status))}>
-                                                {orderIntentStatusLabel(intentResult.status)}
-                                              </Badge>
-                                            </div>
-                                            <div className="mt-3 space-y-1 text-xs leading-5 text-slate-300">
-                                              <p>意图编号：<span className="font-mono text-white">{intentId}</span></p>
-                                              <p>动作：<span className="font-mono text-white">{intentAction}</span></p>
-                                              <p>方向：<span className="font-mono text-white">{intent?.side || "flat"}</span></p>
-                                              <p>仓位比例：<span className="font-mono text-white">{formatPercent(intentPositionRatio)}</span></p>
-                                              <p>来源决策：<span className="font-mono text-white">{sourceDecisionId}</span></p>
-                                              <p>有效期：{intentValidUntil ? new Date(intentValidUntil).toLocaleString() : "--"}</p>
-                                            </div>
-                                          </div>
-                                          <div className="rounded-xl border border-white/10 bg-slate-950/45 p-3">
-                                            <p className="text-xs text-slate-400">价格与数量</p>
-                                            <div className="mt-3 space-y-1 text-xs leading-5 text-slate-300">
-                                              <p>参考价格：<span className="font-mono text-white">{formatMoney(intentResult.price)}</span></p>
-                                              <p>目标名义金额：<span className="font-mono text-white">{formatMoney(intentResult.sizing?.target_notional)}</span></p>
-                                              <p>下单数量：<span className="font-mono text-white">{formatMoney(intentResult.sizing?.quantity ?? intent?.quantity ?? undefined)}</span></p>
-                                              <p>模拟盘权益：<span className="font-mono text-white">{formatMoney(intentResult.sizing?.total_equity)}</span></p>
-                                            </div>
-                                          </div>
-                                          <div className="rounded-xl border border-white/10 bg-slate-950/45 p-3">
-                                            <p className="text-xs text-slate-400">风控与审计</p>
-                                            <div className="mt-3 space-y-1 text-xs leading-5 text-slate-300">
-                                              <p>RiskGuard：<span className={riskPassed ? "text-emerald-300" : "text-rose-300"}>{intentResult.risk_preview ? (riskPassed ? "通过" : "拦截") : "--"}</span></p>
-                                              <p>原因：<span className="font-mono text-white">{riskBlockedReason}</span></p>
-                                              <p>执行：<span className="font-mono text-white">{intentResult.execution?.status || "--"}</span></p>
-                                              <p>审计：ORDER_INTENT_* 已写入 audit_logs</p>
-                                            </div>
-                                          </div>
-                                          <div className="rounded-xl border border-white/10 bg-slate-950/45 p-3 lg:col-span-3">
-                                            <p className="text-xs text-slate-400">结果说明</p>
-                                            <p className="mt-2 text-xs leading-5 text-slate-300">{intentResult.message || "暂无说明。"}</p>
-                                            {intentResult.data_lineage && (
-                                              <div className="mt-3 grid gap-2 text-[11px] text-slate-400 md:grid-cols-2">
-                                                {Object.entries(intentResult.data_lineage).map(([key, value]) => (
-                                                  <p key={key}>
-                                                    <span className="font-mono text-slate-500">{key}</span>：{value}
-                                                  </p>
-                                                ))}
-                                              </div>
-                                            )}
-                                          </div>
-                                        </div>
-                                      ) : (
-                                        <div className="mt-4 rounded-xl border border-white/10 bg-slate-950/35 px-3 py-3 text-xs leading-5 text-slate-400">
-                                          还没有为这条建议生成 OrderIntent。先点“生成 OrderIntent”查看方向、仓位、价格来源和风控结果；观望/WAIT 会明确显示为不下单。
-                                        </div>
-                                      )}
-                                    </div>
-
-                                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                                      <h4 className="text-sm font-semibold text-white">投票权重</h4>
-                                      <div className="mt-3 space-y-3">
-                                        {Object.entries(decision.vote_breakdown || {}).length === 0 ? (
-                                          <p className="text-xs text-slate-500">无投票权重数据。</p>
-                                        ) : (
-                                          Object.entries(decision.vote_breakdown).map(([key, value]) => (
-                                            <div key={key}>
-                                              <div className="mb-1 flex items-center justify-between text-xs">
-                                                <span className="text-slate-300">{VOTE_LABELS[key] || key}</span>
-                                                <span className="font-mono text-slate-400">{formatPercent(value)}</span>
-                                              </div>
-                                              <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-                                                <div
-                                                  className="h-full rounded-full"
-                                                  style={{
-                                                    width: `${Math.max(0, Math.min(100, value * 100))}%`,
-                                                    background: VOTE_COLORS[key] || "#38bdf8",
-                                                  }}
-                                                />
-                                              </div>
-                                            </div>
-                                          ))
-                                        )}
-                                      </div>
-                                    </div>
-
-                                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                                      <h4 className="text-sm font-semibold text-white">本次参考材料</h4>
-                                      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                                        <div className="rounded-xl bg-slate-950/60 p-3">
-                                          <p className="text-slate-500">策略信号</p>
-                                          <p className="mt-1 font-mono text-lg text-white">{contextCountFromKeyPoints(decision, "signals") ?? snapshotCount(decision.input_snapshot_ids, "signal_event_ids")}</p>
-                                        </div>
-                                        <div className="rounded-xl bg-slate-950/60 p-3">
-                                          <p className="text-slate-500">技术因子</p>
-                                          <p className="mt-1 font-mono text-lg text-white">{snapshotCount(decision.input_snapshot_ids, "factor_snapshot_ids")}</p>
-                                        </div>
-                                        <div className="rounded-xl bg-slate-950/60 p-3">
-                                          <p className="text-slate-500">新闻</p>
-                                          <p className="mt-1 font-mono text-lg text-white">{contextCountFromKeyPoints(decision, "news_events") ?? snapshotCount(decision.input_snapshot_ids, "news_payload_ids")}</p>
-                                        </div>
-                                        <div className="rounded-xl bg-slate-950/60 p-3">
-                                          <p className="text-slate-500">宏观</p>
-                                          <p className="mt-1 font-mono text-lg text-white">{contextCountFromKeyPoints(decision, "macro_events") ?? snapshotCount(decision.input_snapshot_ids, "macro_keys")}</p>
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 lg:col-span-2">
-                                      <h4 className="text-sm font-semibold text-white">模型和分析角色</h4>
-                                      <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                        {roles?.length ? roles.map((role, index) => (
-                                          <div key={`${role.role || "role"}-${index}`} className="rounded-xl border border-white/10 bg-slate-950/45 p-3">
-                                            <div className="flex items-start justify-between gap-3">
-                                              <div>
-                                                <p className="text-sm font-semibold text-slate-100">{roleLabel(role.role)}</p>
-                                                <p className="mt-1 text-[11px] leading-5 text-slate-500">{roleDescription(role.role)}</p>
-                                              </div>
-                                              <Badge className="border border-slate-400/20 bg-slate-500/10 text-[11px] text-slate-300">
-                                                {role.opinion || "wait"} · {roleScoreLabel(role.role)} {formatPercent(role.confidence)}
-                                              </Badge>
-                                            </div>
-                                            <p className="mt-2 text-xs leading-5 text-slate-300">{role.reasoning || "暂无说明"}</p>
-                                            {role.key_points?.length ? (
-                                              <div className="mt-2 flex flex-wrap gap-1">
-                                                {role.key_points.slice(0, 4).map((point) => (
-                                                  <span key={point} className="rounded-full bg-cyan-400/10 px-2 py-1 text-[10px] text-cyan-200">
-                                                    {point}
-                                                  </span>
-                                                ))}
-                                              </div>
-                                            ) : null}
-                                          </div>
-                                        )) : (
-                                          <p className="text-xs text-slate-500">无角色结构化数据。</p>
-                                        )}
-                                      </div>
-                                    </div>
-
-                                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                                      <h4 className="text-sm font-semibold text-white">仓位建议</h4>
-                                      <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap rounded-xl bg-slate-950/60 p-3 text-[11px] leading-5 text-slate-400">
-                                        {JSON.stringify(publicPositionAdvice(decision.position_advice), null, 2)}
-                                      </pre>
-                                    </div>
-                                    {internalChain.length > 0 && (
-                                      <details className="rounded-2xl border border-amber-300/20 bg-amber-400/[0.04] p-4 lg:col-span-2">
-                                        <summary className="cursor-pointer select-none text-sm font-semibold text-amber-100">
-                                          完整智能体链路：{internalChain.length} 个内部角色 / 节点
-                                        </summary>
-                                        <p className="mt-2 text-xs leading-5 text-slate-400">
-                                          默认只展示 7 个核心结果块。这里展开的是 TradingAgentsGraph 的完整内部过程，包括多头、空头、研究经理和三类风险辩论角色。
-                                        </p>
-                                        <div className="mt-4 grid gap-3 md:grid-cols-2">
-                                          {internalChain.map((entry, index) => (
-                                            <div
-                                              key={`${entry.role || "chain"}-${entry.index || index}`}
-                                              className={cn(
-                                                "rounded-xl border p-3",
-                                                entry.available
-                                                  ? "border-white/10 bg-slate-950/45"
-                                                  : "border-slate-500/10 bg-slate-950/25 opacity-75"
-                                              )}
-                                            >
-                                              <div className="flex items-start justify-between gap-3">
-                                                <div>
-                                                  <p className="text-sm font-semibold text-slate-100">
-                                                    {entry.index ? `${entry.index}. ` : ""}{entry.label || roleLabel(entry.role)}
-                                                  </p>
-                                                  <p className="mt-1 text-[11px] text-slate-500">
-                                                    {chainPhaseLabel(entry.phase)} · {entry.role}
-                                                  </p>
-                                                </div>
-                                                <Badge className="border border-amber-300/20 bg-amber-400/10 text-[11px] text-amber-100">
-                                                  {entry.available ? "有独立输出" : "已折叠"}
-                                                </Badge>
-                                              </div>
-                                              <p className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap text-xs leading-5 text-slate-300">
-                                                {entry.reasoning || "本节点没有返回独立文本。"}
-                                              </p>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      </details>
-                                    )}
-                                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                                      <h4 className="text-sm font-semibold text-white">风险备注</h4>
-                                      <p className="mt-2 rounded-xl bg-slate-950/60 p-3 text-xs leading-5 text-slate-300">
-                                        {decision.risk_notes || "本次没有明显风险备注。"}
-                                      </p>
-                                    </div>
-                                  </div>
-                                </TableCell>
-                              </TableRow>
-                            )}
-                          </Fragment>
-                        );
-                      })
-                    )}
-                  </TableBody>
-                </Table>
-                <p className="mt-3 text-[11px] text-slate-500">当前筛选返回 {decisions.length} 条记录。</p>
               </CardContent>
             </Card>
-          </div>
 
-          <div className="space-y-6">
-            <Card className="border-white/10 bg-slate-900/60">
+            {/* ═══ 4. 决策链路追踪 ═══════════════════════════════════════ */}
+            <Card className="border-slate-700/50 bg-slate-950/60">
               <CardHeader className="pb-2">
-                <CardTitle className="flex items-center gap-2 text-sm text-white">
-                  <PieChart className="h-4 w-4 text-fuchsia-300" />
-                  历史建议分布
-                </CardTitle>
-                <p className="text-xs text-slate-500">统计系统最终给出的建议，不是底层策略的原始信号。</p>
+                <CardTitle className="text-sm flex items-center gap-2"><ScrollText className="w-4 h-4 text-cyan-400" />决策链路追踪</CardTitle>
               </CardHeader>
               <CardContent>
-                {signalPieData.length === 0 ? (
-                  <div className="py-10 text-center text-xs text-slate-500">暂无数据</div>
-                ) : (
-                  <ResponsiveContainer width="100%" height={220}>
-                    <RPieChart>
-                      <Pie data={signalPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={78}>
-                        {signalPieData.map((entry, index) => (
-                          <Cell key={entry.raw} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid rgba(255,255,255,.12)", borderRadius: "12px", fontSize: "12px" }} />
-                      <Legend />
-                    </RPieChart>
-                  </ResponsiveContainer>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="border-white/10 bg-slate-900/60">
-              <CardHeader className="pb-2">
-                <CardTitle className="flex items-center gap-2 text-sm text-white">
-                  <TrendingUp className="h-4 w-4 text-cyan-300" />
-                  置信度趋势
-                </CardTitle>
-                <p className="text-xs text-slate-500">最近 30 条决策的 confidence。</p>
-              </CardHeader>
-              <CardContent>
-                {confidenceTrendData.length === 0 ? (
-                  <div className="py-10 text-center text-xs text-slate-500">暂无数据</div>
-                ) : (
-                  <ResponsiveContainer width="100%" height={210}>
-                    <LineChart data={confidenceTrendData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,.16)" />
-                      <XAxis dataKey="time" stroke="#64748b" fontSize={10} />
-                      <YAxis stroke="#64748b" fontSize={10} domain={[0, 100]} />
-                      <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid rgba(255,255,255,.12)", borderRadius: "12px", fontSize: "12px" }} />
-                      <Line type="monotone" dataKey="confidence" stroke="#22d3ee" strokeWidth={2.5} dot={false} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="border-cyan-400/15 bg-slate-900/60">
-              <CardHeader className="pb-2">
-                <CardTitle className="flex items-center gap-2 text-sm text-white">
-                  <Shield className="h-4 w-4 text-cyan-300" />
-                  最近执行审计
-                </CardTitle>
-                <p className="text-xs text-slate-500">只展示 OrderIntent、风控和模拟盘执行相关记录。</p>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {intentAudits.length === 0 ? (
-                  <div className="rounded-xl border border-white/10 bg-slate-950/35 p-4 text-xs leading-5 text-slate-500">
-                    暂无执行审计。展开一条决策并生成 OrderIntent 后，这里会显示最近记录。
-                  </div>
-                ) : (
-                  intentAudits.map((row) => (
-                    <div key={row.id} className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-mono text-xs text-cyan-100">{row.action}</p>
-                          <p className="mt-1 font-mono text-[11px] text-slate-500">{row.symbol}</p>
-                        </div>
-                        <Badge className={cn("border text-[10px]", orderIntentStatusClass(row.details?.intent?.status))}>
-                          {orderIntentStatusLabel(row.details?.intent?.status)}
-                        </Badge>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {chainSteps.map(s => (
+                    <div key={s.label} className={`rounded-xl border p-3 ${s.ok ? "border-green-500/30 bg-green-500/5" : s.veto ? "border-red-500/30 bg-red-500/5" : "border-slate-800 bg-slate-900/30"}`}>
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-[9px] text-slate-500">{s.label}</p>
+                        {s.ok ? <CheckCircle className="w-3 h-3 text-green-400" /> : s.veto ? <Shield className="w-3 h-3 text-red-400" /> : <Minus className="w-3 h-3 text-slate-500" />}
                       </div>
-                      <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-400">
-                        <p>方向：<span className="font-mono text-slate-200">{row.details?.intent?.side || "flat"}</span></p>
-                        <p>仓位：<span className="font-mono text-slate-200">{formatPercent(row.details?.intent?.positionRatio ?? row.details?.intent?.position_pct)}</span></p>
-                        <p>价格：<span className="font-mono text-slate-200">{formatMoney(row.details?.price)}</span></p>
-                        <p>数量：<span className="font-mono text-slate-200">{formatMoney(row.details?.sizing?.quantity)}</span></p>
-                      </div>
-                      <p className="mt-2 text-[10px] text-slate-500">
-                        {row.created_at ? new Date(row.created_at).toLocaleString() : "--"}
-                      </p>
+                      <p className="text-[10px] text-slate-400">{s.info}</p>
                     </div>
-                  ))
-                )}
+                  ))}
+                </div>
               </CardContent>
             </Card>
-          </div>
-        </div>
 
-        {!loading && !stats && decisions.length === 0 && (
-          <div className="flex items-center justify-center py-8 text-xs text-slate-500">
-            统计卡片暂无数据，页面不会使用模拟数据补位。
-          </div>
+            {/* ═══ 5. 决策历史 ═══════════════════════════════════════════ */}
+            <Card className="border-slate-700/50 bg-slate-950/60">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">决策历史 <span className="text-[10px] text-slate-500 font-normal">最近 20 条 · 点击切换</span></CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                  {history.map(item => (
+                    <div key={item.id} onClick={() => fetchDetail(item.id)}
+                      className={`rounded-xl border p-3 cursor-pointer transition-colors ${selectedId === item.id ? "border-cyan-500/50 bg-cyan-500/10" : "border-slate-800 bg-slate-900/30 hover:border-slate-700"}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-[10px] font-mono text-slate-600">#{item.id}</span>
+                          <span className="text-xs font-semibold text-slate-200">{item.symbol}</span>
+                          {signalBadge(item.final_signal)}
+                          {item.risk_veto && <Badge className="bg-red-500/15 text-red-400 text-[10px]">否决</Badge>}
+                        </div>
+                        <span className="text-[10px] text-slate-500 shrink-0">{fmtTime(item.timestamp)}</span>
+                      </div>
+                      {item.summary && <p className="mt-1.5 text-[11px] text-slate-400 line-clamp-2">{item.summary}</p>}
+                      <div className="flex items-center gap-3 mt-1 text-[10px] text-slate-500">
+                        <span>置信度 {fmtPct(item.confidence)}</span>
+                        {item.vote_breakdown && (
+                          <span>🟢{(item.vote_breakdown.bullish ?? 0) * 100}% / 🔴{(item.vote_breakdown.bearish ?? 0) * 100}%</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          </>
         )}
-      </main>
-    </div>
+      </div>
+    </>
   );
 }

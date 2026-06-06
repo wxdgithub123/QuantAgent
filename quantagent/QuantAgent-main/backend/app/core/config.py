@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     BINANCE_API_KEY: str = ""
     BINANCE_SECRET_KEY: str = ""
     BINANCE_PRIVATE_KEY_PATH: str = ""
-    SYMBOLS: List[str] = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"]
+    SYMBOLS: List[str] = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT", "XRPUSDT"]
     
     # CoinGecko API
     COINGECKO_API_KEY: str = ""

@@ -34,7 +34,7 @@ import WeightEvolutionChart from "@/components/replay/WeightEvolutionChart";
 // Dynamic import with SSR disabled to avoid hydration mismatch with localStorage state
 const ReplayContent = dynamic(() => Promise.resolve(ReplayContentWithHydrationFix), {
   ssr: false,
-  loading: () => <div className="min-h-screen bg-background flex items-center justify-center text-muted-foreground">Loading Replay...</div>
+  loading: () => <div className="min-h-screen bg-background flex items-center justify-center text-muted-foreground">加载回放...</div>
 });
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -349,7 +349,7 @@ function ReplayPageContent() {
 
 export default function ReplayPage() {
   return (
-    <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><p className="text-muted-foreground">Loading...</p></div>}>
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><p className="text-muted-foreground">加载中...</p></div>}>
       <ReplayPageContent />
     </Suspense>
   );
@@ -1439,23 +1439,15 @@ function ReplayContentWithHydrationFix() {
       const strategyType = safeSession?.strategy_type;
       
       // Debug: log session info
-      console.log('[DynamicSelectionHistory] fetchDynamicSelectionHistory called:', {
-        isPolling,
-        sessionId,
-        strategyType,
-        running,
-        hasSession: !!safeSession,
-      });
+      // console.log({ isPolling, sessionId, strategyType, running, hasSession: !!safeSession });
       
       if (!sessionId) {
-        console.warn('[DynamicSelectionHistory] No sessionId available, skipping fetch');
         if (!isPolling) setDynamicSelectionHistory([]);
         return;
       }
       
       // Only fetch for dynamic_selection strategy type
       if (strategyType !== 'dynamic_selection') {
-        console.log('[DynamicSelectionHistory] Strategy type is not dynamic_selection, skipping fetch');
         return;
       }
 
@@ -1470,14 +1462,10 @@ function ReplayContentWithHydrationFix() {
           return;
         }
         const data = await res.json();
-        console.log('[DynamicSelectionHistory] Fetched data:', {
-          recordCount: Array.isArray(data) ? data.length : 0,
-          isArray: Array.isArray(data),
-        });
+        // console.log({ recordCount: Array.isArray(data) ? data.length : 0, isArray: Array.isArray(data) });
         if (Array.isArray(data)) {
           setDynamicSelectionHistory(data);
         } else {
-          console.warn("DynamicSelectionHistory: API返回非数组类型", typeof data);
           setDynamicSelectionHistory([]);
         }
       } catch (err: any) {
@@ -1493,7 +1481,6 @@ function ReplayContentWithHydrationFix() {
     let intervalId: number | null = null;
     // Only poll when running AND strategy_type is dynamic_selection
     const shouldPoll = running && safeSession?.strategy_type === 'dynamic_selection' && safeSession?.replay_session_id;
-    console.log('[DynamicSelectionHistory] Polling setup:', { shouldPoll, running, strategyType: safeSession?.strategy_type });
     if (shouldPoll) {
       intervalId = window.setInterval(() => fetchDynamicSelectionHistory(true), 5000);
     }

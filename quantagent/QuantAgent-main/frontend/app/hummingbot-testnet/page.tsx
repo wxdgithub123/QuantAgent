@@ -283,7 +283,7 @@ export default function HummingbotTestnetPage() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <AppTopNav
-        activeSection="hummingbot"
+        activeSection="hummingbot-testnet"
         title="测试网机器人"
         subtitle="Testnet Perpetual Bot 管理"
         rightSlot={

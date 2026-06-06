@@ -2229,7 +2229,7 @@ function BacktestPageContent() {
                         <table className="w-full min-w-[1180px] text-xs">
                           <thead className="sticky top-0 bg-card">
                             <tr className="border-b border-border">
-                              {["tradeId", "symbol", "side", "entryTime", "entryPrice", "exitTime", "exitPrice", "quantity", "fee", "slippage", "realizedPnl", "realizedPnlPct", "source", "关联ID", "跳转"].map(h => (
+                              {["交易ID", "交易对", "方向", "入场时间", "入场价", "出场时间", "出场价", "数量", "手续费", "滑点", "已实现盈亏", "盈亏%", "来源", "关联ID", "跳转"].map(h => (
                                 <th key={h} className="px-3 py-2 text-left text-muted-foreground font-medium">{h}</th>
                               ))}
                             </tr>
@@ -3629,7 +3629,7 @@ function BacktestPageContent() {
 
 export default function BacktestPage() {
   return (
-    <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><p className="text-muted-foreground">Loading...</p></div>}>
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><p className="text-muted-foreground">加载中...</p></div>}>
       <BacktestPageContent />
     </Suspense>
   );

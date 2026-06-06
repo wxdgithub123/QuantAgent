@@ -355,7 +355,8 @@ export default function SignalsPage() {
     fetchFactorDefinitions();
     fetchFactorCatalog();
     fetchStrategyAssets();
-  }, [fetchFactors, fetchEvents, fetchSummary, fetchFactorDefinitions, fetchFactorCatalog, fetchStrategyAssets]);
+    fetchSeries();
+  }, [fetchFactors, fetchEvents, fetchSummary, fetchFactorDefinitions, fetchFactorCatalog, fetchStrategyAssets, fetchSeries]);
 
   const pieData = summary ? Object.entries(summary.by_signal_type || {}).map(([k, v]) => ({ name: k, value: v })) : [];
   const strategyBarData = summary ? Object.entries(summary.by_strategy || {}).map(([k, v]) => ({ name: k, count: v })) : [];
@@ -736,15 +737,14 @@ export default function SignalsPage() {
                     <TableHead className="text-muted-foreground text-xs">因子</TableHead>
                     <TableHead className="text-muted-foreground text-xs">类型</TableHead>
                     <TableHead className="text-muted-foreground text-xs">值</TableHead>
-                    <TableHead className="text-muted-foreground text-xs">计算来源</TableHead>
-                    <TableHead className="text-muted-foreground text-xs">上游来源</TableHead>
+                    <TableHead className="text-muted-foreground text-xs">数据来源</TableHead>
                     <TableHead className="text-muted-foreground text-xs">时间</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {factors.length === 0 ? (
                     <TableRow className="border-border">
-                      <TableCell colSpan={7} className="text-center text-muted-foreground py-10 text-sm">暂无因子快照数据</TableCell>
+                      <TableCell colSpan={6} className="text-center text-muted-foreground py-10 text-sm">暂无因子快照数据</TableCell>
                     </TableRow>
                   ) : (
                     factors.map((f) => {
@@ -765,15 +765,11 @@ export default function SignalsPage() {
                             {formatFactorValue(f.factor_value)}
                             {definition?.unit ? <span className="ml-1 text-[10px] text-muted-foreground">{definition.unit}</span> : null}
                           </TableCell>
-                          <TableCell className="text-muted-foreground text-xs">
-                            <div>{formatSourceLabel(f.source)}</div>
-                            {f.interval ? <div className="mt-0.5 text-[10px] text-muted-foreground/70">{f.interval}</div> : null}
+                          <TableCell className="text-muted-foreground text-[11px]">
+                            <div>{formatProviderLabel(f.provider) || formatSourceLabel(f.source) || "—"}</div>
+                            {f.interval && <div className="mt-0.5 text-[10px] text-muted-foreground/60">{f.interval} 周期</div>}
                           </TableCell>
-                          <TableCell className="text-muted-foreground text-xs">
-                            <div>{formatProviderLabel(f.provider)}</div>
-                            <div className="mt-0.5 text-[10px] text-muted-foreground/70">{formatSourceLabel(f.data_source)}</div>
-                          </TableCell>
-                          <TableCell className="text-muted-foreground text-[11px]">{f.timestamp ? new Date(f.timestamp).toLocaleString() : "-"}</TableCell>
+                          <TableCell className="text-muted-foreground text-[11px]">{f.timestamp ? new Date(f.timestamp).toLocaleString() : "—"}</TableCell>
                         </TableRow>
                       );
                     })
@@ -789,7 +785,7 @@ export default function SignalsPage() {
             <div className="flex items-center gap-3 flex-wrap">
               <Filter className="w-4 h-4 text-muted-foreground" />
               <input
-                placeholder="Symbol" value={filterSymbol} onChange={(e) => setFilterSymbol(e.target.value.toUpperCase())}
+                placeholder="交易对" value={filterSymbol} onChange={(e) => setFilterSymbol(e.target.value.toUpperCase())}
                 className="bg-secondary border border-border text-foreground/90 text-xs rounded px-2 py-1.5 w-40"
               />
               <Select value={filterSignalType} onValueChange={setFilterSignalType}>
@@ -809,7 +805,7 @@ export default function SignalsPage() {
               <Table>
                 <TableHeader className="bg-card">
                   <TableRow className="border-border">
-                    <TableHead className="text-muted-foreground text-xs">Symbol</TableHead>
+                    <TableHead className="text-muted-foreground text-xs">交易对</TableHead>
                     <TableHead className="text-muted-foreground text-xs">信号</TableHead>
                     <TableHead className="text-muted-foreground text-xs">置信度</TableHead>
                     <TableHead className="text-muted-foreground text-xs">策略</TableHead>
@@ -923,7 +919,7 @@ export default function SignalsPage() {
           <TabsContent value="series" className="space-y-4">
             <div className="flex items-center gap-3 flex-wrap">
               <input
-                placeholder="Symbol" value={seriesSymbol} onChange={(e) => setSeriesSymbol(e.target.value.toUpperCase())}
+                placeholder="交易对" value={seriesSymbol} onChange={(e) => setSeriesSymbol(e.target.value.toUpperCase())}
                 className="bg-secondary border border-border text-foreground/90 text-xs rounded px-2 py-1.5 w-36"
               />
               <input

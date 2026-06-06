@@ -177,28 +177,20 @@ class PipelineStore:
         } for s in snapshots]
 
         df = pd.DataFrame(rows)
-        written = 0
         try:
-            # INSERT OR IGNORE via left-anti join
-            existing = conn.sql("SELECT indicator, timestamp FROM macro_indicators").df()
-            if not existing.empty:
-                merged = df.merge(existing, on=["indicator", "timestamp"], how="left", indicator=True)
-                new_rows = merged[merged["_merge"] == "left_only"].drop(columns=["_merge"])
-            else:
-                new_rows = df
-
-            if not new_rows.empty:
-                conn.sql("""
-                    INSERT INTO macro_indicators (
-                        indicator, value, source, timestamp, event_time, available_time,
-                        as_of_time, provider, source_version, schema_version, metadata, ingested_at
-                    )
-                    SELECT indicator, value, source, timestamp, event_time, available_time,
-                           as_of_time, provider, source_version, schema_version, metadata, ingested_at
-                    FROM new_rows
-                """)
-                written = len(new_rows)
-            return written
+            # Delete old rows for the fetched indicators, then insert fresh
+            indicators_str = ", ".join(f"'{i}'" for i in df["indicator"].unique())
+            conn.execute(f"DELETE FROM macro_indicators WHERE indicator IN ({indicators_str})")
+            conn.sql("""
+                INSERT INTO macro_indicators (
+                    indicator, value, source, timestamp, event_time, available_time,
+                    as_of_time, provider, source_version, schema_version, metadata, ingested_at
+                )
+                SELECT indicator, value, source, timestamp, event_time, available_time,
+                       as_of_time, provider, source_version, schema_version, metadata, ingested_at
+                FROM df
+            """)
+            return len(df)
         except Exception as e:
             logger.error(f"Macro upsert failed: {e}")
             return 0
@@ -223,7 +215,7 @@ class PipelineStore:
             if start:
                 conditions.append(f"timestamp >= '{start.isoformat()}'")
             if end:
-                conditions.append(f"timestamp <= '{end.isoformat()}'")
+                conditions.append(f"COALESCE(available_time, timestamp) <= '{end.isoformat()}'")
             where = " AND ".join(conditions)
             result = conn.sql(f"""
                 SELECT indicator, value, source, timestamp, event_time, available_time,
@@ -343,8 +335,9 @@ class PipelineStore:
         symbol: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        end: datetime | None = None,
     ) -> List[Dict[str, Any]]:
-        """Query recent news, optionally filtered by symbol."""
+        """Query recent news, optionally filtered by symbol and end time."""
         self._ensure_tables()
         conn = _get_conn()
         if conn is None:
@@ -358,10 +351,15 @@ class PipelineStore:
                        source_version, schema_version, raw_payload_id, metadata
                 FROM news_articles
             """
+            conditions = []
             if symbol:
                 candidates = self._symbol_candidates(symbol)
                 checks = " OR ".join(f"list_contains(symbols, '{candidate}')" for candidate in candidates)
-                base += f" WHERE ({checks})"
+                conditions.append(f"({checks})")
+            if end:
+                conditions.append(f"COALESCE(available_time, published_at) <= '{end.isoformat()}'")
+            if conditions:
+                base += " WHERE " + " AND ".join(conditions)
             base += f" ORDER BY published_at DESC LIMIT {limit} OFFSET {offset}"
             result = conn.sql(base)
             return result.df().to_dict(orient="records")

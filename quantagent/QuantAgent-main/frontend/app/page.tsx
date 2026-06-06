@@ -140,7 +140,7 @@ const FALLBACK_STEPS: ClosedLoopStep[] = [
   status: "pending",
   latestUpdateTime: null,
   sampleId: null,
-  shortDescription: "数据暂不可用，已展示页面结构。",
+  shortDescription: "后端数据接口暂未响应，请检查后端服务是否已启动。",
   relatedPageUrl: "/monitor",
   relatedApi: "/api/v1/system/demo-overview",
   evidenceCount: 0,
@@ -159,7 +159,7 @@ const FALLBACK_PRD: PrdAcceptancePhase[] = [
     ].map((name) => ({
       name,
       status: "pending",
-      evidence: "等待系统返回验收证据",
+      evidence: "后端暂未响应，刷新页面重试",
       jumpLink: "/monitor",
       note: "后端数据暂不可用时使用该兜底状态。",
     })),
@@ -178,7 +178,7 @@ const FALLBACK_PRD: PrdAcceptancePhase[] = [
     ].map((name) => ({
       name,
       status: "pending",
-      evidence: "等待系统返回验收证据",
+      evidence: "后端暂未响应，刷新页面重试",
       jumpLink: "/monitor",
       note: "后端数据暂不可用时使用该兜底状态。",
     })),
@@ -290,7 +290,7 @@ export default function DemoHomePage() {
       setOverview(data);
     } catch {
       setOverview(null);
-      setNotice("数据暂不可用，已展示页面结构。请稍后刷新或先进入各功能页查看缓存数据。");
+      setNotice("后端数据接口暂未响应，请检查后端服务是否已启动。请稍后刷新或先进入各功能页查看缓存数据。");
     } finally {
       setLoading(false);
     }
@@ -321,9 +321,9 @@ export default function DemoHomePage() {
       </div>
 
       <AppTopNav
-        activeSection="none"
+        activeSection="home"
         title="QuantAgent OS"
-        subtitle="AI-Native Quantitative Trading Platform"
+        subtitle="闭环演示总览"
         rightSlot={
           <Button
             variant="outline"

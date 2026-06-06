@@ -16,16 +16,20 @@ logger = logging.getLogger(__name__)
 
 # Indicator definitions: (canonical_name, source, OpenBB series_id | None)
 FRED_INDICATORS = [
-    ("fed_funds_rate", "fred", "FEDFUNDS"),
-    ("treasury_10y", "fred", "DGS10"),
-    ("inflation_expect", "fred", "T10YIE"),
-    ("m2_money_supply", "fred", "M2SL"),
+    ("fed_funds_rate",      "fred", "FEDFUNDS"),
+    ("treasury_10y",        "fred", "DGS10"),
+    ("inflation_expect",    "fred", "T10YIE"),
+    ("m2_money_supply",     "fred", "M2SL"),
+    ("cpi",                 "fred", "CPIAUCSL"),
+    ("core_cpi",            "fred", "CPILFESL"),
+    ("gdp",                 "fred", "GDP"),
+    ("unemployment",        "fred", "UNRATE"),
+    ("retail_sales",        "fred", "RSAFS"),
+    ("industrial_production", "fred", "INDPRO"),
+    ("consumer_sentiment",  "fred", "UMCSENT"),
 ]
 
-OECD_INDICATORS = [
-    ("cpi", "oecd"),
-    ("unemployment", "oecd"),
-]
+OECD_INDICATORS = []  # FRED covers all needed indicators
 
 
 class MacroAdapter:

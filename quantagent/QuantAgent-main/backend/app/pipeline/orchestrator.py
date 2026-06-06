@@ -96,7 +96,7 @@ class PipelineOrchestrator:
 
     async def _ingest_news(self):
         try:
-            articles = await news_adapter.fetch_all(limit=4)
+            articles = await news_adapter.fetch_all(limit=12)
             if articles:
                 n = pipeline_store.upsert_news(articles)
                 logger.info(f"[pipeline] News: {n} new of {len(articles)} articles stored")
@@ -114,7 +114,7 @@ class PipelineOrchestrator:
 
     async def run_news_now(self) -> Dict[str, Any]:
         try:
-            articles = await news_adapter.fetch_all(limit=6)
+            articles = await news_adapter.fetch_all(limit=20)
             n = pipeline_store.upsert_news(articles)
             return {"written": n, "total": len(articles)}
         except Exception as e:

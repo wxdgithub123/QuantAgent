@@ -627,6 +627,13 @@ class OpenBBDataService:
             "treasury_10y": "DGS10",
             "inflation_expect": "T10YIE",
             "m2_money_supply": "M2SL",
+            "cpi": "CPIAUCSL",
+            "core_cpi": "CPILFESL",
+            "gdp": "GDP",
+            "unemployment": "UNRATE",
+            "retail_sales": "RSAFS",
+            "industrial_production": "INDPRO",
+            "consumer_sentiment": "UMCSENT",
         }
         series_map = series_map or default_series
         if not await self.ensure_initialized():

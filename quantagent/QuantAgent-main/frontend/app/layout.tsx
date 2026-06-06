@@ -4,8 +4,8 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 export const metadata: Metadata = {
-  title: "QuantAgent",
-  description: "Quantitative trading platform",
+  title: "QuantAgent OS - 量化交易平台",
+  description: "AI驱动的多因子量化交易与策略回测系统",
 };
 
 export default function RootLayout({
@@ -14,7 +14,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
+    <html lang="zh-CN" className="dark" suppressHydrationWarning>
       <body className="antialiased">
         <ThemeProvider>
           {children}

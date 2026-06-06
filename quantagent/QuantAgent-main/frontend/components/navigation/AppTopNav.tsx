@@ -1,15 +1,16 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import {
   Activity,
-  BarChart,
   BarChart3,
   Brain,
   ChevronDown,
   Database,
   History,
+  Home,
   Layers,
   MessageSquareText,
   Server,
@@ -18,6 +19,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import Breadcrumb from "@/components/navigation/Breadcrumb";
 
 type ActiveSection =
   | "overview"
@@ -33,12 +35,14 @@ type ActiveSection =
   | "agents"
   | "diagnostics"
   | "hummingbot"
+  | "hummingbot-testnet"
   | "terminal"
   | "strategies"
   | "strategies-monitor"
   | "profiles"
   | "monitor"
-  | "none";
+  | "home"
+  | "none"
 
 interface AppTopNavProps {
   activeSection?: ActiveSection;
@@ -48,35 +52,39 @@ interface AppTopNavProps {
 }
 
 const PRIMARY_NAV_LINKS = [
-  { href: "/dashboard", label: "总览", icon: BarChart3, activeKey: "overview" },
-  { href: "/data-sources", label: "数据源", icon: Database, activeKey: "data-sources" },
-  { href: "/dashboard?tab=positions", label: "模拟盘", icon: Wallet, activeKey: "paper" },
-  { href: "/decisions", label: "决策中心", icon: Brain, activeKey: "decisions" },
-] as const;
+  { href: "/", label: "首页", icon: Home, activeKey: "home" as const },
+  { href: "/dashboard", label: "总览", icon: BarChart3, activeKey: "overview" as const },
+  { href: "/data-sources", label: "数据源", icon: Database, activeKey: "data-sources" as const },
+  { href: "/decisions", label: "决策中心", icon: Brain, activeKey: "decisions" as const },
+];
 
 const MORE_NAV_GROUPS = [
   {
-    title: "研究与复盘",
+    title: "量化研究",
     links: [
-      { href: "/analytics", label: "绩效分析", icon: BarChart, activeKey: "analytics", desc: "收益、回撤、归因和风险指标" },
-      { href: "/backtest", label: "策略回测", icon: History, activeKey: "backtest", desc: "参数、回测任务" },
-      { href: "/replay", label: "历史回放", icon: History, activeKey: "replay", desc: "决策复盘" },
-      { href: "/audit", label: "回测审计", icon: Shield, activeKey: "audit", desc: "回测、回放、审计追踪与结果对比" },
-      { href: "/signals", label: "因子/信号", icon: Layers, activeKey: "signals", desc: "标准化因子与信号" },
-      { href: "/strategies", label: "策略库", icon: BarChart, activeKey: "strategies", desc: "策略模板与参数优化" },
-      { href: "/strategies/monitor", label: "策略监控", icon: Activity, activeKey: "strategies-monitor", desc: "动态维度打分与仓位权重" },
-      { href: "/profiles", label: "策略方案库", icon: Layers, activeKey: "profiles", desc: "策略配置方案管理" },
-      { href: "/dashboard?tab=agents", label: "智能体面板", icon: Brain, activeKey: "agents", desc: "子 Agent 状态与手动分析" },
+      { href: "/signals", label: "因子/信号", icon: Layers, activeKey: "signals" as const, desc: "技术因子与策略信号" },
+      { href: "/backtest", label: "策略回测", icon: History, activeKey: "backtest" as const, desc: "历史回测与参数优化" },
+      { href: "/strategies", label: "策略库", icon: Activity, activeKey: "strategies" as const, desc: "策略模板与监控" },
+      { href: "/replay", label: "历史回放", icon: History, activeKey: "replay" as const, desc: "时间轴回放与复盘" },
+      { href: "/analytics", label: "绩效分析", icon: BarChart3, activeKey: "analytics" as const, desc: "收益、回撤与风险指标" },
     ],
   },
   {
-    title: "执行与运维",
+    title: "交易执行",
     links: [
-      { href: "/trades", label: "交易流水", icon: Activity, activeKey: "trades", desc: "模拟订单记录" },
-      { href: "/dashboard?tab=diagnostics", label: "系统状态", icon: Database, activeKey: "diagnostics", desc: "数据链路、缓存与服务健康" },
-      { href: "/hummingbot", label: "执行服务", icon: Server, activeKey: "hummingbot", desc: "Hummingbot 管理中心" },
-      { href: "/hummingbot-testnet", label: "测试网机器人", icon: Server, activeKey: "hummingbot", desc: "Testnet Paper Bot" },
-      { href: "/terminal", label: "对话分析", icon: MessageSquareText, activeKey: "terminal", desc: "自然语言分析入口" },
+      { href: "/dashboard?tab=positions", label: "模拟交易", icon: Wallet, activeKey: "paper" as const, desc: "模拟盘持仓与下单" },
+      { href: "/trades", label: "交易流水", icon: Activity, activeKey: "trades" as const, desc: "成交记录查询" },
+      { href: "/hummingbot", label: "执行服务", icon: Server, activeKey: "hummingbot" as const, desc: "Hummingbot 机器人管理" },
+      { href: "/hummingbot-testnet", label: "测试网", icon: Server, activeKey: "hummingbot-testnet" as const, desc: "Testnet 纸交易" },
+    ],
+  },
+  {
+    title: "审计与工具",
+    links: [
+      { href: "/audit", label: "审计台", icon: Shield, activeKey: "audit" as const, desc: "决策追踪与合规审计" },
+      { href: "/profiles", label: "策略方案", icon: Layers, activeKey: "profiles" as const, desc: "策略配置方案管理" },
+      { href: "/terminal", label: "对话分析", icon: MessageSquareText, activeKey: "terminal" as const, desc: "自然语言交互分析" },
+      { href: "/dashboard?tab=diagnostics", label: "系统状态", icon: Database, activeKey: "diagnostics" as const, desc: "数据链路与服务健康" },
     ],
   },
 ];
@@ -84,31 +92,35 @@ const MORE_NAV_GROUPS = [
 export function AppTopNav({
   activeSection = "none",
   title = "QuantAgent OS",
-  subtitle = "AI-Native Quantitative Trading",
+  subtitle = "AI驱动量化交易平台",
   rightSlot,
 }: AppTopNavProps) {
+  const pathname = usePathname();
   const moreActive = MORE_NAV_GROUPS.some((group) =>
     group.links.some((item) => item.activeKey === activeSection)
   );
 
   return (
-    <header className="sticky top-0 z-40 border-b border-border bg-card/50 backdrop-blur-sm">
+    <>
+      <header className="sticky top-0 z-40 border-b border-border bg-card/50 backdrop-blur-sm">
       <div className="container mx-auto px-4 py-3">
         <div className="flex items-center justify-between gap-4">
-          <div className="flex min-w-0 items-center gap-3">
+          {/* Logo & Title */}
+          <Link href="/" className="flex min-w-0 items-center gap-3 hover:opacity-80 transition-opacity">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-purple-600">
               <BarChart3 className="h-5 w-5 text-white" />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 hidden sm:block">
               <h1 className="truncate text-lg font-bold text-foreground">{title}</h1>
               <p className="truncate text-[10px] text-muted-foreground">{subtitle}</p>
             </div>
-          </div>
+          </Link>
 
-          <nav className="hidden min-w-0 flex-1 items-center justify-center gap-2 overflow-hidden md:flex">
+          {/* Desktop Nav */}
+          <nav className="hidden min-w-0 flex-1 items-center justify-center gap-1 overflow-hidden md:flex">
             {PRIMARY_NAV_LINKS.map((item) => {
               const Icon = item.icon;
-              const isActive = activeSection === item.activeKey;
+              const isActive = activeSection === item.activeKey || (item.href === "/" && pathname === "/");
               return (
                 <Link
                   key={item.href}
@@ -136,7 +148,7 @@ export function AppTopNav({
                   }`}
                 >
                   <ChevronDown className="h-3.5 w-3.5" />
-                  更多功能
+                  更多
                 </Button>
               </PopoverTrigger>
               <PopoverContent align="end" sideOffset={8} className="w-80 border-border bg-card p-3">
@@ -173,6 +185,7 @@ export function AppTopNav({
             </Popover>
           </nav>
 
+          {/* Mobile Nav */}
           <div className="flex md:hidden">
             <Popover>
               <PopoverTrigger asChild>
@@ -197,7 +210,7 @@ export function AppTopNav({
                     </p>
                     {PRIMARY_NAV_LINKS.map((item) => {
                       const Icon = item.icon;
-                      const isActive = activeSection === item.activeKey;
+                      const isActive = activeSection === item.activeKey || (item.href === "/" && pathname === "/");
                       return (
                         <Link
                           key={item.href}
@@ -250,5 +263,7 @@ export function AppTopNav({
         </div>
       </div>
     </header>
+    <Breadcrumb />
+    </>
   );
 }

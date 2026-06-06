@@ -9,10 +9,13 @@ the main backend, preserving OpenBB as the unified data entry.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import json
 import sys
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -91,6 +94,12 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     with a native TradingAgentsGraph call without changing the main backend.
     """
     mode = os.getenv("TRADINGAGENTS_MODE", "context_adapter").strip().lower()
+    if req.fast and mode in {"quantagent_patched_graph", "quantagent_graph", "patched_graph"}:
+        fetched_ctx = await _fetch_quantagent_context(req)
+        if fetched_ctx:
+            req.analysis_context = fetched_ctx
+        mode = "context_adapter"
+
     if mode in {"quantagent_patched_graph", "quantagent_graph", "patched_graph"}:
         if not _TA_GRAPH_AVAILABLE or TradingAgentsGraph is None or TradingAgentsConfig is None:
             return AnalyzeResponse(
@@ -102,6 +111,8 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         try:
             return await asyncio.to_thread(_run_quantagent_patched_graph, req, mode)
         except Exception as exc:  # pragma: no cover - depends on LLM/runtime
+            import traceback
+            logger.error("[analyze] Exception: %s\n%s", exc, traceback.format_exc())
             return AnalyzeResponse(
                 status="error",
                 symbol=req.symbol,
@@ -119,6 +130,10 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     macro = ctx.get("macro_events") or []
     news = ctx.get("news_events") or []
     factors = ctx.get("latest_factors") or {}
+    signals = signals if isinstance(signals, list) else []
+    macro = macro if isinstance(macro, list) else []
+    news = news if isinstance(news, list) else []
+    factors = factors if isinstance(factors, dict) else {}
 
     bullish = 0.0
     bearish = 0.0
@@ -126,8 +141,8 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     confidence_samples: List[float] = []
 
     for signal in signals[:20]:
-        value = str(signal.get("signal_type") or "").upper()
-        confidence = _safe_float(signal.get("confidence"), 0.5)
+        value = _signal_type(signal)
+        confidence = _signal_confidence(signal)
         confidence_samples.append(confidence)
         if value in {"BUY", "LONG", "LONG_REVERSAL"}:
             bullish += confidence
@@ -167,22 +182,6 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     if confidence_samples:
         confidence = min(0.95, max(confidence, sum(confidence_samples) / len(confidence_samples)))
 
-    reports = [
-        {
-            "role": "tradingagents_context_adapter",
-            "opinion": decision.lower(),
-            "confidence": round(confidence, 3),
-            "risk_flag": risk_flagged,
-            "reasoning": "TradingAgents isolated service consumed the PRD AnalysisContext from the main OpenBB backend.",
-            "key_points": [
-                f"signals={len(signals)}",
-                f"macro_events={len(macro)}",
-                f"news_events={len(news)}",
-                f"tradingagents_library_available={_TA_GRAPH_AVAILABLE}",
-            ],
-        }
-    ]
-
     llm_raw: Optional[Dict[str, Any]] = None
     llm_error: Optional[str] = None
     llm_provider = _llm_provider()
@@ -201,14 +200,6 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 key_points = llm_raw.get("key_points")
                 if not isinstance(key_points, list):
                     key_points = []
-                reports.insert(0, {
-                    "role": f"tradingagents_{llm_provider}_decision",
-                    "opinion": decision.lower(),
-                    "confidence": round(confidence, 3),
-                    "risk_flag": risk_flagged,
-                    "reasoning": str(llm_raw.get("reasoning") or f"{llm_provider} refined the TradingAgents context decision."),
-                    "key_points": [str(point) for point in key_points[:6]],
-                })
         except Exception as exc:  # pragma: no cover - network/runtime fallback
             llm_error = str(exc)[:300]
 
@@ -220,6 +211,15 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             f"vote={vote}; risk_flagged={risk_flagged}; "
             f"library_available={_TA_GRAPH_AVAILABLE}"
         )
+    )
+    reports = _build_context_adapter_reports(
+        req=req,
+        ctx=ctx,
+        vote=vote,
+        decision=decision,
+        confidence=confidence,
+        risk_flagged=risk_flagged,
+        llm_raw=llm_raw,
     )
 
     return AnalyzeResponse(
@@ -243,8 +243,407 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             "ollama_enabled": _ollama_enabled(),
             "ollama_model": os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b"),
             "input_snapshot_ids": ctx.get("input_snapshot_ids") or {},
+            "internal_chain": _reports_to_internal_chain(reports),
         },
     )
+
+
+async def _fetch_quantagent_context(req: AnalyzeRequest) -> Dict[str, Any]:
+    """Fetch a compact AnalysisContext from the main backend for fast decisions."""
+    ctx = req.analysis_context or {}
+    backend_url = ctx.get("backend_api_url") or os.getenv("QUANTAGENT_BACKEND_URL", "")
+    if not backend_url or ctx.get("bars") or ctx.get("latest_factors"):
+        return ctx
+
+    snap_url = f"{backend_url.rstrip('/')}/api/v1/market/research-snapshot/{req.symbol}"
+    try:
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
+            response = await client.get(snap_url, params={"interval": req.interval or "1h"})
+            response.raise_for_status()
+            snap = response.json()
+    except Exception as exc:
+        logger.warning("[quantagent] Fast context fetch failed: %s", exc)
+        return ctx
+
+    return {
+        "symbol": req.symbol,
+        "ticker": req.symbol,
+        "timeframe": req.interval or "1h",
+        "bars": snap.get("bar_panel", {}).get("rows", snap.get("bars", [])),
+        "latest_factors": {
+            f["name"]: f["value"]
+            for f in snap.get("factors", [])
+            if isinstance(f, dict) and "name" in f
+        },
+        "recent_signals": snap.get("signals", []),
+        "news_events": snap.get("news_panel", snap.get("news_events", [])),
+        "macro_events": snap.get("macro_events", []),
+        "as_of_time": snap.get("as_of_time"),
+        "input_snapshot_ids": snap.get("input_snapshot_ids", {}),
+        "data_versions": snap.get("data_versions", {}),
+    }
+
+
+def _signal_type(signal: Any) -> str:
+    if not isinstance(signal, dict):
+        return ""
+    return str(
+        signal.get("signal_type")
+        or signal.get("type")
+        or signal.get("signal")
+        or signal.get("rawFactorName")
+        or ""
+    ).upper()
+
+
+def _signal_confidence(signal: Any) -> float:
+    if not isinstance(signal, dict):
+        return 0.5
+    return _safe_float(
+        signal.get("confidence", signal.get("conf", signal.get("strength", 0.5))),
+        0.5,
+    )
+
+
+def _opinion_from_score(score: float, positive: str = "bullish", negative: str = "bearish") -> str:
+    if score >= 0.12:
+        return positive
+    if score <= -0.12:
+        return negative
+    return "wait"
+
+
+def _signal_stats(signals: List[Dict[str, Any]]) -> Dict[str, Any]:
+    buy_score = 0.0
+    sell_score = 0.0
+    wait_score = 0.0
+    buy_count = 0
+    sell_count = 0
+    wait_count = 0
+    strategies: List[str] = []
+    for signal in signals[:30]:
+        value = _signal_type(signal)
+        conf = _signal_confidence(signal)
+        strategy = ""
+        if isinstance(signal, dict):
+            strategy = str(signal.get("strategy") or signal.get("source_strategy") or signal.get("strategy_id") or "")
+        if strategy and strategy not in strategies:
+            strategies.append(strategy)
+        if value in {"BUY", "LONG", "LONG_REVERSAL"}:
+            buy_count += 1
+            buy_score += conf
+        elif value in {"SELL", "SHORT", "SHORT_REVERSAL"}:
+            sell_count += 1
+            sell_score += conf
+        else:
+            wait_count += 1
+            wait_score += conf
+    total = buy_score + sell_score + wait_score
+    balance = (buy_score - sell_score) / total if total > 0 else 0.0
+    return {
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "wait_count": wait_count,
+        "buy_score": round(buy_score, 3),
+        "sell_score": round(sell_score, 3),
+        "wait_score": round(wait_score, 3),
+        "balance": round(balance, 3),
+        "strategies": strategies[:6],
+    }
+
+
+def _factor_summary(factors: Dict[str, Any]) -> List[str]:
+    keys = [
+        "close",
+        "last_close",
+        "sma_5",
+        "sma_20",
+        "sma_60",
+        "ema_12",
+        "ema_26",
+        "rsi_14",
+        "macd_dif",
+        "macd_dea",
+        "macd_hist",
+        "atr_14",
+        "boll_pct_b",
+        "news_sentiment_mean",
+    ]
+    parts: List[str] = []
+    for key in keys:
+        if key in factors and factors.get(key) is not None:
+            parts.append(f"{key}={_safe_float(factors.get(key)):.4g}")
+    return parts[:10]
+
+
+def _event_text(event: Any) -> str:
+    if not isinstance(event, dict):
+        return str(event)[:120]
+    for key in ("title", "headline", "summary", "description", "event", "indicator"):
+        value = event.get(key)
+        if value:
+            return str(value)[:160]
+    return json.dumps(event, ensure_ascii=False, default=str)[:160]
+
+
+def _top_event_texts(events: List[Dict[str, Any]], limit: int = 4) -> List[str]:
+    return [_event_text(event) for event in events[:limit]]
+
+
+def _macro_summary(events: List[Dict[str, Any]]) -> List[str]:
+    items: List[str] = []
+    for event in events[:8]:
+        if not isinstance(event, dict):
+            continue
+        indicator = event.get("indicator") or event.get("name") or event.get("series")
+        value = event.get("value")
+        as_of = event.get("as_of_time") or event.get("date") or event.get("timestamp")
+        if indicator:
+            suffix = f" @ {as_of}" if as_of else ""
+            items.append(f"{indicator}={value}{suffix}")
+    return items[:6]
+
+
+def _build_context_adapter_reports(
+    req: AnalyzeRequest,
+    ctx: Dict[str, Any],
+    vote: Dict[str, float],
+    decision: str,
+    confidence: float,
+    risk_flagged: bool,
+    llm_raw: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    signals = ctx.get("recent_signals") or []
+    macro = ctx.get("macro_events") or []
+    news = ctx.get("news_events") or []
+    factors = ctx.get("latest_factors") or {}
+    signals = signals if isinstance(signals, list) else []
+    macro = macro if isinstance(macro, list) else []
+    news = news if isinstance(news, list) else []
+    factors = factors if isinstance(factors, dict) else {}
+
+    stats = _signal_stats(signals)
+    macro_bias = _macro_bias(macro)
+    news_bias = _news_bias(news)
+    market_opinion = _opinion_from_score(float(stats["balance"]))
+    macro_opinion = _opinion_from_score(macro_bias)
+    news_opinion = _opinion_from_score(news_bias)
+    final_opinion = decision.lower()
+    factor_points = _factor_summary(factors)
+    news_points = _top_event_texts(news)
+    macro_points = _macro_summary(macro)
+    chain = "AnalysisContext / OpenBB / CCXT / ClickHouse / L5 factor signals"
+    llm_reasoning = ""
+    llm_points: List[str] = []
+    if isinstance(llm_raw, dict):
+        llm_reasoning = str(llm_raw.get("reasoning") or "")
+        raw_points = llm_raw.get("key_points")
+        if isinstance(raw_points, list):
+            llm_points = [str(point) for point in raw_points[:6]]
+
+    def report(
+        role: str,
+        label: str,
+        phase: str,
+        opinion: str,
+        role_confidence: float,
+        reasoning: str,
+        key_points: List[str],
+        risk_flag: bool = False,
+    ) -> Dict[str, Any]:
+        return {
+            "role": role,
+            "label": label,
+            "phase": phase,
+            "opinion": opinion,
+            "confidence": round(_clamp(role_confidence, 0.0, 0.95), 3),
+            "risk_flag": risk_flag,
+            "reasoning": _trim_text(reasoning, 8000),
+            "key_points": [str(point) for point in key_points if str(point).strip()][:8],
+            "data_source_chain": chain,
+            "available": True,
+        }
+
+    position_ratio = 0.0 if decision == "WAIT" else round(min(confidence, 0.5), 3)
+    bullish_case = (
+        f"Bull case: {stats['buy_count']} BUY-like signals with score {stats['buy_score']}; "
+        f"positive macro/news contribution is macro={max(macro_bias, 0.0):.3f}, news={max(news_bias, 0.0):.3f}. "
+        f"Strategies sampled: {', '.join(stats['strategies']) or 'none'}."
+    )
+    bearish_case = (
+        f"Bear case: {stats['sell_count']} SELL-like signals with score {stats['sell_score']}; "
+        f"risk and negative context are risk_flagged={risk_flagged}, macro={min(macro_bias, 0.0):.3f}, "
+        f"news={min(news_bias, 0.0):.3f}. Factor snapshot: {', '.join(factor_points) or 'no compact factors'}."
+    )
+    final_reasoning = llm_reasoning or (
+        f"Final TradingAgents context decision is {decision} with confidence {confidence:.2f}. "
+        f"Vote breakdown: bullish={vote.get('bullish', 0.0):.3f}, bearish={vote.get('bearish', 0.0):.3f}, "
+        f"neutral={vote.get('neutral', 0.0):.3f}; risk_flagged={risk_flagged}."
+    )
+
+    return [
+        report(
+            "tradingagents_market_analyst",
+            "Market Analyst",
+            "analysts",
+            market_opinion,
+            max(confidence, abs(float(stats["balance"]))),
+            (
+                f"Market analyst reviewed {len(signals)} strategy signals and the compact factor snapshot. "
+                f"BUY={stats['buy_count']} SELL={stats['sell_count']} WAIT={stats['wait_count']}; "
+                f"score balance={stats['balance']}. Factors: {', '.join(factor_points) or 'no compact factors'}."
+            ),
+            [f"signals={len(signals)}", f"balance={stats['balance']}", *factor_points[:4]],
+        ),
+        report(
+            "tradingagents_news_analyst",
+            "News Analyst",
+            "analysts",
+            news_opinion,
+            0.5 + min(abs(news_bias), 0.4),
+            (
+                f"News analyst reviewed {len(news)} news events. Average news bias={news_bias:.3f}. "
+                f"Representative items: {' | '.join(news_points) or 'no news events in compact context'}."
+            ),
+            [f"news_events={len(news)}", f"news_bias={news_bias:.3f}", *news_points[:3]],
+        ),
+        report(
+            "tradingagents_sentiment_analyst",
+            "Sentiment Analyst",
+            "analysts",
+            news_opinion,
+            0.5 + min(abs(news_bias), 0.35),
+            (
+                f"Sentiment analyst summarized event sentiment and derived factor sentiment. "
+                f"news_bias={news_bias:.3f}; news_sentiment_mean={factors.get('news_sentiment_mean', 'n/a')}."
+            ),
+            [f"news_bias={news_bias:.3f}", f"news_sentiment_mean={factors.get('news_sentiment_mean', 'n/a')}"],
+        ),
+        report(
+            "tradingagents_fundamentals_analyst",
+            "Fundamentals/Macro Analyst",
+            "analysts",
+            macro_opinion,
+            0.5 + min(abs(macro_bias), 0.4),
+            (
+                f"Macro analyst reviewed {len(macro)} macro events. macro_bias={macro_bias:.3f}. "
+                f"Macro sample: {' | '.join(macro_points) or 'no macro events in compact context'}."
+            ),
+            [f"macro_events={len(macro)}", f"macro_bias={macro_bias:.3f}", *macro_points[:3]],
+        ),
+        report(
+            "tradingagents_bull_researcher",
+            "Bull Researcher",
+            "debate",
+            "bullish",
+            max(0.45, vote.get("bullish", 0.0)),
+            bullish_case,
+            [f"bullish_vote={vote.get('bullish', 0.0):.3f}", f"buy_signals={stats['buy_count']}"],
+        ),
+        report(
+            "tradingagents_bear_researcher",
+            "Bear Researcher",
+            "debate",
+            "bearish",
+            max(0.45, vote.get("bearish", 0.0)),
+            bearish_case,
+            [f"bearish_vote={vote.get('bearish', 0.0):.3f}", f"sell_signals={stats['sell_count']}"],
+            risk_flag=risk_flagged,
+        ),
+        report(
+            "tradingagents_research_manager",
+            "Research Manager",
+            "debate",
+            final_opinion,
+            confidence,
+            (
+                f"Research manager reconciled bull/bear/neutral evidence into {decision}. "
+                f"Votes: {json.dumps(vote, ensure_ascii=False)}."
+            ),
+            [f"decision={decision}", f"confidence={confidence:.3f}"],
+        ),
+        report(
+            "tradingagents_trader",
+            "Trader",
+            "plan",
+            final_opinion,
+            confidence,
+            (
+                f"Trader converts the research conclusion into an executable plan. "
+                f"Action={decision}; position_ratio={position_ratio}; "
+                f"{'no order intent for WAIT' if decision == 'WAIT' else 'small position sized by confidence and account limits'}."
+            ),
+            [f"action={decision}", f"position_ratio={position_ratio}"],
+        ),
+        report(
+            "tradingagents_aggressive_risk_analyst",
+            "Aggressive Risk Analyst",
+            "risk",
+            "buy" if decision == "BUY" and not risk_flagged else final_opinion,
+            confidence,
+            (
+                f"Aggressive risk lens checks whether upside justifies taking risk. "
+                f"risk_flagged={risk_flagged}; bullish_vote={vote.get('bullish', 0.0):.3f}; "
+                f"recommended_action={decision}."
+            ),
+            [f"risk_flagged={risk_flagged}", f"bullish_vote={vote.get('bullish', 0.0):.3f}"],
+            risk_flag=risk_flagged,
+        ),
+        report(
+            "tradingagents_conservative_risk_analyst",
+            "Conservative Risk Analyst",
+            "risk",
+            "wait" if risk_flagged or decision == "WAIT" else final_opinion,
+            max(confidence, 0.55 if risk_flagged or decision == "WAIT" else confidence),
+            (
+                f"Conservative risk lens prioritizes capital preservation. "
+                f"WAIT is preferred when evidence is mixed or risk is elevated. "
+                f"risk_flagged={risk_flagged}; neutral_vote={vote.get('neutral', 0.0):.3f}."
+            ),
+            [f"neutral_vote={vote.get('neutral', 0.0):.3f}", f"risk_flagged={risk_flagged}"],
+            risk_flag=risk_flagged,
+        ),
+        report(
+            "tradingagents_neutral_risk_analyst",
+            "Neutral Risk Analyst",
+            "risk",
+            final_opinion,
+            confidence,
+            (
+                f"Neutral risk lens balances opportunity and drawdown. "
+                f"The current balanced recommendation is {decision} with confidence {confidence:.2f}."
+            ),
+            [f"decision={decision}", f"confidence={confidence:.3f}"],
+        ),
+        report(
+            "tradingagents_final_judge",
+            "Final Judge",
+            "coordinator",
+            final_opinion,
+            confidence,
+            final_reasoning,
+            [f"llm_used={bool(llm_raw)}", f"tradingagents_library_available={_TA_GRAPH_AVAILABLE}", *llm_points],
+            risk_flag=risk_flagged,
+        ),
+    ]
+
+
+def _reports_to_internal_chain(reports: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    chain: List[Dict[str, Any]] = []
+    for index, report in enumerate(reports, start=1):
+        chain.append(
+            {
+                "index": index,
+                "phase": report.get("phase") or "context_adapter",
+                "role": report.get("role"),
+                "label": report.get("label"),
+                "opinion": report.get("opinion"),
+                "confidence": report.get("confidence"),
+                "available": True,
+                "reasoning": report.get("reasoning") or "",
+            }
+        )
+    return chain
 
 
 @app.get("/native/preview/{symbol}")
@@ -389,7 +788,7 @@ def _run_native_graph(req: AnalyzeRequest) -> AnalyzeResponse:
         symbol=req.symbol,
         decision=decision,
         confidence=round(confidence, 3),
-        reasoning=_trim_text(reasoning, 1200),
+        reasoning=_trim_text(reasoning, 8000),
         analyst_reports=reports,
         vote_breakdown=_vote_from_decision(decision),
         risk_flagged=bool(rec.get("warning_message")),
@@ -437,10 +836,34 @@ def _run_quantagent_patched_graph(req: AnalyzeRequest, mode: str) -> AnalyzeResp
         debug=os.getenv("TRADINGAGENTS_PATCHED_DEBUG", "false").lower() in {"1", "true", "yes", "on"},
         config=config,
     )
+    # Fetch full analysis context from backend if not provided (minimal payload workaround)
+    ctx = req.analysis_context or {}
+    backend_url = ctx.get("backend_api_url") or os.getenv("QUANTAGENT_BACKEND_URL", "")
+    if backend_url and (not ctx.get("bars") and not ctx.get("latest_factors")):
+        try:
+            import urllib.request, json as _json
+            snap_url = f"{backend_url}/api/v1/market/research-snapshot/{req.symbol}?interval={req.interval or '1h'}"
+            with urllib.request.urlopen(snap_url, timeout=30) as resp:
+                snap = _json.loads(resp.read())
+            ctx = {
+                "symbol": req.symbol,
+                "ticker": req.symbol,  # TradingAgents graph uses 'ticker' key
+                "timeframe": req.interval or "1h",
+                "bars": snap.get("bar_panel", {}).get("rows", snap.get("bars", [])),
+                "latest_factors": {f["name"]: f["value"] for f in snap.get("factors", [])},
+                "recent_signals": snap.get("signals", []),
+                "news_events": snap.get("news_panel", snap.get("news_events", [])),
+                "macro_events": snap.get("macro_events", []),
+                "as_of_time": snap.get("as_of_time"),
+                "input_snapshot_ids": snap.get("input_snapshot_ids", {}),
+                "data_versions": snap.get("data_versions", {}),
+            }
+        except Exception as e:
+            logger.warning("[quantagent] Failed to fetch analysis context from backend: %s", e)
     state, recommendation = graph.propagate(
         req.symbol,
         trade_date,
-        analysis_context=req.analysis_context or {},
+        analysis_context=ctx,
     )
     rec = recommendation.model_dump(mode="json") if hasattr(recommendation, "model_dump") else {}
     signal = str(rec.get("signal") or "HOLD").upper()
@@ -457,7 +880,7 @@ def _run_quantagent_patched_graph(req: AnalyzeRequest, mode: str) -> AnalyzeResp
         symbol=req.symbol,
         decision=decision,
         confidence=round(confidence, 3),
-        reasoning=_trim_text(reasoning, 1200),
+        reasoning=_trim_text(reasoning, 8000),
         analyst_reports=reports,
         vote_breakdown=_vote_from_decision(decision),
         risk_flagged=bool(rec.get("warning_message")) or decision == "WAIT",
@@ -488,9 +911,11 @@ def _native_selected_analysts(value: Optional[List[str]]) -> List[str]:
         for part in os.getenv("TRADINGAGENTS_NATIVE_ANALYSTS", "market,news").split(",")
         if part.strip()
     ]
+    # ── 4 analysts supported by TradingAgentsGraph ──
+    # bull/bear/trader/risk are internal graph nodes (debate rounds, risk mgmt), not analyst types
     allowed = {"market", "social", "news", "fundamentals"}
     analysts = [item for item in raw if item in allowed]
-    return analysts or ["market", "news"]
+    return analysts or ["market", "news", "social", "fundamentals"]
 
 
 def _patched_selected_analysts(value: Optional[List[str]]) -> List[str]:
@@ -502,6 +927,7 @@ def _patched_selected_analysts(value: Optional[List[str]]) -> List[str]:
         ).split(",")
         if part.strip()
     ]
+    # ── 4 analysts supported by TradingAgentsGraph ──
     allowed = {"market", "social", "news", "fundamentals"}
     analysts = [item for item in raw if item in allowed]
     return analysts or ["market", "news", "social", "fundamentals"]
@@ -591,7 +1017,7 @@ def _native_reports_from_state(state: Any, decision: str, confidence: float) -> 
     ]
     reports: List[Dict[str, Any]] = []
     for role, label, content in fields:
-        text = _trim_text(str(content or "").strip(), 900)
+        text = _trim_text(str(content or "").strip(), 8000)
         if not text:
             continue
         reports.append(
@@ -623,7 +1049,7 @@ def _patched_reports_from_state(state: Any, decision: str, confidence: float) ->
     ]
     reports: List[Dict[str, Any]] = []
     for role, label, content in fields:
-        text = _trim_text(str(content or "").strip(), 900)
+        text = _trim_text(str(content or "").strip(), 8000)
         if not text:
             continue
         reports.append(
@@ -919,7 +1345,7 @@ def _reports_from_fields(
 ) -> List[Dict[str, Any]]:
     reports: List[Dict[str, Any]] = []
     for role, label, content in fields:
-        text = _trim_text(str(content or "").strip(), 900)
+        text = _trim_text(str(content or "").strip(), 8000)
         if not text:
             continue
         reports.append(
@@ -1023,7 +1449,7 @@ def _patched_internal_chain_from_state(state: Any, decision: str, confidence: fl
     ]
     chain: List[Dict[str, Any]] = []
     for index, (phase, role, label, content) in enumerate(entries, start=1):
-        text = _trim_text(str(content or "").strip(), 1200)
+        text = _trim_text(str(content or "").strip(), 8000)
         chain.append(
             {
                 "index": index,
