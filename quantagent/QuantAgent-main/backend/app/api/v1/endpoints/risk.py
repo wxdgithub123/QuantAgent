@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Dict, Any
 from app.services.risk_manager import risk_manager
-from app.models.db_models import AuditLog
 from app.services.database import get_db
+from app.services.audit_service import audit_service
 import logging
 
 router = APIRouter()
@@ -35,16 +35,17 @@ async def update_risk_config(new_config: Dict[str, float]):
     # 记录审计日志
     try:
         async with get_db() as session:
-            audit = AuditLog(
+            await audit_service.add_event(
+                session,
                 action="RISK_CONFIG_UPDATE",
                 user_id="system",
                 resource="risk_manager",
                 details={
+                    "eventType": "RISK_CONFIG_UPDATE",
                     "old": old_config,
                     "new": new_config
                 }
             )
-            session.add(audit)
             await session.commit()
     except Exception as e:
         logger.warning(f"Failed to log risk config update: {e}")

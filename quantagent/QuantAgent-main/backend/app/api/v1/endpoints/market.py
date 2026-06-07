@@ -871,7 +871,15 @@ async def coordinate_agents(
         )
         canonical_symbol = Instrument.from_raw(symbol).symbol
         result = await coordinator.coordinate(canonical_symbol, interval)
-        return result.to_dict()
+        payload = result.to_dict()
+        if payload.get("data_source") == "error":
+            raise HTTPException(
+                status_code=503,
+                detail=payload.get("summary") or "TradingAgents service returned an error",
+            )
+        return payload
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()

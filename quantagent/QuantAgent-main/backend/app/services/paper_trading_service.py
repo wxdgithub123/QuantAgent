@@ -19,9 +19,9 @@ from app.models.db_models import (
     PaperAccountReplay,
     PaperPosition,
     PaperTrade,
-    AuditLog,
     EquitySnapshot,
 )
+from app.services.audit_service import audit_service
 from app.services.risk_manager import risk_manager
 from app.services.exchange_service import exchange_service
 
@@ -85,6 +85,164 @@ class PaperTradingService:
             return int(parts[1])
         except ValueError:
             return None
+
+    def _execution_audit_payload(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: Decimal,
+        price: Decimal,
+        fee: Optional[Decimal],
+        status: str,
+        order_id: Optional[str] = None,
+        order_intent_id: Optional[str] = None,
+        benchmark_price: Optional[float] = None,
+        pnl: Optional[Decimal] = None,
+        new_position_qty: Optional[Decimal] = None,
+        source: str = "paper",
+        mode: str = "paper",
+        session_id: Optional[str] = None,
+        order_type: str = "MARKET",
+        slippage: Optional[float] = None,
+        filled_at: Optional[datetime] = None,
+        risk_result: Optional[Any] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        decision_id = self._decision_id_from_order_intent(order_intent_id)
+        risk_payload: Dict[str, Any] = {"passed": True, "allowed": True}
+        if risk_result is not None:
+            risk_payload = {
+                "passed": bool(getattr(risk_result, "allowed", False)),
+                "allowed": bool(getattr(risk_result, "allowed", False)),
+                "rule": getattr(risk_result, "rule", None),
+                "reason": getattr(risk_result, "reason", None),
+                "blockedReason": getattr(risk_result, "reason", None),
+            }
+        execution_result = {
+            "orderId": order_id,
+            "order_id": order_id,
+            "status": status,
+            "source": source,
+            "executionMode": mode,
+            "side": side,
+            "quantity": float(quantity),
+            "fillPrice": float(price),
+            "price": float(price),
+            "benchmarkPrice": benchmark_price,
+            "fee": float(fee) if fee is not None else None,
+            "realizedPnl": float(pnl) if pnl is not None else None,
+            "pnl": float(pnl) if pnl is not None else None,
+            "slippage": slippage,
+            "filledAt": filled_at.isoformat() if filled_at else None,
+            "positionAfterTrade": (
+                {"symbol": symbol, "quantity": float(new_position_qty)}
+                if new_position_qty is not None
+                else None
+            ),
+        }
+        payload = {
+            "symbol": symbol,
+            "decisionId": decision_id,
+            "sourceDecisionId": decision_id,
+            "orderIntentId": order_intent_id,
+            "orderId": order_id,
+            "order_id": order_id,
+            "replaySessionId": session_id,
+            "replay_session_id": session_id,
+            "executionMode": mode,
+            "asOfTime": filled_at.isoformat() if filled_at else None,
+            "action": side,
+            "source": source,
+            "intent": {
+                "id": order_intent_id,
+                "intent_id": order_intent_id,
+                "symbol": symbol,
+                "action": side,
+                "side": side,
+                "quantity": float(quantity),
+                "order_type": order_type,
+                "sourceDecisionId": decision_id,
+                "decision_id": decision_id,
+                "executionMode": mode,
+                "status": status,
+            },
+            "riskCheckResult": risk_payload,
+            "executionResult": execution_result,
+        }
+        if extra:
+            payload.update(extra)
+        return payload
+
+    async def _audit_risk_blocked(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        reason: str,
+        rule: str,
+        client_order_id: Optional[str],
+        mode: str,
+        session_id: Optional[str],
+        order_type: str,
+        leverage: int,
+    ) -> None:
+        decision_id = self._decision_id_from_order_intent(client_order_id)
+        await audit_service.log_event(
+            action="RISK_BLOCKED",
+            user_id="system",
+            resource=symbol,
+            details={
+                "symbol": symbol,
+                "decisionId": decision_id,
+                "sourceDecisionId": decision_id,
+                "orderIntentId": client_order_id,
+                "replaySessionId": session_id,
+                "replay_session_id": session_id,
+                "executionMode": mode,
+                "action": side,
+                "intent": {
+                    "id": client_order_id,
+                    "intent_id": client_order_id,
+                    "symbol": symbol,
+                    "action": side,
+                    "side": side,
+                    "quantity": quantity,
+                    "order_type": order_type,
+                    "sourceDecisionId": decision_id,
+                    "decision_id": decision_id,
+                    "executionMode": mode,
+                    "status": "BLOCKED",
+                },
+                "riskCheckResult": {
+                    "passed": False,
+                    "allowed": False,
+                    "rule": rule,
+                    "reason": reason,
+                    "blockedReason": reason,
+                    "blocked_reason": reason,
+                    "checkedRules": [
+                        {
+                            "ruleName": rule,
+                            "passed": False,
+                            "message": reason,
+                        }
+                    ],
+                },
+                "requestedOrder": {
+                    "symbol": symbol,
+                    "side": side,
+                    "quantity": quantity,
+                    "price": price,
+                    "leverage": leverage,
+                    "order_type": order_type,
+                },
+            },
+            ip_address="internal",
+            raise_on_failure=True,
+        )
 
     # ─────────────────────────────────────────────────────────────
     # Account Balance
@@ -486,12 +644,26 @@ class PaperTradingService:
         max_notional_allowed = Decimal(str(total_portfolio)) * Decimal("1.05")
         
         if notional_value > max_notional_allowed:
-            raise ValueError(
+            block_reason = (
                 f"[核心风控拦截] 订单名义价值过大！"
                 f"请求名义价值: ${notional_value:.2f}, "
                 f"当前总资产: ${Decimal(str(total_portfolio)):.2f}。"
                 f"可能存在数量单位错误（如把 USDT 当成币种数量传入）。"
             )
+            await self._audit_risk_blocked(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price=price,
+                reason=block_reason,
+                rule="MAX_NOTIONAL_ABSOLUTE",
+                client_order_id=client_order_id,
+                mode=mode,
+                session_id=session_id,
+                order_type=order_type,
+                leverage=leverage,
+            )
+            raise ValueError(block_reason)
 
         # All local simulated execution paths must pass RiskGuard before fill.
         # This includes manual paper trading, Agent-driven intents, backtests,
@@ -509,7 +681,21 @@ class PaperTradingService:
                 leverage=leverage,
             )
             if not risk_result.allowed:
-                raise ValueError(f"[风控拦截] {risk_result.reason}")
+                block_reason = f"[风控拦截] {risk_result.reason}"
+                await self._audit_risk_blocked(
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    price=price,
+                    reason=block_reason,
+                    rule=getattr(risk_result, "rule", None) or "RISK_GUARD",
+                    client_order_id=client_order_id,
+                    mode=mode,
+                    session_id=session_id,
+                    order_type=order_type,
+                    leverage=leverage,
+                )
+                raise ValueError(block_reason)
         else:
             # 仅做最基本的可用资金检查
             qty_dec = Decimal(str(quantity))
@@ -538,7 +724,21 @@ class PaperTradingService:
                 if avail_dec < total_cost:
                     # 容忍 0.01 的浮点数舍入误差
                     if total_cost - avail_dec > Decimal("0.01"):
-                        raise ValueError(f"[资金不足] {side} 需 ${total_cost:.2f}，可用 ${avail_dec:.2f}")
+                        block_reason = f"[资金不足] {side} 需 ${total_cost:.2f}，可用 ${avail_dec:.2f}"
+                        await self._audit_risk_blocked(
+                            symbol=symbol,
+                            side=side,
+                            quantity=quantity,
+                            price=price,
+                            reason=block_reason,
+                            rule="INSUFFICIENT_FUNDS",
+                            client_order_id=client_order_id,
+                            mode=mode,
+                            session_id=session_id,
+                            order_type=order_type,
+                            leverage=leverage,
+                        )
+                        raise ValueError(block_reason)
         # ──────────────────────────────────────────────────────────────────
 
         qty_dec = Decimal(str(quantity))
@@ -632,29 +832,38 @@ class PaperTradingService:
                 created_at=now,
             )
             session.add(trade)
-
-            # Audit Log
-            audit = AuditLog(
-                action="ORDER_CREATE",
-                user_id="system",
-                resource=symbol,
-                details={
-                    "side": side,
-                    "type": order_type,
-                    "qty": float(qty_dec),
-                    "price": float(price_dec),
-                    "benchmark_price": float(benchmark_price),
-                    "pnl": float(pnl_record) if pnl_record is not None else None,
-                    "new_pos": float(new_qty),
-                },
-                ip_address="internal",
-                created_at=now,
-            )
-            session.add(audit)
-
             await session.flush()
             trade_id = trade.id
             created_at = trade.created_at
+            order_id = f"PT-{trade_id}"
+            slippage = float(price_dec - Decimal(str(benchmark_price)))
+            await audit_service.add_event(
+                session,
+                action="PAPER_ORDER_FILLED",
+                user_id="system",
+                resource=symbol,
+                details=self._execution_audit_payload(
+                    symbol=symbol,
+                    side=side,
+                    quantity=qty_dec,
+                    price=price_dec,
+                    fee=fee,
+                    status="FILLED",
+                    order_id=order_id,
+                    order_intent_id=client_order_id,
+                    benchmark_price=float(benchmark_price),
+                    pnl=pnl_record,
+                    new_position_qty=new_qty,
+                    source=self._source_from_trade(trade, mode=mode),
+                    mode=mode,
+                    session_id=session_id,
+                    order_type=order_type,
+                    slippage=slippage,
+                    filled_at=created_at or now,
+                    risk_result=risk_result if mode in {"paper", "backtest", "historical_replay"} else None,
+                ),
+                ip_address="internal",
+            )
 
         # Invalidate caches
         await redis_delete(REDIS_BALANCE_KEY)
@@ -724,16 +933,45 @@ class PaperTradingService:
                 )
 
             order.status = "CANCELED"
-
-            # Audit Log
-            audit = AuditLog(
-                action="ORDER_CANCEL",
+            await audit_service.add_event(
+                session,
+                action="PAPER_ORDER_REJECTED",
                 user_id="system",
                 resource=order.symbol,
-                details={"order_id": order.id},
+                details={
+                    "symbol": order.symbol,
+                    "decisionId": self._decision_id_from_order_intent(order.client_order_id),
+                    "sourceDecisionId": self._decision_id_from_order_intent(order.client_order_id),
+                    "orderIntentId": order.client_order_id,
+                    "orderId": order_id_str,
+                    "order_id": order_id_str,
+                    "replaySessionId": order.session_id,
+                    "replay_session_id": order.session_id,
+                    "executionMode": order.mode,
+                    "action": order.side,
+                    "intent": {
+                        "id": order.client_order_id,
+                        "intent_id": order.client_order_id,
+                        "symbol": order.symbol,
+                        "action": order.side,
+                        "side": order.side,
+                        "quantity": float(order.quantity),
+                        "order_type": order.order_type,
+                        "sourceDecisionId": self._decision_id_from_order_intent(order.client_order_id),
+                        "decision_id": self._decision_id_from_order_intent(order.client_order_id),
+                        "executionMode": order.mode,
+                        "status": "CANCELLED",
+                    },
+                    "executionResult": {
+                        "orderId": order_id_str,
+                        "order_id": order_id_str,
+                        "status": "CANCELED",
+                        "source": self._source_from_trade(order, mode=order.mode),
+                        "executionMode": order.mode,
+                    },
+                },
                 ip_address="internal",
             )
-            session.add(audit)
             await session.commit()
 
         return {"message": f"Order {order_id_str} canceled", "status": "CANCELED"}
@@ -902,23 +1140,31 @@ class PaperTradingService:
                     order.status = "FILLED"
                     order.pnl = pnl_record
 
-                    # Audit Log
-                    audit = AuditLog(
-                        action="ORDER_FILL",
+                    await audit_service.add_event(
+                        session,
+                        action="PAPER_ORDER_FILLED",
                         user_id="system",
                         resource=order.symbol,
-                        details={
-                            "order_id": order.id,
-                            "side": order.side,
-                            "qty": float(qty_dec),
-                            "fill_price": float(price_dec),
-                            "pnl": float(pnl_record)
-                            if pnl_record is not None
-                            else None,
-                        },
-                        created_at=now,
+                        details=self._execution_audit_payload(
+                            symbol=order.symbol,
+                            side=order.side,
+                            quantity=qty_dec,
+                            price=price_dec,
+                            fee=fee,
+                            status="FILLED",
+                            order_id=f"PT-{order.id}",
+                            order_intent_id=order.client_order_id,
+                            benchmark_price=float(order.benchmark_price) if order.benchmark_price else None,
+                            pnl=pnl_record,
+                            new_position_qty=new_qty,
+                            source=self._source_from_trade(order, mode=order.mode),
+                            mode=order.mode,
+                            session_id=order.session_id,
+                            order_type=order.order_type,
+                            filled_at=now,
+                            extra={"fillSource": "limit_price_match"},
+                        ),
                     )
-                    session.add(audit)
                     matched_any = True
 
                     # Trigger trade pair matching for limit order fill
@@ -1094,22 +1340,31 @@ class PaperTradingService:
                     order.status = "FILLED"
                     order.pnl = pnl_record
 
-                    # Audit Log
-                    audit = AuditLog(
-                        action="ORDER_FILL",
+                    await audit_service.add_event(
+                        session,
+                        action="PAPER_ORDER_FILLED",
                         user_id="system",
                         resource=symbol,
-                        details={
-                            "order_id": order.id,
-                            "side": order.side,
-                            "qty": float(qty_dec),
-                            "fill_price": float(exec_price),
-                            "source": "bar_price_match",
-                            "pnl": float(pnl_record) if pnl_record is not None else None,
-                        },
-                        created_at=now,
+                        details=self._execution_audit_payload(
+                            symbol=symbol,
+                            side=order.side,
+                            quantity=qty_dec,
+                            price=exec_price,
+                            fee=fee,
+                            status="FILLED",
+                            order_id=f"PT-{order.id}",
+                            order_intent_id=order.client_order_id,
+                            benchmark_price=float(order.benchmark_price) if order.benchmark_price else None,
+                            pnl=pnl_record,
+                            new_position_qty=new_qty,
+                            source="bar_price_match",
+                            mode=order.mode,
+                            session_id=order.session_id,
+                            order_type=order.order_type,
+                            filled_at=now,
+                            extra={"fillSource": "bar_price_match"},
+                        ),
                     )
-                    session.add(audit)
                     matched_any = True
 
                     logger.debug(

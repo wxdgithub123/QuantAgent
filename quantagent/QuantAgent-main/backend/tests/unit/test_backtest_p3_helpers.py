@@ -159,3 +159,20 @@ def test_risk_result_records_blocked_rule_without_generating_order_assumption():
     assert result["passed"] is False
     assert result["blockedReason"] == "blocked"
     assert len(result["checkedRules"]) == 2
+
+
+def test_risk_result_marks_unavailable_as_not_passed():
+    result = _risk_result_from_rows(
+        [
+            {
+                "ruleName": "RiskGuard unavailable",
+                "passed": False,
+                "unavailable": True,
+                "message": "RiskGuard preview was unavailable",
+            }
+        ]
+    )
+
+    assert result["passed"] is False
+    assert result["riskUnavailable"] is True
+    assert result["blockedReason"] == "RiskGuard preview was unavailable"

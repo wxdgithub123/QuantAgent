@@ -7,8 +7,7 @@ from typing import Dict, Any
 
 from app.core.config import settings
 from app.services.paper_trading_service import paper_trading_service
-from app.services.database import get_db
-from app.models.db_models import AuditLog
+from app.services.audit_service import audit_service
 
 logger = logging.getLogger(__name__)
 
@@ -117,15 +116,12 @@ class TradingWorker:
     async def _log_audit(self, action: str, resource: str, details: Dict[str, Any]):
         """Helper to log actions to AuditLog."""
         try:
-            async with get_db() as session:
-                audit = AuditLog(
-                    action=action,
-                    user_id="system",
-                    resource=resource,
-                    details=details
-                )
-                session.add(audit)
-                await session.commit()
+            await audit_service.log_event(
+                action=action,
+                user_id="system",
+                resource=resource,
+                details={"eventType": action, **details},
+            )
         except Exception as e:
             logger.warning(f"Failed to log audit event {action}: {e}")
 

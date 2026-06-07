@@ -547,7 +547,14 @@ class OrderIntentService:
                 "checked_at": datetime.now(timezone.utc).isoformat(),
             }
 
-    async def _audit(self, action: str, intent: OrderIntent, details: Dict[str, Any]) -> None:
+    async def _audit(
+        self,
+        action: str,
+        intent: OrderIntent,
+        details: Dict[str, Any],
+        *,
+        raise_on_failure: bool = False,
+    ) -> None:
         await audit_service.log_event(
             action=action,
             user_id="system",
@@ -560,12 +567,14 @@ class OrderIntentService:
                 **details,
             },
             ip_address="internal",
+            raise_on_failure=raise_on_failure,
         )
 
     async def _audit_once(self, action: str, intent: OrderIntent, details: Dict[str, Any]) -> None:
         if await self._has_audit_event(action, intent):
             return
-        await self._audit(action, intent, details)
+        critical = action in {"ORDER_INTENT_CREATED", "HOLD_RECORDED"} and details.get("stage") == "decision_evidence"
+        await self._audit(action, intent, details, raise_on_failure=critical)
 
     async def _has_audit_event(self, action: str, intent: OrderIntent) -> bool:
         try:

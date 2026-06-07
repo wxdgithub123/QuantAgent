@@ -11,7 +11,7 @@ from sqlalchemy import select, update, delete, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.database import get_db, get_db_session
-from app.models.db_models import AuditLog, ReplaySession, PaperTrade, PaperPosition, EquitySnapshot
+from app.models.db_models import ReplaySession, PaperTrade, PaperPosition, EquitySnapshot
 from app.models.trading import (
     ReplayCreateRequest, ReplaySessionResponse, ReplayStatusResponse,
     ReplayJumpRequest, ValidDateRangeResponse, ReplaySessionDetailResponse,
@@ -26,6 +26,7 @@ from app.services.historical_replay_adapter import HistoricalReplayAdapter
 from app.core.bus import TradingBusImpl, ReplayConfig, PaperExecutionRouter
 from app.services.strategy_runner_service import strategy_runner_service
 from app.services.paper_trading_service import paper_trading_service
+from app.services.audit_service import audit_service
 from app.strategies.ma_cross import MaCrossStrategy
 from app.strategies.signal_based_strategy import SignalBasedStrategy
 from app.services.indicators import ema as calc_ema_df, atr as calc_atr_df, donchian_channels as calc_donchian_df, ichimoku_cloud as calc_ichimoku_df
@@ -737,28 +738,31 @@ async def create_replay_session(
     )
 
     db.add(new_session)
-    db.add(
-        AuditLog(
-            action="REPLAY_SESSION_CREATE",
-            user_id="system",
-            resource=request.symbol,
-            details={
-                "replay_session_id": session_id,
-                "strategy_id": request.strategy_id,
-                "strategy_type": request.strategy_type,
-                "interval": interval,
-                "params": params_with_interval,
-                "params_hash": new_session.params_hash,
-                "start_time": _iso(start_utc),
-                "end_time": _iso(end_utc),
-                "initial_capital": request.initial_capital,
-                "data_source": "clickhouse:klines",
-                "range_min": _iso(range_info.get("min_date")),
-                "range_max": _iso(range_info.get("max_date")),
-                "backtestId": request.backtest_id,
-                "backtest_id": request.backtest_id,
-            },
-        )
+    await audit_service.add_event(
+        db,
+        action="REPLAY_SESSION_CREATE",
+        user_id="system",
+        resource=request.symbol,
+        details={
+            "eventType": "REPLAY_SESSION_CREATE",
+            "symbol": request.symbol,
+            "replaySessionId": session_id,
+            "replay_session_id": session_id,
+            "strategy_id": request.strategy_id,
+            "strategy_type": request.strategy_type,
+            "interval": interval,
+            "params": params_with_interval,
+            "params_hash": new_session.params_hash,
+            "start_time": _iso(start_utc),
+            "end_time": _iso(end_utc),
+            "initial_capital": request.initial_capital,
+            "data_source": "clickhouse:klines",
+            "range_min": _iso(range_info.get("min_date")),
+            "range_max": _iso(range_info.get("max_date")),
+            "backtestId": request.backtest_id,
+            "backtest_id": request.backtest_id,
+            "executionMode": "historical_replay",
+        },
     )
     await db.commit()
     
@@ -828,23 +832,28 @@ async def start_replay(
         # 3. Update status to running
         try:
             session.status = "running"
-            db.add(
-                AuditLog(
-                    action="REPLAY_SESSION_START",
-                    user_id="system",
-                    resource=session.symbol,
-                    details={
-                        "replay_session_id": replay_session_id,
-                        "strategy_id": session.strategy_id,
-                        "strategy_type": session.strategy_type,
-                        "params": session.params or {},
-                        "params_hash": session.params_hash,
-                        "start_time": _iso(session.start_time),
-                        "end_time": _iso(session.end_time),
-                        "speed": session.speed,
-                        "initial_capital": safe_finite_float(session.initial_capital, DEFAULT_INITIAL_CAPITAL),
-                    },
-                )
+            await audit_service.add_event(
+                db,
+                action="REPLAY_SESSION_START",
+                user_id="system",
+                resource=session.symbol,
+                details={
+                    "eventType": "REPLAY_SESSION_START",
+                    "symbol": session.symbol,
+                    "replaySessionId": replay_session_id,
+                    "replay_session_id": replay_session_id,
+                    "strategy_id": session.strategy_id,
+                    "strategy_type": session.strategy_type,
+                    "params": session.params or {},
+                    "params_hash": session.params_hash,
+                    "start_time": _iso(session.start_time),
+                    "end_time": _iso(session.end_time),
+                    "speed": session.speed,
+                    "initial_capital": safe_finite_float(session.initial_capital, DEFAULT_INITIAL_CAPITAL),
+                    "backtestId": session.backtest_id,
+                    "backtest_id": session.backtest_id,
+                    "executionMode": "historical_replay",
+                },
             )
             await db.commit()
             logger.info(f"Session {replay_session_id} status updated to running")
@@ -861,6 +870,7 @@ async def start_replay(
         strategy_params["initial_capital"] = safe_finite_float(session.initial_capital, DEFAULT_INITIAL_CAPITAL)
         symbol_val = session.symbol
         end_time_val = session.end_time
+        backtest_id_val = session.backtest_id
         # Get interval from params (default to 1m)
         interval_val = strategy_params.get("interval", "1m")
 
@@ -928,23 +938,26 @@ async def start_replay(
                         .where(ReplaySession.replay_session_id == replay_session_id)
                         .values(status="completed", current_timestamp=end_time_val)
                     )
-                    session_db.add(AuditLog(
+                    await audit_service.add_event(
+                        session_db,
                         action="REPLAY_COMPLETED",
                         user_id="system",
                         resource=symbol_val,
                         details={
                             "eventType": "REPLAY_COMPLETED",
+                            "symbol": symbol_val,
                             "replaySessionId": replay_session_id,
                             "replay_session_id": replay_session_id,
                             "strategy_type": strategy_type_val,
                             "interval": interval_val,
                             "backtestId": backtest_id_val,
                             "backtest_id": backtest_id_val,
+                            "executionMode": "historical_replay",
                             "buy_signals": getattr(strategy, '_total_buy_signals', 0) if hasattr(strategy, '_total_buy_signals') else 0,
                             "sell_signals": getattr(strategy, '_total_sell_signals', 0) if hasattr(strategy, '_total_sell_signals') else 0,
                             "bars_processed": getattr(strategy, '_total_bars_processed', 0) if hasattr(strategy, '_total_bars_processed') else 0,
                         },
-                    ))
+                    )
                     await session_db.commit()
                     
             except Exception as e:
@@ -958,21 +971,24 @@ async def start_replay(
                             .where(ReplaySession.replay_session_id == replay_session_id)
                             .values(status="failed")
                         )
-                        session_db.add(AuditLog(
+                        await audit_service.add_event(
+                            session_db,
                             action="REPLAY_FAILED",
                             user_id="system",
                             resource=symbol_val,
                             details={
                                 "eventType": "REPLAY_FAILED",
+                                "symbol": symbol_val,
                                 "replaySessionId": replay_session_id,
                                 "replay_session_id": replay_session_id,
                                 "strategy_type": strategy_type_val,
                                 "interval": interval_val,
                                 "backtestId": backtest_id_val,
                                 "backtest_id": backtest_id_val,
+                                "executionMode": "historical_replay",
                                 "error": str(e)[:1000],
                             },
-                        ))
+                        )
                         await session_db.commit()
                 except Exception as db_e:
                     logger.error(f"Failed to update session status to failed: {db_e}")
@@ -1753,25 +1769,29 @@ async def quick_backtest_from_session(
             .where(ReplaySession.replay_session_id == replay_session_id)
             .values(backtest_id=backtest_id)
         )
-        db.add(
-            AuditLog(
-                action="REPLAY_QUICK_BACKTEST_RUN",
-                user_id="system",
-                resource=symbol,
-                details={
-                    "replay_session_id": replay_session_id,
-                    "backtest_id": backtest_id,
-                    "strategy_type": strategy_type,
-                    "interval": interval,
-                    "params": strategy_params,
-                    "pit": pit_metadata,
-                    "metrics": {
-                        "total_return": metrics_dict["total_return"],
-                        "max_drawdown": metrics_dict["max_drawdown"],
-                        "total_trades": metrics_dict["total_trades"],
-                    },
+        await audit_service.add_event(
+            db,
+            action="REPLAY_QUICK_BACKTEST_RUN",
+            user_id="system",
+            resource=symbol,
+            details={
+                "eventType": "REPLAY_QUICK_BACKTEST_RUN",
+                "symbol": symbol,
+                "replaySessionId": replay_session_id,
+                "replay_session_id": replay_session_id,
+                "backtestId": backtest_id,
+                "backtest_id": backtest_id,
+                "strategy_type": strategy_type,
+                "interval": interval,
+                "params": strategy_params,
+                "pit": pit_metadata,
+                "executionMode": "quick_backtest",
+                "metrics": {
+                    "total_return": metrics_dict["total_return"],
+                    "max_drawdown": metrics_dict["max_drawdown"],
+                    "total_trades": metrics_dict["total_trades"],
                 },
-            )
+            },
         )
         await db.commit()
         

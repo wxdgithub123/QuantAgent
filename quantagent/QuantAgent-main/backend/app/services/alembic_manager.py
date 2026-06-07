@@ -78,7 +78,10 @@ class AlembicManager:
                     await asyncio.to_thread(command.stamp, cfg, "001_initial_schema")
                 else:
                     logger.info("No tables found — running baseline migration")
-                    await asyncio.to_thread(command.upgrade, cfg, "001")
+                    await asyncio.to_thread(command.upgrade, cfg, "001_initial_schema")
+
+                logger.info("Baseline is ready — running pending migrations to head")
+                await asyncio.to_thread(command.upgrade, cfg, "head")
             else:
                 logger.info(f"Current migration revision: {current_rev} — running pending migrations")
                 await asyncio.to_thread(command.upgrade, cfg, "head")

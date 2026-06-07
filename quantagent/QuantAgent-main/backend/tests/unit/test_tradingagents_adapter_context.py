@@ -1,3 +1,5 @@
+import pytest
+
 from app.agents.tradingagents_adapter import TradingAgentsAdapter
 
 
@@ -88,3 +90,63 @@ def test_compact_analysis_context_trims_only_high_cardinality_collections():
     assert compact["input_snapshot_ids"] == ctx["input_snapshot_ids"]
     assert compact["data_versions"] == ctx["data_versions"]
     assert compact["context_hash"].startswith("sha256:")
+
+
+@pytest.mark.asyncio
+async def test_run_analysis_uses_configured_service_url(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self, content_type=None):
+            return {
+                "status": "ok",
+                "decision": "BUY",
+                "confidence": 0.77,
+                "reasoning": "custom service ok",
+                "raw": {"input_snapshot_ids": {"factor_snapshot_ids": [1]}},
+            }
+
+    class FakeSession:
+        def __init__(self, *args, **kwargs):
+            captured["session_kwargs"] = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, json):
+            captured["url"] = url
+            captured["payload"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr("app.agents.tradingagents_adapter.aiohttp.ClientSession", FakeSession)
+
+    adapter = TradingAgentsAdapter(service_url="http://custom-ta:9123/", timeout_seconds=3)
+    result = await adapter.run_analysis(
+        symbol="BTCUSDT",
+        interval="1h",
+        analysis_context={
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "latest_factors": {"rsi_14": 42},
+            "recent_signals": [{"signal_type": "BUY"}],
+            "input_snapshot_ids": {"factor_snapshot_ids": [1]},
+        },
+        fast=True,
+    )
+
+    assert captured["url"] == "http://custom-ta:9123/analyze"
+    assert captured["payload"]["analysis_context"]["latest_factors"] == {"rsi_14": 42}
+    assert result is not None
+    assert result.data_source == "tradingagents-service"
+    assert result.input_snapshot_ids == {"factor_snapshot_ids": [1]}

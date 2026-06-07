@@ -89,9 +89,9 @@ async def health() -> Dict[str, Any]:
 async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     """Analyze a main-backend AnalysisContext.
 
-    The first implementation is a deterministic context adapter that preserves
-    the service boundary and response contract. It can be replaced internally
-    with a native TradingAgentsGraph call without changing the main backend.
+    ``fast=true`` is kept as an explicit quick research mode. It must be
+    surfaced to the frontend/audit chain as a context adapter result, not
+    mistaken for the full TradingAgentsGraph path.
     """
     mode = os.getenv("TRADINGAGENTS_MODE", "context_adapter").strip().lower()
     if req.fast and mode in {"quantagent_patched_graph", "quantagent_graph", "patched_graph"}:
@@ -232,7 +232,12 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         vote_breakdown=vote,
         risk_flagged=risk_flagged,
         raw={
-            "mode": os.getenv("TRADINGAGENTS_MODE", "context_adapter"),
+            "mode": "context_adapter",
+            "configured_mode": os.getenv("TRADINGAGENTS_MODE", "context_adapter"),
+            "execution_mode": "context_adapter",
+            "is_full_graph": False,
+            "strong_acceptance_eligible": False,
+            "mode_note": "Fast research mode used deterministic context aggregation plus one optional LLM call; it is not a full TradingAgentsGraph run.",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "tradingagents_available": _TA_GRAPH_AVAILABLE,
             "llm_provider": llm_provider,
@@ -886,6 +891,9 @@ def _run_quantagent_patched_graph(req: AnalyzeRequest, mode: str) -> AnalyzeResp
         risk_flagged=bool(rec.get("warning_message")) or decision == "WAIT",
         raw={
             "mode": mode,
+            "execution_mode": "full_graph",
+            "is_full_graph": True,
+            "strong_acceptance_eligible": True,
             "source": "vendored_tradingagents_0.7.0_quantagent_patch",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "symbol": req.symbol,

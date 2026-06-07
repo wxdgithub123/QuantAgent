@@ -16,9 +16,10 @@ from app.services.performance_service import performance_service
 from app.services.trade_pair_service import trade_pair_service
 from app.services.position_analysis_service import position_analysis_service
 from app.services.paper_trading_service import paper_trading_service
+from app.services.audit_service import audit_service
 from app.services.market_data_gateway import market_data_gateway
 from app.services.database import get_db, get_db_session, redis_get, redis_set
-from app.models.db_models import AuditLog, BacktestResult, EquitySnapshot, PaperTrade, ReplaySession
+from app.models.db_models import BacktestResult, EquitySnapshot, PaperTrade, ReplaySession
 from app.services.reproducibility import enrich_pit_metadata, stable_params_hash
 from app.services.performance_service import performance_service
 
@@ -813,25 +814,29 @@ async def replay_quick_backtest(replay_session_id: str):
         session.add(bt_row)
         await session.flush()
         backtest_db_id = bt_row.id
-        session.add(
-            AuditLog(
-                action="REPLAY_COMPARE_BACKTEST_RUN",
-                user_id="system",
-                resource=symbol,
-                details={
-                    "replay_session_id": replay_session_id,
-                    "backtest_id": backtest_db_id,
-                    "strategy_type": strategy_type,
-                    "interval": interval,
-                    "params": params,
-                    "pit": pit_metadata,
-                    "metrics": {
-                        "total_return": metrics_dict["total_return"],
-                        "max_drawdown": metrics_dict["max_drawdown"],
-                        "total_trades": metrics_dict["total_trades"],
-                    },
+        await audit_service.add_event(
+            session,
+            action="REPLAY_COMPARE_BACKTEST_RUN",
+            user_id="system",
+            resource=symbol,
+            details={
+                "eventType": "REPLAY_COMPARE_BACKTEST_RUN",
+                "symbol": symbol,
+                "replaySessionId": replay_session_id,
+                "replay_session_id": replay_session_id,
+                "backtestId": backtest_db_id,
+                "backtest_id": backtest_db_id,
+                "strategy_type": strategy_type,
+                "interval": interval,
+                "params": params,
+                "pit": pit_metadata,
+                "executionMode": "replay_compare",
+                "metrics": {
+                    "total_return": metrics_dict["total_return"],
+                    "max_drawdown": metrics_dict["max_drawdown"],
+                    "total_trades": metrics_dict["total_trades"],
                 },
-            )
+            },
         )
         await session.commit()
 

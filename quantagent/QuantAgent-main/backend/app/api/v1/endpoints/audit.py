@@ -41,6 +41,39 @@ def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _normalized_snapshot_from_details(details: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = _safe_dict(details.get("normalizedSnapshot"))
+    if snapshot:
+        return snapshot
+    input_summary = _safe_dict(details.get("inputSummary"))
+    return _safe_dict(input_summary.get("normalizedSnapshot") or input_summary.get("normalized_snapshot"))
+
+
+def _analysis_context_from_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the Agent-visible AnalysisContext stored in an audit snapshot."""
+    if not snapshot:
+        return {}
+    return {
+        "symbol": snapshot.get("symbol"),
+        "timeframe": snapshot.get("timeframe"),
+        "as_of_time": snapshot.get("as_of_time"),
+        "schema_version": snapshot.get("schema_version") or "audit_analysis_context_snapshot.v1",
+        "bars": _safe_list(snapshot.get("bars")),
+        "latest_factors": _safe_dict(snapshot.get("latest_factors")),
+        "recent_signals": _safe_list(snapshot.get("recent_signals")),
+        "news_events": _safe_list(snapshot.get("news_events")),
+        "macro_events": _safe_list(snapshot.get("macro_events")),
+        "input_snapshot_ids": _safe_dict(snapshot.get("input_snapshot_ids")),
+        "data_versions": _safe_dict(snapshot.get("data_versions")),
+        "context_hash": snapshot.get("context_hash"),
+        "metadata": {
+            **_safe_dict(snapshot.get("metadata")),
+            "strict_snapshot_replay": True,
+            "snapshot_schema_version": snapshot.get("schema_version"),
+        },
+    }
+
+
 def _cp1252_reverse_map() -> Dict[int, int]:
     mapping: Dict[int, int] = {}
     for byte in range(0x80, 0xA0):
@@ -134,29 +167,46 @@ def _in_clause(prefix: str, values: List[int]) -> tuple[str, Dict[str, int]]:
     return placeholders or "NULL", params
 
 
+def _row_get(row: Any, key: str, default: Any = None) -> Any:
+    getter = getattr(row, "get", None)
+    if callable(getter):
+        try:
+            return getter(key, default)
+        except Exception:
+            pass
+    try:
+        return row[key]
+    except (KeyError, TypeError, IndexError):
+        return default
+    except Exception as exc:
+        if "Could not locate column" in str(exc):
+            return default
+        raise
+
+
 def _decision_payload(row: Any) -> Dict[str, Any]:
     return {
-        "id": row["id"],
-        "symbol": row["symbol"],
-        "timestamp": _iso(row["timestamp"]),
-        "final_signal": row["final_signal"],
-        "confidence": _safe_float(row["confidence"]),
-        "vote_breakdown": _safe_dict(row["vote_breakdown"]),
-        "risk_veto": bool(row["risk_veto"]),
-        "summary": _repair_text(row["summary"] or ""),
-        "agent_signals": _repair_json(_safe_list(row["agent_signals"])),
-        "bull_view": _repair_text(row["bull_view"] or ""),
-        "bear_view": _repair_text(row["bear_view"] or ""),
-        "input_snapshot_ids": _safe_dict(row["input_snapshot_ids"]),
-        "role_opinions": _repair_json(_safe_list(row["role_opinions"])),
-        "position_advice": _repair_json(_safe_dict(row["position_advice"])),
-        "risk_notes": _repair_text(row["risk_notes"] or ""),
-        "created_at": _iso(row["created_at"]),
-        "context_id": row["context_id"],
-        "context_hash": row["context_hash"],
-        "available_time": _iso(row["available_time"]),
-        "model_version": row["model_version"],
-        "prompt_version": row["prompt_version"],
+        "id": _row_get(row, "id"),
+        "symbol": _row_get(row, "symbol"),
+        "timestamp": _iso(_row_get(row, "timestamp")),
+        "final_signal": _row_get(row, "final_signal"),
+        "confidence": _safe_float(_row_get(row, "confidence")),
+        "vote_breakdown": _safe_dict(_row_get(row, "vote_breakdown")),
+        "risk_veto": bool(_row_get(row, "risk_veto")),
+        "summary": _repair_text(_row_get(row, "summary", "") or ""),
+        "agent_signals": _repair_json(_safe_list(_row_get(row, "agent_signals"))),
+        "bull_view": _repair_text(_row_get(row, "bull_view", "") or ""),
+        "bear_view": _repair_text(_row_get(row, "bear_view", "") or ""),
+        "input_snapshot_ids": _safe_dict(_row_get(row, "input_snapshot_ids")),
+        "role_opinions": _repair_json(_safe_list(_row_get(row, "role_opinions"))),
+        "position_advice": _repair_json(_safe_dict(_row_get(row, "position_advice"))),
+        "risk_notes": _repair_text(_row_get(row, "risk_notes", "") or ""),
+        "created_at": _iso(_row_get(row, "created_at")),
+        "context_id": _row_get(row, "context_id"),
+        "context_hash": _row_get(row, "context_hash"),
+        "available_time": _iso(_row_get(row, "available_time")),
+        "model_version": _row_get(row, "model_version"),
+        "prompt_version": _row_get(row, "prompt_version"),
     }
 
 
@@ -222,12 +272,21 @@ AUDIT_EVENT_TYPES = {
     "ORDER_INTENT_CREATED",
     "RISK_CHECK_PASSED",
     "RISK_BLOCKED",
+    "RISK_CHECK_UNAVAILABLE",
     "PAPER_ORDER_FILLED",
     "PAPER_ORDER_REJECTED",
     "POSITION_UPDATED",
     "PNL_UPDATED",
     "HOLD_RECORDED",
 }
+
+AUDIT_RECORD_SELECT_COLUMNS = """
+id, action, user_id, resource, details, ip_address, created_at,
+event_type, symbol, decision_id, source_decision_id, replay_decision_id,
+order_intent_id, order_id, context_id, context_hash, risk_status,
+execution_status, backtest_id, replay_session_id, execution_mode,
+payload_hash, prev_hash, immutable
+"""
 
 
 def _nested_dict(source: Dict[str, Any], *keys: str) -> Dict[str, Any]:
@@ -246,12 +305,114 @@ def _first_present(*values: Any) -> Any:
     return None
 
 
+FULL_GRAPH_MODES = {
+    "full_graph",
+    "quantagent_patched_graph",
+    "quantagent_graph",
+    "patched_graph",
+    "native_graph",
+}
+QUICK_GRAPH_MODES = {
+    "context_adapter",
+    "analysis_context",
+    "fast",
+    "quick",
+    "quick_research",
+}
+
+
+def _first_bool_present(*values: Any) -> Optional[bool]:
+    for value in values:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "y"}:
+                return True
+            if normalized in {"false", "0", "no", "n"}:
+                return False
+        if isinstance(value, (int, float)) and value in (0, 1):
+            return bool(value)
+    return None
+
+
+def _graph_execution_meta(*sources: Dict[str, Any]) -> Dict[str, Any]:
+    candidates: List[Dict[str, Any]] = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        candidates.append(source)
+        for key in ("_graph_meta", "graph_meta", "graphMeta", "decision"):
+            nested = _safe_dict(source.get(key))
+            if nested:
+                candidates.append(nested)
+
+    graph_mode = _first_present(
+        *[
+            _first_present(
+                item.get("graphMode"),
+                item.get("graph_mode"),
+                item.get("executionMode"),
+                item.get("execution_mode"),
+                item.get("mode"),
+            )
+            for item in candidates
+        ]
+    )
+    normalized_mode = str(graph_mode).strip().lower() if graph_mode else None
+    is_full_graph = _first_bool_present(
+        *[
+            _first_present(
+                item.get("isFullGraph"),
+                item.get("is_full_graph"),
+            )
+            for item in candidates
+        ]
+    )
+    if is_full_graph is None and normalized_mode:
+        if normalized_mode in FULL_GRAPH_MODES:
+            is_full_graph = True
+        elif normalized_mode in QUICK_GRAPH_MODES:
+            is_full_graph = False
+
+    strong_acceptance_eligible = _first_bool_present(
+        *[
+            _first_present(
+                item.get("strongAcceptanceEligible"),
+                item.get("strong_acceptance_eligible"),
+            )
+            for item in candidates
+        ]
+    )
+    if strong_acceptance_eligible is None and is_full_graph is not None:
+        strong_acceptance_eligible = bool(is_full_graph)
+
+    return {
+        "graphMode": str(graph_mode) if graph_mode else None,
+        "configuredMode": _first_present(
+            *[
+                _first_present(item.get("configuredMode"), item.get("configured_mode"))
+                for item in candidates
+            ]
+        ),
+        "isFullGraph": is_full_graph,
+        "strongAcceptanceEligible": strong_acceptance_eligible,
+        "modeNote": _first_present(
+            *[
+                _first_present(item.get("modeNote"), item.get("mode_note"))
+                for item in candidates
+            ]
+        ),
+    }
+
+
 def _audit_record_payload(row: Any) -> Dict[str, Any]:
-    details = _repair_json(_safe_dict(row["details"]))
+    details = _repair_json(_safe_dict(_row_get(row, "details")))
     intent = _safe_dict(details.get("intent"))
     decision = _safe_dict(details.get("decision"))
     risk = _safe_dict(details.get("riskCheckResult") or details.get("risk_preview"))
     execution = _safe_dict(details.get("executionResult") or details.get("execution"))
+    graph_meta = _graph_execution_meta(details, decision, intent, execution)
 
     legacy_event_map = {
         "ORDER_INTENT_NOOP": "HOLD_RECORDED",
@@ -260,31 +421,64 @@ def _audit_record_payload(row: Any) -> Dict[str, Any]:
         "ORDER_INTENT_BLOCKED": "RISK_BLOCKED",
         "ORDER_INTENT_EXECUTED": "PAPER_ORDER_FILLED",
         "ORDER_CREATE": "PAPER_ORDER_FILLED",
+        "ORDER_FILL": "PAPER_ORDER_FILLED",
         "ORDER_CANCEL": "PAPER_ORDER_REJECTED",
     }
-    raw_event_type = str(details.get("eventType") or details.get("event_type") or row["action"])
+    raw_event_type = str(
+        _first_present(
+            _row_get(row, "event_type"),
+            details.get("eventType"),
+            details.get("event_type"),
+            _row_get(row, "action"),
+        )
+    )
     event_type = legacy_event_map.get(raw_event_type, raw_event_type)
+    source_decision_id = _first_present(
+        _row_get(row, "source_decision_id"),
+        details.get("sourceDecisionId"),
+        details.get("source_decision_id"),
+        intent.get("sourceDecisionId"),
+        intent.get("source_decision_id"),
+    )
+    replay_decision_id = _first_present(
+        _row_get(row, "replay_decision_id"),
+        details.get("replayDecisionId"),
+        details.get("replay_decision_id"),
+        intent.get("replayDecisionId"),
+        intent.get("replay_decision_id"),
+    )
     decision_id = _first_present(
+        _row_get(row, "decision_id"),
         details.get("decisionId"),
+        details.get("decision_id"),
+        replay_decision_id,
+        source_decision_id,
         intent.get("sourceDecisionId"),
         intent.get("decision_id"),
         decision.get("id"),
     )
     order_intent_id = _first_present(
+        _row_get(row, "order_intent_id"),
         details.get("orderIntentId"),
         intent.get("id"),
         intent.get("intent_id"),
     )
     order_id = _first_present(
+        _row_get(row, "order_id"),
         details.get("orderId"),
         details.get("order_id"),
         execution.get("orderId"),
         execution.get("order_id"),
     )
-    backtest_id = _first_present(details.get("backtestId"), details.get("backtest_id"))
-    replay_session_id = _first_present(details.get("replaySessionId"), details.get("replay_session_id"))
+    backtest_id = _first_present(_row_get(row, "backtest_id"), details.get("backtestId"), details.get("backtest_id"))
+    replay_session_id = _first_present(
+        _row_get(row, "replay_session_id"),
+        details.get("replaySessionId"),
+        details.get("replay_session_id"),
+    )
     replay_time = _first_present(details.get("replayTime"), details.get("replay_time"), details.get("asOfTime"))
     execution_mode = _first_present(
+        _row_get(row, "execution_mode"),
         details.get("executionMode"),
         details.get("execution_mode"),
         intent.get("executionMode"),
@@ -294,16 +488,19 @@ def _audit_record_payload(row: Any) -> Dict[str, Any]:
     if risk_passed is None:
         risk_passed = risk.get("allowed")
     risk_status = (
+        "unavailable" if event_type == "RISK_CHECK_UNAVAILABLE" or risk.get("riskUnavailable") is True else
         "passed" if risk_passed is True else
         "blocked" if risk_passed is False or event_type == "RISK_BLOCKED" else
         "not_checked"
     )
     execution_status = _first_present(
+        _row_get(row, "execution_status"),
         execution.get("status"),
         details.get("status") if event_type.startswith("PAPER_ORDER") else None,
         "FILLED" if event_type == "PAPER_ORDER_FILLED" else None,
         "REJECTED" if event_type == "PAPER_ORDER_REJECTED" else None,
     )
+    risk_status = _first_present(_row_get(row, "risk_status"), risk_status)
     source = _first_present(
         details.get("source"),
         intent.get("source"),
@@ -312,35 +509,80 @@ def _audit_record_payload(row: Any) -> Dict[str, Any]:
     )
 
     return {
-        "id": row["id"],
+        "id": _row_get(row, "id"),
         "eventType": event_type,
         "action": _first_present(intent.get("action"), decision.get("final_signal"), details.get("action")),
-        "symbol": _first_present(details.get("symbol"), intent.get("symbol"), row["resource"]),
+        "symbol": _first_present(
+            _row_get(row, "symbol"),
+            details.get("symbol"),
+            intent.get("symbol"),
+            _row_get(row, "resource"),
+        ),
         "asOfTime": details.get("asOfTime"),
         "snapshotId": details.get("snapshotId"),
         "decisionId": decision_id,
+        "sourceDecisionId": source_decision_id,
+        "replayDecisionId": replay_decision_id,
+        "contextId": _first_present(_row_get(row, "context_id"), details.get("contextId"), decision.get("context_id")),
+        "contextHash": _first_present(_row_get(row, "context_hash"), details.get("contextHash"), decision.get("context_hash")),
+        "modelVersion": _first_present(details.get("modelVersion"), decision.get("model_version")),
+        "promptVersion": _first_present(details.get("promptVersion"), decision.get("prompt_version")),
         "orderIntentId": order_intent_id,
         "orderId": order_id,
         "backtestId": backtest_id,
         "replaySessionId": replay_session_id,
         "replayTime": replay_time,
         "executionMode": execution_mode,
+        "graphMode": graph_meta.get("graphMode"),
+        "configuredMode": graph_meta.get("configuredMode"),
+        "isFullGraph": graph_meta.get("isFullGraph"),
+        "strongAcceptanceEligible": graph_meta.get("strongAcceptanceEligible"),
+        "modeNote": graph_meta.get("modeNote"),
         "inputSummary": details.get("inputSummary") or decision,
         "agentOutputs": details.get("agentOutputs") or [],
         "riskCheckResult": risk,
+        "riskUnavailable": bool(
+            event_type == "RISK_CHECK_UNAVAILABLE"
+            or details.get("riskUnavailable") is True
+            or risk.get("riskUnavailable") is True
+        ),
         "executionResult": execution,
         "executionStatus": execution_status,
         "riskStatus": risk_status,
         "source": source,
-        "createdAt": _iso(row["created_at"]),
-        "created_at": _iso(row["created_at"]),
-        "immutable": True,
+        "createdAt": _iso(_row_get(row, "created_at")),
+        "created_at": _iso(_row_get(row, "created_at")),
+        "payloadHash": _row_get(row, "payload_hash"),
+        "prevHash": _row_get(row, "prev_hash"),
+        "immutable": bool(_row_get(row, "immutable", True)),
+        "synthetic": False,
+        "auditSource": "audit_logs",
+        "auditLogBacked": True,
         "raw": {
-            "action": row["action"],
-            "user_id": row["user_id"],
-            "resource": row["resource"],
+            "action": _row_get(row, "action"),
+            "user_id": _row_get(row, "user_id"),
+            "resource": _row_get(row, "resource"),
             "details": details,
-            "ip_address": row["ip_address"],
+            "ip_address": _row_get(row, "ip_address"),
+            "standard_columns": {
+                "event_type": _row_get(row, "event_type"),
+                "symbol": _row_get(row, "symbol"),
+                "decision_id": _row_get(row, "decision_id"),
+                "source_decision_id": _row_get(row, "source_decision_id"),
+                "replay_decision_id": _row_get(row, "replay_decision_id"),
+                "order_intent_id": _row_get(row, "order_intent_id"),
+                "order_id": _row_get(row, "order_id"),
+                "context_id": _row_get(row, "context_id"),
+                "context_hash": _row_get(row, "context_hash"),
+                "risk_status": _row_get(row, "risk_status"),
+                "execution_status": _row_get(row, "execution_status"),
+                "backtest_id": _row_get(row, "backtest_id"),
+                "replay_session_id": _row_get(row, "replay_session_id"),
+                "execution_mode": _row_get(row, "execution_mode"),
+                "payload_hash": _row_get(row, "payload_hash"),
+                "prev_hash": _row_get(row, "prev_hash"),
+                "immutable": _row_get(row, "immutable", True),
+            },
         },
     }
 
@@ -353,7 +595,11 @@ def _support_level(key: str, counts: Dict[str, int]) -> str:
     if key == "decision_replay":
         return "已有完整回放" if counts["completed_replays"] else "可创建，待跑完整样例"
     if key == "audit_trail":
-        return "已有记录" if counts["audit_logs"] or counts["coordination_history"] else "待产生记录"
+        if counts.get("agent_decision_audit_logs"):
+            return "已有原始 AGENT_DECISION 审计记录"
+        if counts.get("coordination_history"):
+            return "仅有决策历史，缺原始审计事件"
+        return "待产生记录"
     if key == "result_comparison":
         return "已有严格关联样例" if counts["comparison_ready"] else "需要完整回放和严格匹配回测"
     return "未知"
@@ -389,6 +635,23 @@ async def get_prd105_audit_overview(
                 "pending_replays": await _scalar(session, "SELECT COUNT(*) FROM replay_sessions WHERE status = 'pending'"),
                 "failed_replays": await _scalar(session, "SELECT COUNT(*) FROM replay_sessions WHERE status = 'failed'"),
                 "audit_logs": await _scalar(session, "SELECT COUNT(*) FROM audit_logs"),
+                "agent_decision_audit_logs": await _scalar(
+                    session,
+                    """
+                    SELECT COUNT(*)
+                    FROM audit_logs
+                    WHERE action = 'AGENT_DECISION'
+                    """,
+                ),
+                "strict_snapshot_audit_logs": await _scalar(
+                    session,
+                    """
+                    SELECT COUNT(*)
+                    FROM audit_logs
+                    WHERE action = 'AGENT_DECISION'
+                      AND details ? 'normalizedSnapshot'
+                    """,
+                ),
                 "order_intent_events": await _scalar(
                     session,
                     """
@@ -518,8 +781,8 @@ async def get_prd105_audit_overview(
             audit_rows = (
                 await session.execute(
                     text(
-                        """
-                        SELECT id, action, user_id, resource, details, ip_address, created_at
+                        f"""
+                        SELECT {AUDIT_RECORD_SELECT_COLUMNS}
                         FROM audit_logs
                         ORDER BY created_at DESC
                         LIMIT :limit
@@ -532,8 +795,8 @@ async def get_prd105_audit_overview(
             order_intent_rows = (
                 await session.execute(
                     text(
-                        """
-                        SELECT id, action, user_id, resource, details, ip_address, created_at
+                        f"""
+                        SELECT {AUDIT_RECORD_SELECT_COLUMNS}
                         FROM audit_logs
                         WHERE action LIKE 'ORDER_INTENT_%'
                            OR action IN ('ORDER_INTENT_CREATED','RISK_CHECK_PASSED','RISK_BLOCKED','PAPER_ORDER_FILLED','PAPER_ORDER_REJECTED','HOLD_RECORDED')
@@ -768,8 +1031,12 @@ async def get_prd105_audit_overview(
                     "key": "audit_trail",
                     "title": "审计追踪",
                     "support_level": _support_level("audit_trail", counts),
-                    "status": "ready" if counts["audit_logs"] or counts["coordination_history"] else "partial",
-                    "description": "系统动作进入 audit_logs，TradingAgents/协调决策进入 coordination_history，可追溯输入快照、角色意见和最终建议。",
+                    "status": "ready" if counts["agent_decision_audit_logs"] else ("partial" if counts["coordination_history"] else "todo"),
+                    "description": (
+                        "每次 Agent 决策都有原始 AGENT_DECISION 审计事件，详情页可追溯输入快照、角色意见和最终建议。"
+                        if counts["agent_decision_audit_logs"]
+                        else "已有 coordination_history 决策历史，但缺原始 AGENT_DECISION 审计事件时只能兼容展示，不能算强验收通过。"
+                    ),
                 },
                 {
                     "key": "execution_chain",
@@ -902,16 +1169,79 @@ async def list_audit_records(
     params: Dict[str, Any] = {"limit": limit, "offset": offset}
 
     if symbol:
-        where.append("(resource = :symbol OR details->>'symbol' = :symbol OR details->'intent'->>'symbol' = :symbol)")
+        where.append("(symbol = :symbol OR resource = :symbol OR details->>'symbol' = :symbol OR details->'intent'->>'symbol' = :symbol)")
         params["symbol"] = symbol.upper()
     if eventType:
-        where.append("(action = :event_type OR details->>'eventType' = :event_type)")
+        where.append(
+            """
+            (
+              event_type = :event_type
+              OR action = :event_type
+              OR details->>'eventType' = :event_type
+              OR details->>'event_type' = :event_type
+              OR (:event_type = 'PAPER_ORDER_FILLED' AND action IN ('ORDER_CREATE','ORDER_FILL','ORDER_INTENT_EXECUTED'))
+              OR (:event_type = 'PAPER_ORDER_REJECTED' AND action IN ('ORDER_CANCEL'))
+              OR (:event_type = 'HOLD_RECORDED' AND action IN ('ORDER_INTENT_NOOP'))
+              OR (:event_type = 'ORDER_INTENT_CREATED' AND action IN ('ORDER_INTENT_PREVIEW'))
+              OR (:event_type = 'RISK_CHECK_PASSED' AND action IN ('ORDER_INTENT_RISK_CHECKED'))
+              OR (:event_type = 'RISK_BLOCKED' AND action IN ('ORDER_INTENT_BLOCKED'))
+            )
+            """
+        )
         params["event_type"] = eventType
+    if executionStatus:
+        where.append(
+            """
+            (
+              execution_status = :execution_status
+              OR details->'executionResult'->>'status' = :execution_status
+              OR details->'execution'->>'status' = :execution_status
+              OR (:execution_status = 'FILLED' AND (event_type = 'PAPER_ORDER_FILLED' OR action IN ('PAPER_ORDER_FILLED','ORDER_CREATE','ORDER_FILL')))
+              OR (:execution_status = 'REJECTED' AND (event_type = 'PAPER_ORDER_REJECTED' OR action IN ('PAPER_ORDER_REJECTED','ORDER_CANCEL')))
+            )
+            """
+        )
+        params["execution_status"] = executionStatus.upper()
+    if riskStatus:
+        where.append(
+            """
+            (
+              risk_status = :risk_status
+              OR details->>'riskStatus' = :risk_status
+              OR details->>'risk_status' = :risk_status
+              OR details->'riskCheckResult'->>'status' = :risk_status
+              OR details->'risk_preview'->>'status' = :risk_status
+              OR (:risk_status = 'blocked' AND (
+                    event_type = 'RISK_BLOCKED'
+                    OR action = 'RISK_BLOCKED'
+                    OR details->>'eventType' = 'RISK_BLOCKED'
+                    OR details->'riskCheckResult'->>'passed' = 'false'
+                    OR details->'risk_preview'->>'allowed' = 'false'
+                 ))
+              OR (:risk_status = 'passed' AND (
+                    event_type = 'RISK_CHECK_PASSED'
+                    OR action = 'RISK_CHECK_PASSED'
+                    OR details->>'eventType' = 'RISK_CHECK_PASSED'
+                    OR details->'riskCheckResult'->>'passed' = 'true'
+                    OR details->'risk_preview'->>'allowed' = 'true'
+                 ))
+              OR (:risk_status = 'unavailable' AND (
+                    event_type = 'RISK_CHECK_UNAVAILABLE'
+                    OR action = 'RISK_CHECK_UNAVAILABLE'
+                    OR details->>'eventType' = 'RISK_CHECK_UNAVAILABLE'
+                 ))
+            )
+            """
+        )
+        params["risk_status"] = riskStatus.lower()
     if decisionId is not None:
         where.append(
             """
             (
-              details->>'decisionId' = :decision_id
+              decision_id = :decision_id_int
+              OR source_decision_id = :decision_id_int
+              OR replay_decision_id = :decision_id_int
+              OR details->>'decisionId' = :decision_id
               OR details->>'sourceDecisionId' = :decision_id
               OR details->>'replayDecisionId' = :decision_id
               OR details->'intent'->>'decision_id' = :decision_id
@@ -920,12 +1250,14 @@ async def list_audit_records(
             )
             """
         )
+        params["decision_id_int"] = decisionId
         params["decision_id"] = str(decisionId)
     if orderIntentId:
         where.append(
             """
             (
-              details->>'orderIntentId' = :order_intent_id
+              order_intent_id = :order_intent_id
+              OR details->>'orderIntentId' = :order_intent_id
               OR details->'intent'->>'id' = :order_intent_id
               OR details->'intent'->>'intent_id' = :order_intent_id
             )
@@ -936,22 +1268,25 @@ async def list_audit_records(
         where.append(
             """
             (
-              details->>'orderId' = :order_id
+              order_id = :order_id
+              OR details->>'orderId' = :order_id
               OR details->>'order_id' = :order_id
               OR details->'execution'->>'order_id' = :order_id
+              OR details->'executionResult'->>'orderId' = :order_id
               OR details->'executionResult'->>'order_id' = :order_id
             )
             """
         )
         params["order_id"] = orderId
     if backtestId is not None:
-        where.append("(details->>'backtestId' = :backtest_id OR details->>'backtest_id' = :backtest_id)")
+        where.append("(backtest_id = :backtest_id_int OR details->>'backtestId' = :backtest_id OR details->>'backtest_id' = :backtest_id)")
+        params["backtest_id_int"] = backtestId
         params["backtest_id"] = str(backtestId)
     if replaySessionId:
-        where.append("(details->>'replaySessionId' = :replay_session_id OR details->>'replay_session_id' = :replay_session_id)")
+        where.append("(replay_session_id = :replay_session_id OR details->>'replaySessionId' = :replay_session_id OR details->>'replay_session_id' = :replay_session_id)")
         params["replay_session_id"] = replaySessionId
     if executionMode:
-        where.append("(details->>'executionMode' = :execution_mode OR details->>'execution_mode' = :execution_mode)")
+        where.append("(execution_mode = :execution_mode OR details->>'executionMode' = :execution_mode OR details->>'execution_mode' = :execution_mode OR details->'executionResult'->>'executionMode' = :execution_mode)")
         params["execution_mode"] = executionMode
     if source:
         where.append(
@@ -960,10 +1295,23 @@ async def list_audit_records(
               details->>'source' = :source
               OR details->'intent'->>'source' = :source
               OR details->'execution'->>'source' = :source
+              OR details->'executionResult'->>'source' = :source
             )
             """
         )
         params["source"] = source
+    if action:
+        where.append(
+            """
+            (
+              action = :business_action
+              OR details->>'action' = :business_action
+              OR details->'intent'->>'action' = :business_action
+              OR details->'decision'->>'final_signal' = :business_action
+            )
+            """
+        )
+        params["business_action"] = action.upper()
     if startTime:
         where.append("created_at >= :start_time")
         params["start_time"] = startTime
@@ -986,7 +1334,7 @@ async def list_audit_records(
             await session.execute(
                 text(
                     f"""
-                    SELECT id, action, user_id, resource, details, ip_address, created_at
+                    SELECT {AUDIT_RECORD_SELECT_COLUMNS}
                     FROM audit_logs
                     WHERE {where_sql}
                     ORDER BY created_at DESC, id DESC
@@ -1005,7 +1353,8 @@ async def list_audit_records(
         normalized_status = executionStatus.upper()
         records = [row for row in records if str(row.get("executionStatus") or "").upper() == normalized_status]
     if riskStatus:
-        records = [row for row in records if str(row.get("riskStatus") or "") == riskStatus]
+        normalized_risk_status = riskStatus.lower()
+        records = [row for row in records if str(row.get("riskStatus") or "").lower() == normalized_risk_status]
 
     return {
         "schema_version": "audit_records.v1",
@@ -1041,8 +1390,8 @@ async def get_audit_record(audit_id: int) -> Dict[str, Any]:
         row = (
             await session.execute(
                 text(
-                    """
-                    SELECT id, action, user_id, resource, details, ip_address, created_at
+                    f"""
+                    SELECT {AUDIT_RECORD_SELECT_COLUMNS}
                     FROM audit_logs
                     WHERE id = :audit_id
                     """
@@ -1069,8 +1418,8 @@ async def export_audit_record(audit_id: int) -> Dict[str, Any]:
         row = (
             await session.execute(
                 text(
-                    """
-                    SELECT id, action, user_id, resource, details, ip_address, created_at
+                    f"""
+                    SELECT {AUDIT_RECORD_SELECT_COLUMNS}
                     FROM audit_logs
                     WHERE id = :audit_id
                     """
@@ -1082,31 +1431,40 @@ async def export_audit_record(audit_id: int) -> Dict[str, Any]:
     if not row:
         raise HTTPException(status_code=404, detail=f"Audit record {audit_id} not found")
 
-    details = _safe_dict(row["details"])
-    decision_id = (
-        _safe_dict(details.get("intent")).get("decision_id")
-        or _safe_dict(details.get("decision")).get("id")
+    details = _repair_json(_safe_dict(row["details"]))
+    standard_record = _audit_record_payload(row)
+    decision_ids = _int_ids(
+        [
+            standard_record.get("decisionId"),
+            standard_record.get("sourceDecisionId"),
+            standard_record.get("replayDecisionId"),
+        ],
+        limit=3,
     )
 
-    decision = None
-    if decision_id:
+    decisions = []
+    if decision_ids:
+        placeholders, decision_params = _in_clause("decision_id_", decision_ids)
         async with get_db() as session:
-            decision_row = (
+            decision_rows = (
                 await session.execute(
                     text(
-                        """
+                        f"""
                         SELECT id, symbol, timestamp, final_signal, confidence, risk_veto,
                                summary, input_snapshot_ids, role_opinions, agent_signals,
-                               position_advice, risk_notes, created_at
+                               position_advice, risk_notes, created_at,
+                               context_id, context_hash, available_time,
+                               model_version, prompt_version
                         FROM coordination_history
-                        WHERE id = :decision_id
+                        WHERE id IN ({placeholders})
                         """
                     ),
-                    {"decision_id": int(decision_id)},
+                    decision_params,
                 )
-            ).mappings().first()
-        if decision_row:
-            decision = {
+            ).mappings().all()
+        for decision_row in decision_rows:
+            decisions.append(
+                {
                 "id": decision_row["id"],
                 "symbol": decision_row["symbol"],
                 "timestamp": _iso(decision_row["timestamp"]),
@@ -1120,23 +1478,47 @@ async def export_audit_record(audit_id: int) -> Dict[str, Any]:
                 "position_advice": _safe_dict(decision_row["position_advice"]),
                 "risk_notes": decision_row["risk_notes"] or "",
                 "created_at": _iso(decision_row["created_at"]),
-            }
+                "context_id": decision_row["context_id"],
+                "context_hash": decision_row["context_hash"],
+                "available_time": _iso(decision_row["available_time"]),
+                "model_version": decision_row["model_version"],
+                "prompt_version": decision_row["prompt_version"],
+                }
+            )
 
     return {
         "schema_version": "audit_export.v1",
         "exported_at": datetime.utcnow().isoformat(),
         "immutability_note": "This endpoint only reads audit_logs and related decision context; it does not modify persisted records.",
         "audit_record": {
-            "id": row["id"],
-            "action": row["action"],
-            "user_id": row["user_id"],
-            "resource": row["resource"],
+            "id": _row_get(row, "id"),
+            "action": _row_get(row, "action"),
+            "user_id": _row_get(row, "user_id"),
+            "resource": _row_get(row, "resource"),
+            "event_type": _row_get(row, "event_type"),
+            "symbol": _row_get(row, "symbol"),
+            "decision_id": _row_get(row, "decision_id"),
+            "source_decision_id": _row_get(row, "source_decision_id"),
+            "replay_decision_id": _row_get(row, "replay_decision_id"),
+            "order_intent_id": _row_get(row, "order_intent_id"),
+            "order_id": _row_get(row, "order_id"),
+            "context_id": _row_get(row, "context_id"),
+            "context_hash": _row_get(row, "context_hash"),
+            "risk_status": _row_get(row, "risk_status"),
+            "execution_status": _row_get(row, "execution_status"),
+            "backtest_id": _row_get(row, "backtest_id"),
+            "replay_session_id": _row_get(row, "replay_session_id"),
+            "execution_mode": _row_get(row, "execution_mode"),
+            "payload_hash": _row_get(row, "payload_hash"),
+            "prev_hash": _row_get(row, "prev_hash"),
+            "immutable": _row_get(row, "immutable", True),
             "details": details,
-            "ip_address": row["ip_address"],
-            "created_at": _iso(row["created_at"]),
+            "ip_address": _row_get(row, "ip_address"),
+            "created_at": _iso(_row_get(row, "created_at")),
         },
-        "standard_audit_record": _audit_record_payload(row),
-        "linked_decision": decision,
+        "standard_audit_record": standard_record,
+        "linked_decision": decisions[0] if decisions else None,
+        "linked_decisions": decisions,
     }
 
 
@@ -1154,7 +1536,8 @@ async def replay_decision(decision_id: int) -> Dict[str, Any]:
                     """
                     SELECT id, symbol, timestamp, final_signal, confidence,
                            vote_breakdown, risk_veto, summary, input_snapshot_ids,
-                           role_opinions, agent_signals, created_at,
+                           role_opinions, agent_signals, bull_view, bear_view,
+                           position_advice, risk_notes, created_at,
                            context_id, context_hash, available_time,
                            model_version, prompt_version
                     FROM coordination_history
@@ -1164,39 +1547,94 @@ async def replay_decision(decision_id: int) -> Dict[str, Any]:
                 {"decision_id": decision_id},
             )
         ).mappings().first()
+        source_audit_row = (
+            await session.execute(
+                text(
+                    f"""
+                    SELECT {AUDIT_RECORD_SELECT_COLUMNS}
+                    FROM audit_logs
+                    WHERE (event_type = 'AGENT_DECISION' OR action = 'AGENT_DECISION')
+                      AND (
+                        decision_id = :decision_id
+                        OR details->>'decisionId' = :decision_id_text
+                        OR details->'decision'->>'id' = :decision_id_text
+                      )
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT 1
+                    """
+                ),
+                {"decision_id": decision_id, "decision_id_text": str(decision_id)},
+            )
+        ).mappings().first()
 
     if not source_row:
         raise HTTPException(status_code=404, detail=f"Decision {decision_id} not found")
 
     source_decision = _decision_payload(source_row)
-    snapshot_ids = _safe_dict(source_decision.get("input_snapshot_ids"))
-    as_of_time = source_row["available_time"] or source_row["timestamp"]
+    source_audit_details = _repair_json(_safe_dict(source_audit_row["details"])) if source_audit_row else {}
+    normalized_snapshot = _normalized_snapshot_from_details(source_audit_details)
+    strict_snapshot_replay = bool(normalized_snapshot)
+    fallback_reason = (
+        None
+        if strict_snapshot_replay
+        else "原始 AGENT_DECISION 审计记录缺少 normalizedSnapshot；已降级为 PIT 重建上下文。"
+    )
+    replay_method = (
+        "strict_audit_normalized_snapshot"
+        if strict_snapshot_replay
+        else "pit_rebuild_from_as_of_time_and_snapshot_ids"
+    )
+    snapshot_context = _analysis_context_from_snapshot(normalized_snapshot)
+    snapshot_ids = (
+        _safe_dict(snapshot_context.get("input_snapshot_ids"))
+        or _safe_dict(source_decision.get("input_snapshot_ids"))
+    )
+    as_of_time = normalized_snapshot.get("as_of_time") if strict_snapshot_replay else (
+        source_row["available_time"] or source_row["timestamp"]
+    )
+    if isinstance(as_of_time, str):
+        try:
+            as_of_time = datetime.fromisoformat(as_of_time.replace("Z", "+00:00"))
+        except ValueError:
+            as_of_time = source_row["available_time"] or source_row["timestamp"]
     if isinstance(as_of_time, datetime) and as_of_time.tzinfo is None:
         as_of_time = as_of_time.replace(tzinfo=timezone.utc)
-    interval = _extract_interval_from_snapshot(snapshot_ids)
+    interval = str(snapshot_context.get("timeframe") or _extract_interval_from_snapshot(snapshot_ids))
 
     from app.services.audit_service import audit_service
+
+    request_details = {
+        "decisionId": decision_id,
+        "sourceDecisionId": decision_id,
+        "asOfTime": _iso(as_of_time),
+        "contextId": source_decision.get("context_id"),
+        "contextHash": source_decision.get("context_hash"),
+        "snapshotId": snapshot_ids,
+        "source": "audit_decision_replay",
+        "strictSnapshotReplay": strict_snapshot_replay,
+        "replayMethod": replay_method,
+        "fallbackReason": fallback_reason,
+        "inputSummary": {
+            "sourceDecisionId": decision_id,
+            "originalContextHash": source_decision.get("context_hash"),
+            "snapshot_ids": snapshot_ids,
+            "pitRule": "available_time <= as_of_time",
+            "strictSnapshotReplay": strict_snapshot_replay,
+            "normalizedSnapshotAvailable": strict_snapshot_replay,
+            "fallbackReason": fallback_reason,
+        },
+    }
+    if fallback_reason is None:
+        request_details.pop("fallbackReason", None)
+        request_details["inputSummary"].pop("fallbackReason", None)
 
     await audit_service.log_event(
         action="DECISION_REPLAY_REQUESTED",
         user_id="system",
         resource=source_decision["symbol"],
-        details={
-            "decisionId": decision_id,
-            "sourceDecisionId": decision_id,
-            "asOfTime": _iso(as_of_time),
-            "contextId": source_decision.get("context_id"),
-            "contextHash": source_decision.get("context_hash"),
-            "snapshotId": snapshot_ids,
-            "source": "audit_decision_replay",
-            "inputSummary": {
-                "sourceDecisionId": decision_id,
-                "originalContextHash": source_decision.get("context_hash"),
-                "snapshot_ids": snapshot_ids,
-                "pitRule": "available_time <= as_of_time",
-            },
-        },
+        details=request_details,
         ip_address="internal",
+        raise_on_failure=True,
     )
 
     try:
@@ -1207,7 +1645,7 @@ async def replay_decision(decision_id: int) -> Dict[str, Any]:
             symbol=source_decision["symbol"],
             interval=interval,
             as_of_time=as_of_time,
-            extra_input_snapshot_ids={
+            extra_input_snapshot_ids=None if strict_snapshot_replay else {
                 "sourceDecisionId": decision_id,
                 "replayOfDecisionId": decision_id,
                 "original_snapshot_ids": snapshot_ids,
@@ -1217,8 +1655,12 @@ async def replay_decision(decision_id: int) -> Dict[str, Any]:
                 "sourceDecisionId": decision_id,
                 "originalContextHash": source_decision.get("context_hash"),
                 "replayKind": "decision_replay",
+                "strictSnapshotReplay": strict_snapshot_replay,
+                "replayMethod": replay_method,
+                **({"fallbackReason": fallback_reason} if fallback_reason else {}),
             },
             draft_order_intent=True,
+            analysis_context_override=snapshot_context if strict_snapshot_replay else None,
         )
         if replay_result.data_source == "error" or not replay_result.decision_id:
             raise RuntimeError(replay_result.summary or "TradingAgents replay failed")
@@ -1229,65 +1671,106 @@ async def replay_decision(decision_id: int) -> Dict[str, Any]:
             "replayDecisionId": replay_result.decision_id,
             "originalContextHash": source_decision.get("context_hash"),
             "replayContextHash": replay_result.context_hash,
+            "strictSnapshotReplay": strict_snapshot_replay,
+            "replayMethod": replay_method,
+            "contextHashChanged": diff_summary.get("contextHashChanged"),
+            "contextHashChangeReason": (
+                "底层 PIT 数据可能被回填或修正；复跑会新增决策，不覆盖原决策。"
+                if diff_summary.get("contextHashChanged")
+                else None
+            ),
+            "fallbackReason": fallback_reason,
             "diffSummary": diff_summary,
             "auditUrl": f"/audit?decision_id={replay_result.decision_id}",
         }
+        if fallback_reason is None:
+            response.pop("fallbackReason", None)
+
+        completed_details = {
+            "decisionId": replay_result.decision_id,
+            "sourceDecisionId": decision_id,
+            "replayDecisionId": replay_result.decision_id,
+            "asOfTime": _iso(as_of_time),
+            "contextId": replay_result.context_id,
+            "contextHash": replay_result.context_hash,
+            "originalContextHash": source_decision.get("context_hash"),
+            "replayContextHash": replay_result.context_hash,
+            "snapshotId": replay_result.input_snapshot_ids,
+            "source": "audit_decision_replay",
+            "strictSnapshotReplay": strict_snapshot_replay,
+            "replayMethod": replay_method,
+            "fallbackReason": fallback_reason,
+            "contextHashChanged": diff_summary.get("contextHashChanged"),
+            "contextHashChangeReason": (
+                "底层 PIT 数据可能被回填或修正；复跑会新增决策，不覆盖原决策。"
+                if diff_summary.get("contextHashChanged")
+                else None
+            ),
+            "diffSummary": diff_summary,
+            "inputSummary": {
+                "sourceDecisionId": decision_id,
+                "replayDecisionId": replay_result.decision_id,
+                "originalContextHash": source_decision.get("context_hash"),
+                "replayContextHash": replay_result.context_hash,
+                "pitRule": "available_time <= as_of_time",
+                "strictSnapshotReplay": strict_snapshot_replay,
+                "normalizedSnapshotAvailable": strict_snapshot_replay,
+                "fallbackReason": fallback_reason,
+            },
+            "decision": {
+                "id": replay_result.decision_id,
+                "final_signal": replay_result.final_signal.value,
+                "confidence": replay_result.confidence,
+                "context_hash": replay_result.context_hash,
+                "timestamp": _iso(replay_result.timestamp),
+                "summary": replay_result.summary,
+            },
+            "agentOutputs": replay_result.role_opinions or replay_result.agent_signals,
+        }
+        if fallback_reason is None:
+            completed_details.pop("fallbackReason", None)
+            completed_details["inputSummary"].pop("fallbackReason", None)
+
         await audit_service.log_event(
             action="DECISION_REPLAY_COMPLETED",
             user_id="system",
             resource=source_decision["symbol"],
-            details={
-                "decisionId": replay_result.decision_id,
-                "sourceDecisionId": decision_id,
-                "replayDecisionId": replay_result.decision_id,
-                "asOfTime": _iso(as_of_time),
-                "contextId": replay_result.context_id,
-                "contextHash": replay_result.context_hash,
-                "originalContextHash": source_decision.get("context_hash"),
-                "replayContextHash": replay_result.context_hash,
-                "snapshotId": replay_result.input_snapshot_ids,
-                "source": "audit_decision_replay",
-                "diffSummary": diff_summary,
-                "inputSummary": {
-                    "sourceDecisionId": decision_id,
-                    "replayDecisionId": replay_result.decision_id,
-                    "originalContextHash": source_decision.get("context_hash"),
-                    "replayContextHash": replay_result.context_hash,
-                    "pitRule": "available_time <= as_of_time",
-                },
-                "decision": {
-                    "id": replay_result.decision_id,
-                    "final_signal": replay_result.final_signal.value,
-                    "confidence": replay_result.confidence,
-                    "context_hash": replay_result.context_hash,
-                    "timestamp": _iso(replay_result.timestamp),
-                    "summary": replay_result.summary,
-                },
-                "agentOutputs": replay_result.role_opinions or replay_result.agent_signals,
-            },
+            details=completed_details,
             ip_address="internal",
+            raise_on_failure=True,
         )
         return response
     except Exception as exc:
         logger.error("Decision replay failed for %s: %s", decision_id, exc, exc_info=True)
+        failed_details = {
+            "decisionId": decision_id,
+            "sourceDecisionId": decision_id,
+            "asOfTime": _iso(as_of_time),
+            "contextHash": source_decision.get("context_hash"),
+            "source": "audit_decision_replay",
+            "strictSnapshotReplay": strict_snapshot_replay,
+            "replayMethod": replay_method,
+            "fallbackReason": fallback_reason,
+            "error": str(exc),
+            "inputSummary": {
+                "sourceDecisionId": decision_id,
+                "originalContextHash": source_decision.get("context_hash"),
+                "pitRule": "available_time <= as_of_time",
+                "strictSnapshotReplay": strict_snapshot_replay,
+                "normalizedSnapshotAvailable": strict_snapshot_replay,
+                "fallbackReason": fallback_reason,
+            },
+        }
+        if fallback_reason is None:
+            failed_details.pop("fallbackReason", None)
+            failed_details["inputSummary"].pop("fallbackReason", None)
         await audit_service.log_event(
             action="DECISION_REPLAY_FAILED",
             user_id="system",
             resource=source_decision["symbol"],
-            details={
-                "decisionId": decision_id,
-                "sourceDecisionId": decision_id,
-                "asOfTime": _iso(as_of_time),
-                "contextHash": source_decision.get("context_hash"),
-                "source": "audit_decision_replay",
-                "error": str(exc),
-                "inputSummary": {
-                    "sourceDecisionId": decision_id,
-                    "originalContextHash": source_decision.get("context_hash"),
-                    "pitRule": "available_time <= as_of_time",
-                },
-            },
+            details=failed_details,
             ip_address="internal",
+            raise_on_failure=True,
         )
         raise HTTPException(status_code=502, detail=f"Decision replay failed: {exc}")
 
@@ -1369,11 +1852,14 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
         order_intent_rows = (
             await session.execute(
                 text(
-                    """
-                    SELECT id, action, user_id, resource, details, ip_address, created_at
+                    f"""
+                    SELECT {AUDIT_RECORD_SELECT_COLUMNS}
                     FROM audit_logs
                     WHERE (
-                        details->>'decisionId' = :decision_id_text
+                        decision_id = :decision_id
+                        OR source_decision_id = :decision_id
+                        OR replay_decision_id = :decision_id
+                        OR details->>'decisionId' = :decision_id_text
                         OR details->'intent'->>'decision_id' = :decision_id_text
                         OR details->'intent'->>'sourceDecisionId' = :decision_id_text
                         OR details->'decision'->>'id' = :decision_id_text
@@ -1381,37 +1867,58 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
                     ORDER BY created_at ASC
                     """
                 ),
-                {"decision_id_text": str(decision_id)},
+                {"decision_id": decision_id, "decision_id_text": str(decision_id)},
             )
         ).mappings().all()
 
+        intent_ids_for_trade_query: List[str] = []
+        for row in order_intent_rows:
+            details = _repair_json(_safe_dict(row["details"]))
+            intent = _safe_dict(details.get("intent"))
+            intent_id = _first_present(
+                details.get("orderIntentId"),
+                intent.get("id"),
+                intent.get("intent_id"),
+            )
+            if intent_id:
+                intent_ids_for_trade_query.append(str(intent_id))
+        intent_ids_for_trade_query = list(dict.fromkeys(intent_ids_for_trade_query))[:50]
+        if intent_ids_for_trade_query:
+            placeholders = ", ".join(f":intent_id_{index}" for index, _ in enumerate(intent_ids_for_trade_query))
+            trade_params = {f"intent_id_{index}": value for index, value in enumerate(intent_ids_for_trade_query)}
+            trade_where = f"client_order_id IN ({placeholders})"
+        else:
+            trade_params = {"intent_prefix": f"OI-{decision_id}-%"}
+            trade_where = "client_order_id LIKE :intent_prefix"
         trade_rows = (
             await session.execute(
                 text(
-                    """
+                    f"""
                     SELECT id, strategy_id, client_order_id, symbol, exchange_id, side,
                            order_type, quantity, price, benchmark_price, fee,
                            funding_fee, pnl, status, mode, session_id, data_source,
                            created_at
                     FROM paper_trades
-                    WHERE strategy_id = 'tradingagents'
-                       OR client_order_id LIKE :intent_prefix
+                    WHERE {trade_where}
                     ORDER BY created_at DESC
                     LIMIT 50
                     """
                 ),
-                {"intent_prefix": f"OI-{decision_id}-%"},
+                trade_params,
             )
         ).mappings().all()
 
         audit_rows = (
             await session.execute(
                 text(
-                    """
-                    SELECT id, action, user_id, resource, details, ip_address, created_at
+                    f"""
+                    SELECT {AUDIT_RECORD_SELECT_COLUMNS}
                     FROM audit_logs
                     WHERE (
-                        details->>'decisionId' = :decision_id_text
+                        decision_id = :decision_id
+                        OR source_decision_id = :decision_id
+                        OR replay_decision_id = :decision_id
+                        OR details->>'decisionId' = :decision_id_text
                         OR details->'intent'->>'decision_id' = :decision_id_text
                         OR details->'intent'->>'sourceDecisionId' = :decision_id_text
                         OR details->'decision'->>'id' = :decision_id_text
@@ -1419,30 +1926,38 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
                     ORDER BY created_at ASC, id ASC
                     """
                 ),
-                {"decision_id_text": str(decision_id)},
+                {"decision_id": decision_id, "decision_id_text": str(decision_id)},
             )
         ).mappings().all()
 
         replay_rows = (
             await session.execute(
                 text(
-                    """
-                    SELECT id, action, user_id, resource, details, ip_address, created_at
+                    f"""
+                    SELECT {AUDIT_RECORD_SELECT_COLUMNS}
                     FROM audit_logs
-                    WHERE action IN (
+                    WHERE (event_type IN (
                         'DECISION_REPLAY_REQUESTED',
                         'DECISION_REPLAY_COMPLETED',
                         'DECISION_REPLAY_FAILED'
                     )
+                    OR action IN (
+                        'DECISION_REPLAY_REQUESTED',
+                        'DECISION_REPLAY_COMPLETED',
+                        'DECISION_REPLAY_FAILED'
+                    ))
                       AND (
-                        details->>'decisionId' = :decision_id_text
+                        decision_id = :decision_id
+                        OR source_decision_id = :decision_id
+                        OR replay_decision_id = :decision_id
+                        OR details->>'decisionId' = :decision_id_text
                         OR details->>'sourceDecisionId' = :decision_id_text
                         OR details->>'replayDecisionId' = :decision_id_text
                       )
                     ORDER BY created_at ASC, id ASC
                     """
                 ),
-                {"decision_id_text": str(decision_id)},
+                {"decision_id": decision_id, "decision_id_text": str(decision_id)},
             )
         ).mappings().all()
 
@@ -1537,9 +2052,41 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
         )
 
     audit_timeline = [_audit_record_payload(row) for row in audit_rows]
+    original_agent_decision_audit = next(
+        (
+            item
+            for item in audit_timeline
+            if item.get("eventType") == "AGENT_DECISION"
+            and item.get("synthetic") is not True
+            and item.get("auditLogBacked") is True
+        ),
+        None,
+    )
+    original_agent_decision_audit_present = bool(original_agent_decision_audit)
+    original_agent_details = (
+        _safe_dict(_safe_dict(original_agent_decision_audit.get("raw")).get("details"))
+        if original_agent_decision_audit
+        else {}
+    )
+    graph_execution = _graph_execution_meta(
+        _safe_dict(original_agent_decision_audit or {}),
+        original_agent_details,
+        _safe_dict(original_agent_details.get("decision")),
+        _safe_dict(decision.get("position_advice")),
+    )
+    normalized_snapshot = _normalized_snapshot_from_details(original_agent_details)
+    strict_snapshot_replay_available = bool(normalized_snapshot)
+    normalized_bars_summary = _safe_dict(normalized_snapshot.get("bars_summary"))
+    normalized_snapshot_ids = _safe_dict(normalized_snapshot.get("input_snapshot_ids"))
+    normalized_factor_snapshot = _safe_dict(normalized_snapshot.get("latest_factors"))
+    normalized_recent_signals = _safe_list(normalized_snapshot.get("recent_signals"))
+    normalized_news_events = _safe_list(normalized_snapshot.get("news_events"))
+    normalized_macro_events = _safe_list(normalized_snapshot.get("macro_events"))
+    normalized_data_versions = _safe_dict(normalized_snapshot.get("data_versions"))
     replay_runs = []
     for row in replay_rows:
         details = _repair_json(_safe_dict(row["details"]))
+        replay_input_summary = _safe_dict(details.get("inputSummary"))
         event_type = str(details.get("eventType") or row["action"])
         status = (
             "completed" if event_type == "DECISION_REPLAY_COMPLETED"
@@ -1548,6 +2095,24 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
         )
         replay_decision_id = _first_present(details.get("replayDecisionId"), details.get("decisionId"))
         source_decision_id = _first_present(details.get("sourceDecisionId"), decision_id)
+        original_context_hash = details.get("originalContextHash")
+        replay_context_hash = details.get("replayContextHash") or details.get("contextHash")
+        diff_summary = _safe_dict(details.get("diffSummary"))
+        context_hash_changed = bool(
+            _first_present(diff_summary.get("contextHashChanged"), details.get("contextHashChanged"))
+        )
+        if not context_hash_changed and original_context_hash and replay_context_hash:
+            context_hash_changed = original_context_hash != replay_context_hash
+        replay_strict_snapshot = bool(
+            _first_present(
+                details.get("strictSnapshotReplay"),
+                replay_input_summary.get("strictSnapshotReplay"),
+            )
+        )
+        fallback_reason = _first_present(
+            details.get("fallbackReason"),
+            replay_input_summary.get("fallbackReason"),
+        )
         replay_runs.append(
             {
                 "id": row["id"],
@@ -1555,16 +2120,25 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
                 "status": status,
                 "sourceDecisionId": source_decision_id,
                 "replayDecisionId": replay_decision_id,
-                "originalContextHash": details.get("originalContextHash"),
-                "replayContextHash": details.get("replayContextHash") or details.get("contextHash"),
-                "diffSummary": _safe_dict(details.get("diffSummary")),
+                "originalContextHash": original_context_hash,
+                "replayContextHash": replay_context_hash,
+                "contextHashChanged": context_hash_changed,
+                "contextHashChangeReason": details.get("contextHashChangeReason") or (
+                    "底层 PIT 数据可能被回填或修正；复跑会新增决策，不覆盖原决策。"
+                    if context_hash_changed
+                    else None
+                ),
+                "strictSnapshotReplay": replay_strict_snapshot,
+                "replayMethod": details.get("replayMethod") or "pit_rebuild_from_as_of_time_and_snapshot_ids",
+                "fallbackReason": fallback_reason,
+                "diffSummary": diff_summary,
                 "auditUrl": f"/audit?decision_id={replay_decision_id}" if replay_decision_id else None,
                 "error": details.get("error"),
                 "createdAt": _iso(row["created_at"]),
                 "raw": details,
             }
         )
-    if not any(item.get("eventType") == "AGENT_DECISION" for item in audit_timeline):
+    if not original_agent_decision_audit_present:
         audit_timeline.insert(
             0,
             {
@@ -1584,21 +2158,51 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
                 "executionStatus": None,
                 "riskStatus": "not_checked",
                 "source": "coordination_history",
+                "graphMode": graph_execution.get("graphMode"),
+                "configuredMode": graph_execution.get("configuredMode"),
+                "isFullGraph": graph_execution.get("isFullGraph"),
+                "strongAcceptanceEligible": graph_execution.get("strongAcceptanceEligible"),
+                "modeNote": graph_execution.get("modeNote"),
                 "createdAt": decision.get("created_at") or decision.get("timestamp"),
-                "immutable": True,
+                "immutable": False,
                 "synthetic": True,
+                "auditSource": "coordination_history",
+                "auditLogBacked": False,
+                "syntheticReason": "coordination_history 中存在决策，但 audit_logs 缺少 AGENT_DECISION 原始事件；此行仅用于详情展示。",
             },
         )
 
-    input_summary = {}
-    for record in audit_timeline:
-        input_summary = _safe_dict(record.get("inputSummary"))
-        if input_summary:
-            break
-        raw_details = _safe_dict(_safe_dict(record.get("raw")).get("details"))
-        input_summary = _safe_dict(raw_details.get("inputSummary"))
-        if input_summary:
-            break
+    input_summary = (
+        _safe_dict(original_agent_decision_audit.get("inputSummary"))
+        if original_agent_decision_audit
+        else {}
+    )
+    if not input_summary and original_agent_details:
+        input_summary = _safe_dict(original_agent_details.get("inputSummary"))
+    if not input_summary:
+        for record in audit_timeline:
+            if record.get("synthetic") and original_agent_decision_audit_present:
+                continue
+            input_summary = _safe_dict(record.get("inputSummary"))
+            if input_summary:
+                break
+            raw_details = _safe_dict(_safe_dict(record.get("raw")).get("details"))
+            input_summary = _safe_dict(raw_details.get("inputSummary"))
+            if input_summary:
+                break
+    if not input_summary and normalized_snapshot:
+        last_bar = _safe_list(normalized_snapshot.get("bars"))[-1] if _safe_list(normalized_snapshot.get("bars")) else {}
+        input_summary = {
+            "snapshot_ids": normalized_snapshot_ids,
+            "risk_notes": decision.get("risk_notes"),
+            "factor_snapshot": normalized_factor_snapshot,
+            "recent_signals": normalized_recent_signals,
+            "price": _safe_dict(last_bar).get("close"),
+            "bars_count": normalized_bars_summary.get("count"),
+            "news_count": len(normalized_news_events),
+            "macro_count": len(normalized_macro_events),
+            "normalizedSnapshot": normalized_snapshot,
+        }
 
     latest_intent = {}
     latest_risk = {}
@@ -1764,21 +2368,67 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
     # ── Read bar count from bar_meta if available, else fallback to counting IDs ──
     raw_bar_meta = snapshot.get("bar_meta", {}) if isinstance(snapshot, dict) else {}
     bar_meta = raw_bar_meta[0] if isinstance(raw_bar_meta, list) and raw_bar_meta else raw_bar_meta
-    bars_count = bar_meta.get("count") if isinstance(bar_meta, dict) else None
+    bars_count = normalized_bars_summary.get("count")
+    if bars_count is None:
+        bars_count = bar_meta.get("count") if isinstance(bar_meta, dict) else None
     if bars_count is None:
         bars_count = _snapshot_count(snapshot, "bar_ids", "bar_snapshot_ids", "bars")
-    summary_factor_count = len(_safe_dict(input_summary.get("factor_snapshot")))
-    summary_signal_count = len(_safe_list(input_summary.get("recent_signals")))
-    summary_news_count = int(_safe_float(input_summary.get("news_count"), 0.0))
-    summary_macro_count = int(_safe_float(input_summary.get("macro_count"), 0.0))
-    summary_snapshot_ids = _safe_dict(input_summary.get("snapshot_ids")) or snapshot
+    snapshot_bars = _safe_list(normalized_snapshot.get("bars"))
+    snapshot_last_bar = _safe_dict(snapshot_bars[-1]) if snapshot_bars else {}
+    summary_factor_snapshot = normalized_factor_snapshot or _safe_dict(input_summary.get("factor_snapshot"))
+    summary_recent_signals = normalized_recent_signals or _safe_list(input_summary.get("recent_signals"))
+    summary_factor_count = len(summary_factor_snapshot)
+    summary_signal_count = len(summary_recent_signals)
+    summary_news_count = len(normalized_news_events) if normalized_snapshot else int(_safe_float(input_summary.get("news_count"), 0.0))
+    summary_macro_count = len(normalized_macro_events) if normalized_snapshot else int(_safe_float(input_summary.get("macro_count"), 0.0))
+    summary_snapshot_ids = normalized_snapshot_ids or _safe_dict(input_summary.get("snapshot_ids")) or snapshot
+    input_material_source = "audit_logs.normalizedSnapshot" if normalized_snapshot else (
+        "audit_logs.inputSummary" if input_summary else "coordination_history.input_snapshot_ids"
+    )
+    counts_source = {
+        "bars": "normalizedSnapshot.bars" if snapshot_bars else ("bar_meta" if bars_count else "missing"),
+        "factors": "normalizedSnapshot.latest_factors" if normalized_factor_snapshot else (
+            "audit_logs.inputSummary.factor_snapshot" if _safe_dict(input_summary.get("factor_snapshot")) else "coordination_history.input_snapshot_ids"
+        ),
+        "signals": "normalizedSnapshot.recent_signals" if normalized_recent_signals else (
+            "audit_logs.inputSummary.recent_signals" if _safe_list(input_summary.get("recent_signals")) else "coordination_history.input_snapshot_ids"
+        ),
+        "news": "normalizedSnapshot.news_events" if normalized_news_events else (
+            "audit_logs.inputSummary.news_count" if input_summary.get("news_count") is not None else "coordination_history.input_snapshot_ids"
+        ),
+        "macro": "normalizedSnapshot.macro_events" if normalized_macro_events else (
+            "audit_logs.inputSummary.macro_count" if input_summary.get("macro_count") is not None else "coordination_history.input_snapshot_ids"
+        ),
+    }
+    normalized_data_version = (
+        normalized_snapshot.get("schema_version")
+        if normalized_snapshot
+        else None
+    )
     input_materials = {
-        "source": "audit_logs.inputSummary" if input_summary else "coordination_history.input_snapshot_ids",
-        "price": input_summary.get("price"),
+        "source": input_material_source,
+        "price": _first_present(input_summary.get("price"), snapshot_last_bar.get("close")),
         "riskNotes": input_summary.get("risk_notes"),
         "snapshotIds": summary_snapshot_ids,
-        "factorSnapshot": _safe_dict(input_summary.get("factor_snapshot")),
-        "recentSignals": _safe_list(input_summary.get("recent_signals")),
+        "bars": snapshot_bars,
+        "newsEvents": normalized_news_events,
+        "macroEvents": normalized_macro_events,
+        "factorSnapshot": summary_factor_snapshot,
+        "recentSignals": summary_recent_signals,
+        "signalEvents": summary_recent_signals,
+        "factorEvidence": factor_evidence,
+        "normalizedSnapshot": normalized_snapshot or None,
+        "countsSource": counts_source,
+        "detailCompleteness": {
+            "hasNormalizedSnapshot": bool(normalized_snapshot),
+            "hasBars": bool(snapshot_bars),
+            "hasFactorValues": bool(summary_factor_snapshot),
+            "hasSignalRows": bool(summary_recent_signals),
+            "hasNewsRows": bool(normalized_news_events),
+            "hasMacroRows": bool(normalized_macro_events),
+            "fallbackSource": input_material_source,
+            "note": None if normalized_snapshot else "旧记录未固化完整 normalizedSnapshot；只能展示已保存摘要和可从快照 ID 查询到的证据。",
+        },
         "barsCount": bars_count,
         "newsCount": summary_news_count,
         "macroCount": summary_macro_count,
@@ -1807,20 +2457,29 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
 
     input_snapshot = {
         "snapshotId": summary_snapshot_ids,
-        "asOfTime": decision.get("timestamp"),
-        "availableTime": _first_present(*available_times) or decision.get("available_time"),
-        "dataProvider": _first_present(*data_providers) or "暂无数据",
+        "asOfTime": normalized_snapshot.get("as_of_time") or decision.get("timestamp"),
+        "availableTime": (
+            normalized_bars_summary.get("last_available_time")
+            or _first_present(*available_times)
+            or decision.get("available_time")
+        ),
+        "dataProvider": _first_present(*data_providers) or (
+            ", ".join(_safe_list(normalized_bars_summary.get("providers")))
+            if _safe_list(normalized_bars_summary.get("providers"))
+            else "暂无数据"
+        ),
         "barsCount": bars_count,
         "newsCount": _snapshot_count(snapshot, "news_payload_ids", "news_event_ids") or summary_news_count,
         "factorsCount": _snapshot_count(snapshot, "factor_snapshot_ids", "factor_ids") or summary_factor_count,
         "signalsCount": _snapshot_count(snapshot, "signal_event_ids", "signal_ids") or summary_signal_count,
         "macroCount": _snapshot_count(snapshot, "macro_keys", "macro_event_ids") or summary_macro_count,
-        "price": input_summary.get("price"),
+        "price": input_materials["price"],
         "factorSnapshot": input_materials["factorSnapshot"],
         "recentSignals": input_materials["recentSignals"],
-        "dataVersion": _first_present(*data_versions) or "暂无数据",
-        "sourceVersion": _first_present(*data_versions) or "暂无数据",
-        "barMeta": bar_meta if isinstance(bar_meta, dict) and bar_meta else None,
+        "dataVersion": _first_present(*data_versions) or normalized_data_version or "暂无数据",
+        "sourceVersion": _first_present(*data_versions) or normalized_data_version or "暂无数据",
+        "dataVersions": normalized_data_versions or None,
+        "barMeta": normalized_bars_summary or (bar_meta if isinstance(bar_meta, dict) and bar_meta else None),
     }
 
     def _time_lte(left: Any, right: Any) -> Optional[bool]:
@@ -1863,6 +2522,27 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
             "detail": {"role_count": len(roles)},
         },
         {
+            "key": "original_agent_decision_audit",
+            "label": "original AGENT_DECISION audit log present",
+            "passed": original_agent_decision_audit_present,
+            "detail": {
+                "auditLogId": original_agent_decision_audit.get("id") if original_agent_decision_audit else None,
+                "syntheticAuditCount": len([row for row in audit_timeline if row.get("synthetic")]),
+            },
+        },
+        {
+            "key": "strict_snapshot_replay_available",
+            "label": "normalizedSnapshot available for strict replay",
+            "passed": strict_snapshot_replay_available,
+            "detail": {
+                "schemaVersion": normalized_snapshot.get("schema_version"),
+                "contextHash": normalized_snapshot.get("context_hash"),
+                "fallbackReason": None
+                if strict_snapshot_replay_available
+                else "原始 AGENT_DECISION 审计记录缺少 normalizedSnapshot；strict replay 会降级为 PIT 重建。",
+            },
+        },
+        {
             "key": "context_hash",
             "label": "context hash persisted",
             "passed": bool(decision.get("context_hash")),
@@ -1871,10 +2551,32 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
                 "contextHash": decision.get("context_hash"),
             },
         },
+        {
+            "key": "full_graph_execution",
+            "label": "full TradingAgentsGraph execution",
+            "passed": graph_execution.get("isFullGraph"),
+            "detail": {
+                "graphMode": graph_execution.get("graphMode"),
+                "configuredMode": graph_execution.get("configuredMode"),
+                "strongAcceptanceEligible": graph_execution.get("strongAcceptanceEligible"),
+                "modeNote": graph_execution.get("modeNote"),
+                "fallbackReason": None
+                if graph_execution.get("isFullGraph") is True
+                else (
+                    "当前为快速研究模式，不计入完整多 Agent 强验收。"
+                    if graph_execution.get("isFullGraph") is False
+                    else "旧记录未保存 TradingAgentsGraph 执行模式，无法判定是否完整图。"
+                ),
+            },
+        },
     ]
 
     risk_guard = {
         "passed": latest_risk.get("passed") if "passed" in latest_risk else latest_risk.get("allowed"),
+        "riskUnavailable": bool(
+            latest_risk.get("riskUnavailable")
+            or any(row.get("eventType") == "RISK_CHECK_UNAVAILABLE" for row in audit_timeline)
+        ),
         "blockedReason": latest_risk.get("blockedReason") or latest_risk.get("blocked_reason") or latest_risk.get("reason"),
         "checkedRules": latest_risk.get("checkedRules") or latest_risk.get("checked_rules") or [],
     }
@@ -1887,6 +2589,10 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
         "draft_order_intent": order_intent_detail,
         "pit_checks": pit_checks,
         "replay_runs": replay_runs,
+        "strictSnapshotReplay": strict_snapshot_replay_available,
+        "strictSnapshotReplayAvailable": strict_snapshot_replay_available,
+        "originalAgentDecisionAuditPresent": original_agent_decision_audit_present,
+        "graphExecution": graph_execution,
     }
     execution_preview_or_result = {
         "risk_guard": risk_guard,
@@ -1894,12 +2600,48 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
         "paper_trades": linked_trades,
         "latest_risk_preview": latest_risk,
         "latest_execution": latest_execution,
+        "riskUnavailable": risk_guard["riskUnavailable"],
     }
 
+    synthetic_audit_count = len([row for row in audit_timeline if row.get("synthetic")])
+    risk_unavailable = bool(risk_guard["riskUnavailable"])
+    linked_backtest_id = _first_present(
+        *[row.get("backtestId") for row in audit_timeline],
+        *[
+            _first_present(
+                _safe_dict(row.get("details")).get("backtestId"),
+                _safe_dict(row.get("details")).get("backtest_id"),
+            )
+            for row in order_intents
+        ],
+    )
+    linked_replay_session_id = _first_present(
+        *[row.get("replaySessionId") for row in audit_timeline],
+        *[trade.get("session_id") for trade in linked_trades],
+        *[
+            _first_present(
+                _safe_dict(row.get("details")).get("replaySessionId"),
+                _safe_dict(row.get("details")).get("replay_session_id"),
+            )
+            for row in order_intents
+        ],
+    )
+    analytics_url = (
+        f"/analytics?replay_session_id={linked_replay_session_id}"
+        f"{f'&backtest_id={linked_backtest_id}' if linked_backtest_id else ''}"
+        if linked_replay_session_id
+        else None
+    )
     return {
         "schema_version": "decision_audit_detail.v1",
         "generated_at": datetime.utcnow().isoformat(),
         "immutability_note": "This endpoint only reads persisted decision, audit, and paper trade records.",
+        "strictSnapshotReplay": strict_snapshot_replay_available,
+        "strictSnapshotReplayAvailable": strict_snapshot_replay_available,
+        "originalAgentDecisionAuditPresent": original_agent_decision_audit_present,
+        "riskUnavailable": risk_unavailable,
+        "syntheticAuditCount": synthetic_audit_count,
+        "graphExecution": graph_execution,
         "basic_info": {
             "decisionId": decision["id"],
             "symbol": decision["symbol"],
@@ -1917,6 +2659,11 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
             "availableTime": decision.get("available_time"),
             "modelVersion": decision.get("model_version"),
             "promptVersion": decision.get("prompt_version"),
+            "graphMode": graph_execution.get("graphMode"),
+            "configuredMode": graph_execution.get("configuredMode"),
+            "isFullGraph": graph_execution.get("isFullGraph"),
+            "strongAcceptanceEligible": graph_execution.get("strongAcceptanceEligible"),
+            "modeNote": graph_execution.get("modeNote"),
         },
         "input_snapshot": input_snapshot,
         "factor_evidence": factor_evidence,
@@ -1942,6 +2689,8 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
             "paper_trades": len(linked_trades),
             "replay_runs": len(replay_runs),
             "risk_blocked": any(row.get("eventType") == "RISK_BLOCKED" for row in audit_timeline),
+            "risk_unavailable": risk_unavailable,
+            "synthetic_audit_events": synthetic_audit_count,
             "executed": any(row.get("eventType") == "PAPER_ORDER_FILLED" for row in audit_timeline),
         },
         "role_outputs": roles,
@@ -1952,6 +2701,9 @@ async def get_decision_audit_detail(decision_id: int) -> Dict[str, Any]:
         "links": {
             "research_snapshot": f"/dashboard?symbol={decision['symbol']}&interval=1h&as_of_time={decision['timestamp'] or ''}",
             "decision_center": f"/decisions?symbol={decision['symbol']}",
+            "backtest": f"/backtest?backtest_id={linked_backtest_id}" if linked_backtest_id else None,
+            "replay": f"/replay?session_id={linked_replay_session_id}" if linked_replay_session_id else None,
+            "analytics": analytics_url,
             "audit_export": order_intents[-1]["export_url"] if order_intents else None,
         },
     }

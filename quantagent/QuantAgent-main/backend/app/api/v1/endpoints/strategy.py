@@ -21,7 +21,6 @@ from app.services.clickhouse_service import clickhouse_service
 from app.services.market_data_gateway import market_data_gateway
 from app.services.database import get_db
 from app.models.db_models import (
-    AuditLog,
     BacktestResult,
     OptimizationResult,
     PaperTrade,
@@ -33,6 +32,7 @@ from app.services.backtester.annualization import annualize_return, annualize_sh
 from app.services.backtester.signal_resolution import resolve_signal_output
 from app.services.reproducibility import enrich_pit_metadata, stable_params_hash
 from app.services.risk_manager import risk_manager
+from app.services.audit_service import audit_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -91,6 +91,7 @@ class TradeRecord(BaseModel):
     signalEventId: Optional[int] = None
     asOfTime: Optional[str] = None
     executionMode: str = EXECUTION_MODE_RULE_ONLY
+    riskUnavailable: Optional[bool] = False
     replayUrl: Optional[str] = None
     auditUrl: Optional[str] = None
 
@@ -109,6 +110,20 @@ class BacktestMetrics(BaseModel):
     total_slippage: Optional[float] = 0.0
     initial_capital: float
     final_capital:   float
+    executionMode: Optional[str] = None
+    execution_mode: Optional[str] = None
+    maxAgentCalls: Optional[int] = None
+    signalsCount: Optional[int] = None
+    agentCallCount: Optional[int] = None
+    orderIntentCount: Optional[int] = None
+    paperOrderCount: Optional[int] = None
+    auditRecordCount: Optional[int] = None
+    riskBlockedCount: Optional[int] = None
+    riskUnavailableCount: Optional[int] = None
+    skippedAgentCalls: Optional[int] = None
+    skippedCount: Optional[int] = None
+    failedAgentCalls: Optional[int] = None
+    failedCount: Optional[int] = None
 
 
 class TradeMarker(BaseModel):
@@ -292,8 +307,10 @@ def _risk_result_from_rows(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     checked_rules = rows or []
     passed = all(bool(row.get("passed")) for row in checked_rules) if checked_rules else True
     blocked = next((row for row in checked_rules if not row.get("passed")), None)
+    unavailable = any(bool(row.get("unavailable") or row.get("riskUnavailable")) for row in checked_rules)
     return {
         "passed": passed,
+        "riskUnavailable": unavailable,
         "blockedReason": (blocked or {}).get("message") if blocked else None,
         "checkedRules": checked_rules,
     }
@@ -682,14 +699,14 @@ async def _add_backtest_audit_event(
         "immutable": True,
         **details,
     }
-    audit = AuditLog(
+    audit = await audit_service.add_event(
+        session,
         action=event_type,
         user_id="system",
         resource=symbol,
         details=payload,
+        flush=True,
     )
-    session.add(audit)
-    await session.flush()
     return audit.id
 
 
@@ -751,6 +768,7 @@ async def _apply_agent_audited_backtest_chain(
     order_intents = 0
     paper_orders = 0
     blocked_count = 0
+    risk_unavailable_count = 0
     skipped_count = 0
     failed_count = 0
     updated_trades: List[Dict[str, Any]] = []
@@ -1074,16 +1092,29 @@ async def _apply_agent_audited_backtest_chain(
             logger.warning("RiskGuard preview failed in agent_audited backtest: %s", exc)
             risk_rows = [
                 {
-                    "ruleName": "RiskGuard preview fallback",
+                    "ruleName": "RiskGuard unavailable",
+                    "rule_name": "RiskGuard unavailable",
                     "currentValue": "unavailable",
-                    "limitValue": "local simulation",
-                    "passed": True,
-                    "message": "RiskGuard preview service was unavailable; fallback permits local audited backtest only.",
+                    "current_value": "unavailable",
+                    "limitValue": "required",
+                    "limit_value": "required",
+                    "passed": False,
+                    "unavailable": True,
+                    "message": f"RiskGuard preview was unavailable: {exc}",
                 }
             ]
         risk_result = _risk_result_from_rows(risk_rows)
-        risk_event = "RISK_CHECK_PASSED" if risk_result["passed"] else "RISK_BLOCKED"
-        if not risk_result["passed"]:
+        risk_unavailable = bool(risk_result.get("riskUnavailable"))
+        risk_event = (
+            "RISK_CHECK_PASSED"
+            if risk_result["passed"]
+            else "RISK_CHECK_UNAVAILABLE" if risk_unavailable
+            else "RISK_BLOCKED"
+        )
+        if risk_unavailable:
+            risk_unavailable_count += 1
+            trade["riskUnavailable"] = True
+        elif not risk_result["passed"]:
             blocked_count += 1
         risk_audit_id = await _add_backtest_audit_event(
             session,
@@ -1105,8 +1136,14 @@ async def _apply_agent_audited_backtest_chain(
                 "source": "backtest",
                 "inputSummary": input_summary,
                 "agentOutputs": agent_outputs,
-                "intent": {**intent, "status": "RISK_CHECKED" if risk_result["passed"] else "BLOCKED"},
+                "intent": {
+                    **intent,
+                    "status": "RISK_CHECKED"
+                    if risk_result["passed"]
+                    else "RISK_UNAVAILABLE" if risk_unavailable else "BLOCKED",
+                },
                 "riskCheckResult": risk_result,
+                "riskUnavailable": risk_unavailable,
             },
         )
         audit_ids.append(risk_audit_id)
@@ -1187,6 +1224,8 @@ async def _apply_agent_audited_backtest_chain(
                 )
                 audit_ids.append(event_audit_id)
                 trade_audit_ids.append(event_audit_id)
+        elif risk_unavailable:
+            trade["source"] = "risk_unavailable"
 
         trade["relatedAuditIds"] = trade_audit_ids
         updated_trades.append(trade)
@@ -1202,8 +1241,11 @@ async def _apply_agent_audited_backtest_chain(
             "orderIntentCount": order_intents,
             "paperOrderCount": paper_orders,
             "riskBlockedCount": blocked_count,
+            "riskUnavailableCount": risk_unavailable_count,
             "skippedAgentCalls": skipped_count,
+            "skippedCount": skipped_count,
             "failedAgentCalls": failed_count,
+            "failedCount": failed_count,
             "maxAgentCalls": max_agent_calls,
         },
     }
@@ -1452,8 +1494,11 @@ async def run_backtest(req: BacktestRequest):
         "paperOrderCount": len(normalized_trades),
         "auditRecordCount": 0,
         "riskBlockedCount": 0,
+        "riskUnavailableCount": 0,
         "skippedAgentCalls": 0,
+        "skippedCount": 0,
         "failedAgentCalls": 0,
+        "failedCount": 0,
         "maxAgentCalls": max_agent_calls,
     }
     try:
@@ -1503,7 +1548,8 @@ async def run_backtest(req: BacktestRequest):
 
             trace_stats["auditRecordCount"] = len(audit_record_ids)
             metrics_dict.update(trace_stats)
-            audit_log = AuditLog(
+            audit_log = await audit_service.add_event(
+                session,
                 action="BACKTEST_RUN",
                 user_id="system",
                 resource=symbol_clean,
@@ -1525,9 +1571,8 @@ async def run_backtest(req: BacktestRequest):
                         "total_trades": metrics_dict["total_trades"],
                     },
                 },
+                flush=True,
             )
-            session.add(audit_log)
-            await session.flush()
             audit_record_ids.append(audit_log.id)
             metrics_dict["auditRecordIds"] = audit_record_ids
             metrics_dict["auditRecordCount"] = len(audit_record_ids)
@@ -1574,8 +1619,11 @@ async def run_backtest(req: BacktestRequest):
             "paperOrderCount": trace_stats.get("paperOrderCount", len(normalized_trades)),
             "auditRecordCount": len(audit_record_ids),
             "riskBlockedCount": trace_stats.get("riskBlockedCount", 0),
+            "riskUnavailableCount": trace_stats.get("riskUnavailableCount", 0),
             "skippedAgentCalls": trace_stats.get("skippedAgentCalls", 0),
+            "skippedCount": trace_stats.get("skippedCount", trace_stats.get("skippedAgentCalls", 0)),
             "failedAgentCalls": trace_stats.get("failedAgentCalls", 0),
+            "failedCount": trace_stats.get("failedCount", trace_stats.get("failedAgentCalls", 0)),
             "maxAgentCalls": max_agent_calls,
         },
         auditRecordIds=audit_record_ids,

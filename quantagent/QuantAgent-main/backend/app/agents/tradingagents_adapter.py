@@ -153,8 +153,8 @@ class TradingAgentsAdapter:
     ) -> Optional["CoordinationResult"]:
         """Call the isolated service and map its response.
 
-        Returns ``None`` on any service failure so CoordinatorAgent can fall
-        back to the in-process PRD 10.4 decision pipeline.
+        Returns ``None`` on service failure; CoordinatorAgent treats that as
+        a failed external decision when ``use_tradingagents`` is enabled.
         """
         from app.agents.coordinator_agent import CoordinationResult
 
@@ -170,38 +170,29 @@ class TradingAgentsAdapter:
             "fast": fast,
         }
 
-        import json as _json, http.client, asyncio
-        _payload_str = _json.dumps(payload, default=str)
-        logger.info("[tradingagents] Sending %d bytes to tradingagents-service", len(_payload_str))
-
         effective_timeout = min(float(self.timeout_seconds), 45.0) if fast else max(float(self.timeout_seconds), 900.0)
-
-        def _sync_post():
-            conn = http.client.HTTPConnection("tradingagents-service", 8010, timeout=effective_timeout)
-            try:
-                conn.request("POST", "/analyze", body=_payload_str.encode("utf-8"),
-                             headers={"Content-Type": "application/json"})
-                resp = conn.getresponse()
-                body = _json.loads(resp.read().decode("utf-8"))
-                if resp.status >= 400:
-                    logger.warning("[tradingagents] service returned HTTP %s: %s", resp.status, str(body)[:300])
-                    return None
-                return self._map_to_result(symbol=symbol, raw=body)
-            finally:
-                conn.close()
+        timeout = aiohttp.ClientTimeout(total=effective_timeout)
+        url = f"{self.service_url}/analyze"
 
         try:
-            return await asyncio.to_thread(_sync_post)
+            logger.info("[tradingagents] POST %s with compact context", url)
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
+                async with session.post(url, json=payload) as resp:
+                    body = await resp.json(content_type=None)
+                    if resp.status >= 400:
+                        logger.warning("[tradingagents] service returned HTTP %s: %s", resp.status, str(body)[:300])
+                        return None
+                    if not isinstance(body, dict):
+                        logger.warning("[tradingagents] service returned non-object body: %s", type(body).__name__)
+                        return None
+
+                    svc_status = str(body.get("status", "")).lower()
+                    if svc_status and svc_status not in {"ok", "success", "completed"}:
+                        logger.warning("[tradingagents] unexpected status=%s, using response anyway", svc_status)
+                    return self._map_to_result(symbol=symbol, raw=body)
         except Exception as exc:
             logger.warning("[tradingagents] service call failed: %s: %r", type(exc).__name__, exc)
             return None
-
-        # HTTP 200 = success; status field may vary ("ok"/"success"/"completed")
-        svc_status = str(body.get("status", "")).lower()
-        if svc_status and svc_status not in {"ok", "success", "completed"}:
-            logger.warning("[tradingagents] unexpected status=%s, using response anyway", svc_status)
-
-        return self._map_to_result(symbol=symbol, raw=body)
 
     @staticmethod
     def _compact_analysis_context(
@@ -350,6 +341,26 @@ class TradingAgentsAdapter:
 
         risk_flagged = bool(raw.get("risk_flagged", False))
         position_advice = raw.get("position_advice") if isinstance(raw.get("position_advice"), dict) else {}
+        graph_mode = str(raw_payload.get("execution_mode") or raw_payload.get("mode") or "unknown")
+        is_full_graph = bool(raw_payload.get("is_full_graph")) or graph_mode in {
+            "full_graph",
+            "quantagent_patched_graph",
+            "quantagent_graph",
+            "patched_graph",
+            "native_graph",
+        }
+        strong_acceptance_eligible = bool(raw_payload.get("strong_acceptance_eligible", is_full_graph))
+        graph_meta = {
+            "graphMode": graph_mode,
+            "configuredMode": raw_payload.get("configured_mode") or raw_payload.get("mode"),
+            "isFullGraph": is_full_graph,
+            "strongAcceptanceEligible": strong_acceptance_eligible,
+            "modeNote": raw_payload.get("mode_note"),
+            "llmProvider": raw_payload.get("llm_provider"),
+            "llmUsed": raw_payload.get("llm_used"),
+            "quickModel": raw_payload.get("quick_model"),
+            "deepModel": raw_payload.get("deep_model"),
+        }
         if isinstance(internal_chain, list):
             position_advice = {
                 **position_advice,
@@ -390,6 +401,10 @@ class TradingAgentsAdapter:
                 "sizing_note": "WAIT 不建立新仓位。" if decision == "WAIT" else "按置信度和账户风险限额小仓位执行。",
                 "risk_note": risk_notes,
             }
+        position_advice = {
+            **position_advice,
+            "_graph_meta": {key: value for key, value in graph_meta.items() if value is not None},
+        }
 
         return CoordinationResult(
             symbol=symbol,
@@ -406,6 +421,9 @@ class TradingAgentsAdapter:
             input_snapshot_ids=raw_payload.get("input_snapshot_ids", {}),
             risk_notes=risk_notes,
             position_advice=position_advice,
+            graph_mode=graph_mode,
+            is_full_graph=is_full_graph,
+            strong_acceptance_eligible=strong_acceptance_eligible,
             timestamp=datetime.now(timezone.utc),
         )
 

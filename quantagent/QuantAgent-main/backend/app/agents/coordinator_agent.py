@@ -16,6 +16,7 @@ Pipeline:
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import re
 from dataclasses import dataclass, field
@@ -130,6 +131,9 @@ class CoordinationResult:
     audit_url: Optional[str] = None
     order_intent_status: Optional[str] = None
     order_intent_id: Optional[str] = None
+    graph_mode: Optional[str] = None
+    is_full_graph: Optional[bool] = None
+    strong_acceptance_eligible: Optional[bool] = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -160,6 +164,12 @@ class CoordinationResult:
             "orderIntentStatus": self.order_intent_status,
             "order_intent_id": self.order_intent_id,
             "orderIntentId": self.order_intent_id,
+            "graph_mode": self.graph_mode,
+            "graphMode": self.graph_mode,
+            "is_full_graph": self.is_full_graph,
+            "isFullGraph": self.is_full_graph,
+            "strong_acceptance_eligible": self.strong_acceptance_eligible,
+            "strongAcceptanceEligible": self.strong_acceptance_eligible,
             "timestamp": self.timestamp.isoformat(),
         }
 
@@ -219,12 +229,20 @@ class CoordinatorAgent:
         extra_input_snapshot_ids: Optional[Dict[str, Any]] = None,
         audit_metadata: Optional[Dict[str, Any]] = None,
         draft_order_intent: bool = True,
+        analysis_context_override: Optional[Dict[str, Any]] = None,
     ) -> CoordinationResult:
         """Run the unified TradingAgents decision path at a specific PIT time."""
         instrument = Instrument.from_raw(symbol)
         canonical_symbol = instrument.symbol
 
-        ctx = await self._load_analysis_context(canonical_symbol, interval, as_of_time=as_of_time)
+        if isinstance(analysis_context_override, dict):
+            ctx = copy.deepcopy(analysis_context_override)
+            ctx["symbol"] = canonical_symbol
+            ctx.setdefault("timeframe", interval)
+            if as_of_time is not None:
+                ctx.setdefault("as_of_time", as_of_time.isoformat())
+        else:
+            ctx = await self._load_analysis_context(canonical_symbol, interval, as_of_time=as_of_time)
         if extra_input_snapshot_ids:
             snapshot_ids = ctx.get("input_snapshot_ids")
             if not isinstance(snapshot_ids, dict):
@@ -236,6 +254,17 @@ class CoordinatorAgent:
             if not isinstance(metadata, dict):
                 metadata = {}
             ctx["metadata"] = {**metadata, **audit_metadata}
+
+        if not self.use_tradingagents:
+            result = await self._coordinate_prd104_from_context(canonical_symbol, interval, ctx)
+            if as_of_time is not None:
+                result.timestamp = as_of_time
+            return await self._persist_or_error(
+                result,
+                ctx,
+                draft_order_intent=draft_order_intent,
+                audit_metadata=audit_metadata,
+            )
 
         from app.agents.tradingagents_adapter import tradingagents_adapter
         result = await tradingagents_adapter.run_analysis(
@@ -254,13 +283,12 @@ class CoordinatorAgent:
                     **result.input_snapshot_ids,
                 }
             result.context_hash = result.context_hash or ctx.get("context_hash")
-            await self._persist_result(
+            return await self._persist_or_error(
                 result,
                 ctx,
                 draft_order_intent=draft_order_intent,
                 audit_metadata=audit_metadata,
             )
-            return result
 
         # TA service failed — return error, no local LLM fallback
         logger.error("[coordinator] TradingAgents service unavailable")
@@ -288,6 +316,16 @@ class CoordinatorAgent:
 
         # Step 1: Load AnalysisContext
         ctx = await self._load_analysis_context(symbol, interval)
+        result = await self._coordinate_prd104_from_context(symbol, interval, ctx)
+        return await self._persist_or_error(result, ctx)
+
+    async def _coordinate_prd104_from_context(
+        self,
+        symbol: str,
+        interval: str,
+        ctx: Dict[str, Any],
+    ) -> CoordinationResult:
+        """Run the in-process PRD 10.4 path using an already-built context."""
 
         # Step 2: Run 4 analysis roles in parallel
         tech, news, macro, risk = await asyncio.gather(
@@ -367,8 +405,40 @@ class CoordinatorAgent:
             position_advice=position_advice,
             risk_notes=risk_notes,
         )
-        await self._persist_result(result, ctx)
         return result
+
+    async def _persist_or_error(
+        self,
+        result: CoordinationResult,
+        ctx: Dict[str, Any] | None,
+        *,
+        draft_order_intent: bool = True,
+        audit_metadata: Optional[Dict[str, Any]] = None,
+    ) -> CoordinationResult:
+        decision_id = await self._persist_result(
+            result,
+            ctx,
+            draft_order_intent=draft_order_intent,
+            audit_metadata=audit_metadata,
+        )
+        if decision_id:
+            return result
+        logger.error("[coordinator] Decision persistence failed for %s", result.symbol)
+        return CoordinationResult(
+            symbol=result.symbol,
+            final_signal=SignalType.WAIT,
+            confidence=0.0,
+            summary="Agent 决策已生成，但持久化或关键审计写入失败；本次结果不作为成功决策返回。",
+            agent_signals=[],
+            vote_breakdown={"persistence_error": 1.0},
+            risk_veto=False,
+            data_source="error",
+            role_opinions=[],
+            risk_notes="coordination_history 或关键 audit_logs 写入失败",
+            timestamp=result.timestamp,
+            context_id=result.context_id,
+            context_hash=result.context_hash,
+        )
 
     # ── AnalysisContext loader ────────────────────────────────────────────────
 
@@ -1077,6 +1147,32 @@ DECISION_REASONING: <裁决理由>
             context_hash = f"sha256:{hashlib.sha256(snapshot_payload).hexdigest()[:16]}"
         result.context_id = context_id
         result.context_hash = context_hash
+        if not result.graph_mode:
+            result.graph_mode = "analysis_context" if result.data_source == "analysis_context" else "unknown"
+        if result.is_full_graph is None:
+            result.is_full_graph = result.graph_mode in {"full_graph", "quantagent_patched_graph", "patched_graph", "native_graph"}
+        if result.strong_acceptance_eligible is None:
+            result.strong_acceptance_eligible = bool(result.is_full_graph)
+        if not isinstance(result.position_advice, dict):
+            result.position_advice = {}
+        result.position_advice = {
+            **result.position_advice,
+            "_graph_meta": {
+                **(
+                    result.position_advice.get("_graph_meta", {})
+                    if isinstance(result.position_advice.get("_graph_meta"), dict)
+                    else {}
+                ),
+                "graphMode": result.graph_mode,
+                "isFullGraph": result.is_full_graph,
+                "strongAcceptanceEligible": result.strong_acceptance_eligible,
+            },
+        }
+        normalized_snapshot = CoordinatorAgent._build_normalized_audit_snapshot(
+            ctx,
+            result,
+            context_hash=context_hash,
+        )
 
         # ── Extract model / prompt versions from role_opinions ───────────
         model_version = "TradingAgents/QuantAgent"
@@ -1098,9 +1194,9 @@ DECISION_REASONING: <裁决理由>
                              model_version, prompt_version)
                         VALUES
                             (:symbol, :timestamp, :final_signal, :confidence,
-                             :vote_breakdown, :risk_veto, :summary, :agent_signals,
-                             :bull_view, :bear_view, :input_snapshot_ids,
-                             :role_opinions, :position_advice, :risk_notes,
+                             CAST(:vote_breakdown AS jsonb), :risk_veto, :summary, CAST(:agent_signals AS jsonb),
+                             :bull_view, :bear_view, CAST(:input_snapshot_ids AS jsonb),
+                             CAST(:role_opinions AS jsonb), CAST(:position_advice AS jsonb), :risk_notes,
                              :context_id, :context_hash, :available_time,
                              :model_version, :prompt_version)
                         RETURNING id
@@ -1148,16 +1244,22 @@ DECISION_REASONING: <裁决理由>
                         "asOfTime": result.timestamp.isoformat() if result.timestamp else None,
                         "contextId": context_id,
                         "contextHash": context_hash,
+                        "graphMode": result.graph_mode,
+                        "isFullGraph": result.is_full_graph,
+                        "strongAcceptanceEligible": result.strong_acceptance_eligible,
                         "snapshotId": result.input_snapshot_ids,
+                        "normalizedSnapshot": normalized_snapshot,
                         "inputSummary": {
                             "snapshot_ids": result.input_snapshot_ids,
                             "risk_notes": result.risk_notes,
+                            "normalized_snapshot_schema": normalized_snapshot.get("schema_version"),
                             "factor_snapshot": ctx.get("latest_factors", {}) if ctx else {},
                             "recent_signals": [
                                 {"type": s.get("signal_type"), "strategy": s.get("source_strategy"), "conf": s.get("confidence")}
                                 for s in (ctx.get("recent_signals", []) or [])[:20]
                             ] if ctx else [],
                             "price": ctx.get("bars", [{}])[-1].get("close") if ctx and ctx.get("bars") else None,
+                            "bars_count": normalized_snapshot.get("bars_summary", {}).get("count"),
                             "news_count": len(ctx.get("news_events", []) or []) if ctx else 0,
                             "macro_count": len(ctx.get("macro_events", []) or []) if ctx else 0,
                         },
@@ -1172,12 +1274,17 @@ DECISION_REASONING: <裁决理由>
                             "confidence": result.confidence,
                             "risk_veto": result.risk_veto,
                             "summary": result.summary,
+                            "graph_mode": result.graph_mode,
+                            "is_full_graph": result.is_full_graph,
+                            "strong_acceptance_eligible": result.strong_acceptance_eligible,
                         },
                     },
                     ip_address="internal",
+                    raise_on_failure=True,
                 )
             except Exception as exc:
-                logger.warning("[coordinator] Failed to write AGENT_DECISION audit: %s", exc)
+                logger.error("[coordinator] Failed to write critical AGENT_DECISION audit: %s", exc)
+                return None
 
             if draft_order_intent:
                 try:
@@ -1188,9 +1295,74 @@ DECISION_REASONING: <裁决理由>
                     result.order_intent_status = str(draft.get("status")) if isinstance(draft, dict) else None
                     result.order_intent_id = intent.get("intent_id") or intent.get("id") if isinstance(intent, dict) else None
                 except Exception as exc:
-                    logger.warning("[coordinator] Failed to draft OrderIntent for decision %s: %s", decision_id, exc)
+                    logger.error("[coordinator] Failed to draft critical OrderIntent for decision %s: %s", decision_id, exc)
+                    return None
 
         return int(decision_id) if decision_id else None
+
+    @staticmethod
+    def _build_normalized_audit_snapshot(
+        ctx: Dict[str, Any] | None,
+        result: CoordinationResult,
+        *,
+        context_hash: str,
+    ) -> Dict[str, Any]:
+        """Capture the exact Agent-visible context for audit display and strict replay."""
+        from app.models.analysis_context import _json_safe
+
+        source = ctx if isinstance(ctx, dict) else {}
+
+        def _list(key: str) -> List[Any]:
+            value = source.get(key)
+            return value if isinstance(value, list) else []
+
+        def _dict(key: str) -> Dict[str, Any]:
+            value = source.get(key)
+            return value if isinstance(value, dict) else {}
+
+        bars = _list("bars")
+        first_bar = bars[0] if bars and isinstance(bars[0], dict) else {}
+        last_bar = bars[-1] if bars and isinstance(bars[-1], dict) else {}
+        providers = sorted({
+            str(row.get("provider") or row.get("source"))
+            for row in bars
+            if isinstance(row, dict) and (row.get("provider") or row.get("source"))
+        })
+        exchanges = sorted({
+            str(row.get("exchange"))
+            for row in bars
+            if isinstance(row, dict) and row.get("exchange")
+        })
+
+        snapshot = {
+            "schema_version": "audit_analysis_context_snapshot.v1",
+            "symbol": source.get("symbol") or result.symbol,
+            "timeframe": source.get("timeframe"),
+            "as_of_time": source.get("as_of_time") or (
+                result.timestamp.isoformat() if result.timestamp else None
+            ),
+            "context_hash": context_hash,
+            "input_snapshot_ids": _dict("input_snapshot_ids") or result.input_snapshot_ids,
+            "data_versions": _dict("data_versions"),
+            "bars": bars,
+            "bars_summary": {
+                "count": len(bars),
+                "first_event_time": first_bar.get("event_time") or first_bar.get("timestamp"),
+                "last_event_time": last_bar.get("event_time") or last_bar.get("timestamp"),
+                "first_available_time": first_bar.get("available_time"),
+                "last_available_time": last_bar.get("available_time"),
+                "first_close": first_bar.get("close"),
+                "last_close": last_bar.get("close"),
+                "providers": providers,
+                "exchanges": exchanges,
+            },
+            "latest_factors": _dict("latest_factors"),
+            "recent_signals": _list("recent_signals"),
+            "news_events": _list("news_events"),
+            "macro_events": _list("macro_events"),
+            "metadata": _dict("metadata"),
+        }
+        return _json_safe(snapshot)
 
     # ── Streaming ────────────────────────────────────────────────────────────
 

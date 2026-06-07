@@ -336,6 +336,12 @@ class AuditLog(Base):
         Index("idx_audit_logs_created", "created_at"),
         Index("idx_audit_logs_action", "action"),
         Index("idx_audit_logs_user", "user_id"),
+        Index("idx_audit_logs_event_type", "event_type"),
+        Index("idx_audit_logs_decision_id", "decision_id"),
+        Index("idx_audit_logs_order_intent_id", "order_intent_id"),
+        Index("idx_audit_logs_context_hash", "context_hash"),
+        Index("idx_audit_logs_replay_session", "replay_session_id"),
+        Index("idx_audit_logs_backtest_id", "backtest_id"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -344,6 +350,23 @@ class AuditLog(Base):
     resource = Column(String(100), nullable=True)  # "BTCUSDT" or "settings"
     details = Column(JSONB, nullable=False, default={})
     ip_address = Column(String(50), nullable=True)
+    event_type = Column(String(80), nullable=True)
+    symbol = Column(String(100), nullable=True)
+    decision_id = Column(Integer, nullable=True)
+    source_decision_id = Column(Integer, nullable=True)
+    replay_decision_id = Column(Integer, nullable=True)
+    order_intent_id = Column(String(128), nullable=True)
+    order_id = Column(String(128), nullable=True)
+    context_id = Column(String(128), nullable=True)
+    context_hash = Column(String(128), nullable=True)
+    risk_status = Column(String(32), nullable=True)
+    execution_status = Column(String(32), nullable=True)
+    backtest_id = Column(Integer, nullable=True)
+    replay_session_id = Column(String(100), nullable=True)
+    execution_mode = Column(String(50), nullable=True)
+    payload_hash = Column(String(128), nullable=True)
+    prev_hash = Column(String(128), nullable=True)
+    immutable = Column(Boolean, nullable=False, default=True, server_default="true")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
