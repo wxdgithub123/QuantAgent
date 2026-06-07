@@ -348,10 +348,12 @@ async def get_analysis_context(
 async def get_factors(
     symbol: Optional[str] = Query(None, description="Filter by symbol (e.g. BTCUSDT)"),
     factor_name: Optional[str] = Query(None, description="Filter by factor name (e.g. sma_10)"),
+    as_of_time: Optional[datetime] = Query(None, description="Point-in-time filter: only show factors available <= this time"),
+    interval: Optional[str] = Query(None, description="Filter by interval (e.g. 1h, 1d)"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ) -> Dict[str, Any]:
-    """List factor snapshots with optional filters and pagination."""
+    """List factor snapshots with optional filters and pagination. Supports point-in-time filtering via as_of_time."""
     try:
         async with get_db() as session:
             conditions = []
@@ -365,6 +367,14 @@ async def get_factors(
                 conditions.append("factor_name = :factor_name")
                 factor_conditions.append("fs.factor_name = :factor_name")
                 params["factor_name"] = factor_name
+            if as_of_time:
+                conditions.append("available_time <= :as_of_time")
+                factor_conditions.append("fs.available_time <= :as_of_time")
+                params["as_of_time"] = as_of_time
+            if interval:
+                conditions.append("interval = :interval")
+                factor_conditions.append("fs.interval = :interval")
+                params["interval"] = interval
 
             where_clause = " AND ".join(conditions) if conditions else "1=1"
             factor_where_clause = " AND ".join(factor_conditions) if factor_conditions else "1=1"
@@ -712,10 +722,12 @@ async def get_events(
     symbol: Optional[str] = Query(None),
     signal_type: Optional[str] = Query(None, description="BUY, SELL, WAIT, etc."),
     source_strategy: Optional[str] = Query(None),
+    as_of_time: Optional[datetime] = Query(None, description="Point-in-time filter"),
+    interval: Optional[str] = Query(None, description="Filter by interval"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ) -> Dict[str, Any]:
-    """List signal events with optional filters and pagination."""
+    """List signal events with optional filters and pagination. Supports point-in-time filtering."""
     try:
         async with get_db() as session:
             conditions = []
@@ -729,6 +741,12 @@ async def get_events(
             if source_strategy:
                 conditions.append("source_strategy = :source_strategy")
                 params["source_strategy"] = source_strategy
+            if as_of_time:
+                conditions.append("available_time <= :as_of_time")
+                params["as_of_time"] = as_of_time
+            if interval:
+                conditions.append("interval = :interval")
+                params["interval"] = interval
 
             where_clause = " AND ".join(conditions) if conditions else "1=1"
             count_sql = f"SELECT COUNT(*) FROM signal_events WHERE {where_clause}"
@@ -899,6 +917,97 @@ LIMIT 20
         return {"signalId": signal_id, "relatedFactors": [], "relatedAuditIds": [], "error": str(e)}
 
 
+@router.get("/overview")
+async def get_signals_overview(
+    symbol: Optional[str] = Query("BTCUSDT", description="Symbol filter"),
+    interval: Optional[str] = Query("1h", description="Interval filter"),
+    as_of_time: Optional[datetime] = Query(None, description="Point-in-time filter"),
+) -> Dict[str, Any]:
+    """Get signal overview cards data: current signal state by type, strategy, and direction."""
+    try:
+        async with get_db() as session:
+            params: Dict[str, Any] = {}
+            pit_clause = ""
+            if as_of_time:
+                pit_clause = "AND available_time <= :as_of_time"
+                params["as_of_time"] = as_of_time
+
+            # Signal type distribution (BUY/SELL/WAIT count)
+            r = await session.execute(text(f"""
+                SELECT signal_type, COUNT(*) as cnt
+                FROM signal_events
+                WHERE symbol = :symbol AND interval = :interval {pit_clause}
+                GROUP BY signal_type ORDER BY cnt DESC
+            """), {"symbol": symbol, "interval": interval, **params})
+            by_type = {row[0]: row[1] for row in r.fetchall()}
+
+            # Strategy distribution
+            r = await session.execute(text(f"""
+                SELECT source_strategy, COUNT(*) as cnt
+                FROM signal_events
+                WHERE symbol = :symbol AND interval = :interval {pit_clause}
+                GROUP BY source_strategy ORDER BY cnt DESC
+            """), {"symbol": symbol, "interval": interval, **params})
+            by_strategy = {row[0]: row[1] for row in r.fetchall()}
+
+            # Total signals
+            r = await session.execute(text(f"""
+                SELECT COUNT(*) FROM signal_events
+                WHERE symbol = :symbol AND interval = :interval {pit_clause}
+            """), {"symbol": symbol, "interval": interval, **params})
+            total_signals = r.scalar() or 0
+
+            # Factor counts
+            r = await session.execute(text(f"""
+                SELECT COUNT(*), COUNT(DISTINCT factor_name)
+                FROM factor_snapshots
+                WHERE symbol = :symbol AND interval = :interval {pit_clause}
+            """), {"symbol": symbol, "interval": interval, **params})
+            row = r.fetchone()
+            factor_snapshots = row[0] if row else 0
+            distinct_factors = row[1] if row else 0
+
+            # Latest signal time
+            r = await session.execute(text(f"""
+                SELECT MAX(timestamp) FROM signal_events
+                WHERE symbol = :symbol AND interval = :interval {pit_clause}
+            """), {"symbol": symbol, "interval": interval, **params})
+            latest_signal = _iso(r.scalar())
+
+            # Recent strong signals (last 5 BUY/SELL)
+            r = await session.execute(text(f"""
+                SELECT id, symbol, signal_type, confidence, source_strategy, timestamp
+                FROM signal_events
+                WHERE symbol = :symbol AND interval = :interval {pit_clause}
+                AND signal_type IN ('BUY', 'SELL')
+                ORDER BY timestamp DESC LIMIT 5
+            """), {"symbol": symbol, "interval": interval, **params})
+            recent_strong = [
+                {
+                    "id": row[0], "symbol": row[1], "signal_type": row[2],
+                    "confidence": round(row[3], 4) if row[3] else 0,
+                    "source_strategy": row[4], "timestamp": _iso(row[5]),
+                }
+                for row in r.fetchall()
+            ]
+
+            return {
+                "symbol": symbol,
+                "interval": interval,
+                "as_of_time": as_of_time.isoformat() if as_of_time else None,
+                "total_signals": total_signals,
+                "factor_snapshots": factor_snapshots,
+                "distinct_factors": distinct_factors,
+                "latest_signal_at": latest_signal,
+                "by_signal_type": by_type,
+                "by_strategy": by_strategy,
+                "recent_strong_signals": recent_strong,
+            }
+    except Exception as e:
+        logger.error(f"Failed to fetch signals overview: {e}")
+        return {"error": str(e), "symbol": symbol}
+
+
 @router.get("/summary")
 async def get_signals_summary() -> Dict[str, Any]:
     """Aggregated summary: signal type distribution, strategy breakdown, symbol counts."""
@@ -958,3 +1067,96 @@ ORDER BY cnt DESC
     except Exception as e:
         logger.error(f"Failed to fetch signals summary: {e}")
         return {"error": str(e)}
+
+
+@router.get("/summary/by-context")
+async def get_signals_summary_by_context(
+    symbol: str = Query("BTCUSDT"),
+    interval: str = Query("1h"),
+    as_of_time: Optional[datetime] = Query(None, description="Point-in-time filter"),
+) -> Dict[str, Any]:
+    """Context-aware summary: factor/signal counts for a specific symbol+interval combination."""
+    try:
+        async with get_db() as session:
+            params: Dict[str, Any] = {"symbol": symbol, "interval": interval}
+            pit_clause = ""
+            if as_of_time:
+                pit_clause = "AND available_time <= :as_of_time"
+                params["as_of_time"] = as_of_time
+
+            # Factor snapshot count
+            r = await session.execute(text(f"""
+                SELECT COUNT(*), COUNT(DISTINCT factor_name)
+                FROM factor_snapshots
+                WHERE symbol = :symbol AND interval = :interval {pit_clause}
+            """), params)
+            row = r.fetchone()
+            factor_snapshots = row[0] if row else 0
+            distinct_factors = row[1] if row else 0
+
+            # Factor category breakdown
+            r = await session.execute(text(f"""
+                SELECT COALESCE(fd.category, 'unclassified') AS category, COUNT(DISTINCT fs.factor_name) AS cnt
+                FROM factor_snapshots fs
+                LEFT JOIN factor_definitions fd ON fd.factor_name = fs.factor_name
+                WHERE fs.symbol = :symbol AND fs.interval = :interval {pit_clause.replace('available_time', 'fs.available_time')}
+                GROUP BY COALESCE(fd.category, 'unclassified')
+                ORDER BY cnt DESC
+            """), params)
+            by_factor_category = {row[0]: row[1] for row in r.fetchall()}
+
+            # Signal event count
+            r = await session.execute(text(f"""
+                SELECT COUNT(*) FROM signal_events
+                WHERE symbol = :symbol AND interval = :interval {pit_clause}
+            """), params)
+            event_total = r.scalar() or 0
+
+            # Strong signal count (BUY/SELL)
+            r = await session.execute(text(f"""
+                SELECT COUNT(*) FROM signal_events
+                WHERE symbol = :symbol AND interval = :interval {pit_clause}
+                AND signal_type IN ('BUY', 'SELL')
+            """), params)
+            strong_signals = r.scalar() or 0
+
+            # Signal type distribution
+            r = await session.execute(text(f"""
+                SELECT signal_type, COUNT(*) as cnt
+                FROM signal_events
+                WHERE symbol = :symbol AND interval = :interval {pit_clause}
+                GROUP BY signal_type ORDER BY cnt DESC
+            """), params)
+            by_signal_type = {row[0]: row[1] for row in r.fetchall()}
+
+            # Latest signal time
+            r = await session.execute(text(f"""
+                SELECT MAX(timestamp) FROM signal_events
+                WHERE symbol = :symbol AND interval = :interval {pit_clause}
+            """), params)
+            latest_signal_at = _iso(r.scalar())
+
+            # Data sources
+            r = await session.execute(text(f"""
+                SELECT STRING_AGG(DISTINCT COALESCE(data_source, 'unrecorded'), ', ')
+                FROM factor_snapshots
+                WHERE symbol = :symbol AND interval = :interval {pit_clause}
+            """), params)
+            data_sources = [s.strip() for s in (r.scalar() or "unrecorded").split(",") if s.strip()]
+
+            return {
+                "symbol": symbol,
+                "interval": interval,
+                "as_of_time": as_of_time.isoformat() if as_of_time else None,
+                "factor_snapshots": factor_snapshots,
+                "distinct_factors": distinct_factors,
+                "by_factor_category": by_factor_category,
+                "event_total": event_total,
+                "strong_signals": strong_signals,
+                "by_signal_type": by_signal_type,
+                "latest_signal_at": latest_signal_at,
+                "data_sources": data_sources,
+            }
+    except Exception as e:
+        logger.error(f"Failed to fetch context summary: {e}")
+        return {"error": str(e), "symbol": symbol, "interval": interval}

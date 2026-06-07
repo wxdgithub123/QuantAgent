@@ -2026,17 +2026,29 @@ async def get_market_news(
     # Remap DuckDB field names to match frontend expectations
     remapped = []
     for a in articles:
+        sentiment_score = _safe_float(a.get("sentiment_score"))
+        sentiment = "neutral"
+        if sentiment_score is not None:
+            if sentiment_score > 0.15:
+                sentiment = "positive"
+            elif sentiment_score < -0.15:
+                sentiment = "negative"
         remapped.append({
             "title": a.get("title", ""),
             "source": a.get("source", ""),
             "url": a.get("url", ""),
             "summary": a.get("summary", ""),
+            "excerpt": a.get("excerpt", ""),
             "date": str(a.get("published_at", "")),
+            "published_at": str(a.get("published_at", "")),
+            "available_time": str(a.get("available_time", "")) if a.get("available_time") else None,
             "symbol": symbol.upper(),
-            "sentiment_score": a.get("sentiment_score"),
-            "topics": a.get("topics", []) or [],
-            "event_tags": a.get("event_tags", []) or [],
-            "provider": a.get("provider", ""),
+            "symbols": a.get("symbols") or [symbol.upper()],
+            "sentiment": sentiment,
+            "sentiment_score": sentiment_score,
+            "topics": a.get("topics") or [],
+            "event_tags": a.get("event_tags") or [],
+            "provider": a.get("provider"),
         })
 
     return {"symbol": symbol.upper(), "articles": remapped, "total": len(remapped), "source": "duckdb"}
@@ -2070,6 +2082,9 @@ async def get_l1_overview() -> Dict[str, Any]:
                 "price": tk.price,
                 "change_24h_pct": round(tk.change_percent, 2),
                 "volume": tk.volume,
+                "high_24h": tk.high_24h,
+                "low_24h": tk.low_24h,
+                "change_24h": tk.change_24h,
             }
         except Exception:
             return None
@@ -2122,91 +2137,79 @@ async def get_research_snapshot(
         symbol=canonical_symbol,
         interval=interval,
         as_of_time=as_of_time,
-        bar_limit=200,
-        factor_limit=60,
-        signal_limit=60,
-        news_limit=30,
-        macro_limit=50,
+        bar_limit=120,
+        factor_limit=40,
+        signal_limit=40,
+        news_limit=20,
+        macro_limit=30,
     )
     payload = context.to_agent_payload()
     cutoff = context.as_of_time
     cutoff_for_sql = cutoff.replace(tzinfo=timezone.utc) if cutoff.tzinfo is None else cutoff
-
-    # ── DB total counts (per symbol/interval, not time-filtered) ──────────
     db_total: Dict[str, int] = {}
 
-    async def _fetch_db_totals():
+    async def _fetch_db_totals() -> Dict[str, int]:
         from app.services.clickhouse_service import clickhouse_service as ch_svc
         from app.pipeline.storage.duckdb_store import pipeline_store
 
-        async def _bars_total():
+        async def _bars_total() -> int:
             try:
                 return await ch_svc.count_klines(canonical_symbol, interval)
             except Exception:
                 return 0
 
-        async def _pg_counts():
-            counts = {}
+        async def _pg_counts() -> Dict[str, int]:
+            counts: Dict[str, int] = {}
             try:
                 async with get_db() as sess:
-                    r = await sess.execute(text(
-                        "SELECT COUNT(*) FROM factor_snapshots WHERE symbol = :sym AND (interval = :intv OR parameters->>'interval' = :intv)"
-                    ), {"sym": canonical_symbol, "intv": interval})
-                    counts["factors_total"] = r.scalar() or 0
+                    row = await sess.execute(
+                        text(
+                            "SELECT COUNT(*) FROM factor_snapshots "
+                            "WHERE symbol = :sym AND (interval = :intv OR parameters->>'interval' = :intv)"
+                        ),
+                        {"sym": canonical_symbol, "intv": interval},
+                    )
+                    counts["factors_total"] = int(row.scalar() or 0)
 
-                    r = await sess.execute(text(
-                        "SELECT COUNT(*) FROM signal_events WHERE symbol = :sym AND (interval = :intv OR extra_data->>'interval' = :intv)"
-                    ), {"sym": canonical_symbol, "intv": interval})
-                    counts["signals_total"] = r.scalar() or 0
+                    row = await sess.execute(
+                        text(
+                            "SELECT COUNT(*) FROM signal_events "
+                            "WHERE symbol = :sym AND (interval = :intv OR extra_data->>'interval' = :intv)"
+                        ),
+                        {"sym": canonical_symbol, "intv": interval},
+                    )
+                    counts["signals_total"] = int(row.scalar() or 0)
 
-                    r = await sess.execute(text(
-                        "SELECT COUNT(*) FROM coordination_history WHERE symbol = :sym"
-                    ), {"sym": canonical_symbol})
-                    counts["decisions_total"] = r.scalar() or 0
+                    row = await sess.execute(
+                        text("SELECT COUNT(*) FROM coordination_history WHERE symbol = :sym"),
+                        {"sym": canonical_symbol},
+                    )
+                    counts["decisions_total"] = int(row.scalar() or 0)
             except Exception:
                 counts.setdefault("factors_total", 0)
                 counts.setdefault("signals_total", 0)
                 counts.setdefault("decisions_total", 0)
             return counts
 
-        def _duckdb_counts():
-            counts = {}
+        def _duckdb_counts() -> Dict[str, int]:
+            counts: Dict[str, int] = {}
             try:
-                conn = pipeline_store._get_conn() if hasattr(pipeline_store, '_get_conn') else None
-                if conn is None:
-                    # fallback: query all and len
-                    news_rows = pipeline_store.query_news(symbol=canonical_symbol, limit=99999)
-                    counts["news_total"] = len(news_rows)
-                    macro_rows = pipeline_store.query_macro(limit=99999)
-                    counts["macro_total"] = len(macro_rows)
-                else:
-                    import duckdb
-                    try:
-                        r = conn.sql(f"SELECT COUNT(*) FROM news_articles WHERE list_contains(symbols, '{canonical_symbol}')").fetchone()
-                        counts["news_total"] = int(r[0]) if r else 0
-                    except Exception:
-                        counts["news_total"] = 0
-                    try:
-                        r = conn.sql("SELECT COUNT(*) FROM macro_indicators").fetchone()
-                        counts["macro_total"] = int(r[0]) if r else 0
-                    except Exception:
-                        counts["macro_total"] = 0
+                news_rows = pipeline_store.query_news(symbol=canonical_symbol, limit=99999)
+                counts["news_total"] = len(news_rows)
             except Exception:
-                counts.setdefault("news_total", 0)
-                counts.setdefault("macro_total", 0)
+                counts["news_total"] = 0
+            try:
+                macro_rows = pipeline_store.query_macro(limit=99999)
+                counts["macro_total"] = len(macro_rows)
+            except Exception:
+                counts["macro_total"] = 0
             return counts
 
-        import asyncio
-        bars_task = _bars_total()
-        pg_task = _pg_counts()
-        bars_result = await bars_task
-        pg_result = await pg_task
-        duck_result = _duckdb_counts()
-
+        bars_total, pg_counts = await asyncio.gather(_bars_total(), _pg_counts())
         return {
-            "bars_total": bars_result,
-            **pg_result,
-            **duck_result,
+            "bars_total": int(bars_total or 0),
+            **pg_counts,
+            **_duckdb_counts(),
         }
 
     try:
@@ -2284,44 +2287,37 @@ async def get_research_snapshot(
             "replay_note": "所有研究面板都用同一个 as_of_time 截止，便于回看任意历史时刻。",
         },
         "counts": {
-            # ── Tier 1: 当前前端展示量 ──
-            "bars_displayed": bar_panel["displayed"],
-            "factors_displayed": len(factor_items),
-            "signals_displayed": len(signal_panel),
-            "news_displayed": len(news_panel),
-            "macro_displayed": len(macro_events[:6]),
-            "decisions_displayed": 1 if latest_decision else 0,
-            "tradingagents_roles_displayed": tradingagents_panel.get("role_count", 0) if tradingagents_panel else 0,
-
-            # ── Tier 2: 当前回看窗口可用量（受 as_of_time + limit 约束）──
-            "bars_available": len(bars),
-            "factors_available": len(factors),
-            "signals_available": len(signals),
-            "news_available": len(news_events),
-            "macro_available": len(macro_events),
-            "decisions_available": 1 if latest_decision else 0,
-            "tradingagents_roles_available": tradingagents_panel.get("role_count", 0) if tradingagents_panel else 0,
-
-            # ── Tier 3: 数据库累计总量（不限时间、不限 limit）──
-            "bars_total": db_total.get("bars_total", 0),
-            "factors_total": db_total.get("factors_total", 0),
-            "signals_total": db_total.get("signals_total", 0),
-            "news_total": db_total.get("news_total", 0),
-            "macro_total": db_total.get("macro_total", 0),
-            "decisions_total": db_total.get("decisions_total", 0),
-            "tradingagents_roles_total": db_total.get("decisions_total", 0),
-
-            # ── Deprecated (backward compat) ──
             "bars": len(bars),
+            "bars_displayed": bar_panel["displayed"],
+            "bars_available": len(bars),
+            "bars_total": db_total.get("bars_total", 0),
             "factors": len(factors),
-            "signals": len(signals),
-            "news": len(news_events),
-            "macro": len(macro_events),
-            "decisions": 1 if latest_decision else 0,
-            "tradingagents_roles": tradingagents_panel.get("role_count", 0) if tradingagents_panel else 0,
+            "factors_displayed": len(factor_items),
+            "factors_available": len(factors),
+            "factors_total": db_total.get("factors_total", 0),
             "technical_factors": len(factor_panel["groups"]["technical"]),
             "sentiment_factors": len(factor_panel["groups"]["sentiment"]),
             "macro_factors": len(factor_panel["groups"]["macro"]),
+            "signals": len(signals),
+            "signals_displayed": len(signal_panel),
+            "signals_available": len(signals),
+            "signals_total": db_total.get("signals_total", 0),
+            "news": len(news_events),
+            "news_displayed": len(news_panel),
+            "news_available": len(news_events),
+            "news_total": db_total.get("news_total", 0),
+            "macro": len(macro_events),
+            "macro_displayed": len(macro_events[:6]),
+            "macro_available": len(macro_events),
+            "macro_total": db_total.get("macro_total", 0),
+            "decisions": 1 if latest_decision else 0,
+            "decisions_displayed": 1 if latest_decision else 0,
+            "decisions_available": 1 if latest_decision else 0,
+            "decisions_total": db_total.get("decisions_total", 0),
+            "tradingagents_roles": tradingagents_panel.get("role_count", 0) if tradingagents_panel else 0,
+            "tradingagents_roles_displayed": tradingagents_panel.get("role_count", 0) if tradingagents_panel else 0,
+            "tradingagents_roles_available": tradingagents_panel.get("role_count", 0) if tradingagents_panel else 0,
+            "tradingagents_roles_total": db_total.get("decisions_total", 0),
         },
         "latest_bar": bars[-1] if bars else None,
         "bar_panel": bar_panel,
