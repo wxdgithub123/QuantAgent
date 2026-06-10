@@ -12,7 +12,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
-  RefreshCw, Filter, ArrowUp, ArrowDown, Minus, Info,
+  RefreshCw, Filter, ArrowUp, ArrowDown, Minus, Info, Activity,
 } from "lucide-react";
 
 // New components
@@ -21,6 +21,7 @@ import { ResearchControls } from "@/components/signals/ResearchControls";
 import { ResearchSummary } from "@/components/signals/ResearchSummary";
 import { SignalDrawer } from "@/components/signals/SignalDrawer";
 import { DiagnosticsPanel } from "@/components/signals/DiagnosticsPanel";
+import { FactorTimeline } from "@/components/signals/FactorTimeline";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -34,6 +35,8 @@ interface FactorRow {
   interval?: string | null;
   provider?: string | null;
   data_source?: string | null;
+  schema_version?: string | null;
+  available_time?: string | null;
   definition?: {
     display_name: string;
     category: string;
@@ -45,6 +48,9 @@ interface SignalEventRow {
   id: number;
   symbol: string;
   timestamp: string | null;
+  event_time?: string | null;          // 事件发生时间
+  available_time?: string | null;      // 系统可见时间
+  as_of_time?: string | null;          // 查询时点
   signal_type: string;
   signal_value: number;
   confidence: number;
@@ -103,11 +109,52 @@ function formatSourceLabel(value?: string | null) {
 
 function formatProviderLabel(value?: string | null) {
   if (!value) return "未记录来源";
-  if (value === "active-storage") return "行情库缓存";
-  if (value === "openbb:yfinance") return "OpenBB / yfinance";
-  if (value === "openbb:fred") return "OpenBB / FRED";
-  if (value === "ccxt") return "CCXT";
-  return value;
+  // 数据平台 PRD M5.8 定义的 provider 名称映射
+  const PROVIDER_MAP: Record<string, string> = {
+    "active-storage": "本地缓存",
+    "openbb:yfinance": "YFinance (OpenBB)",
+    "openbb:fred": "FRED (OpenBB)",
+    "openbb:oecd": "OECD (OpenBB)",
+    "openbb:binance": "Binance (OpenBB)",
+    "ccxt:binance": "Binance (CCXT)",
+    "ccxt:okx": "OKX (CCXT)",
+    "ccxt": "CCXT",
+    "binance": "Binance",
+    "okx": "OKX",
+    "yfinance": "YFinance",
+    "fred": "FRED",
+    "macro": "宏观数据源",
+  };
+  return PROVIDER_MAP[value] || value;
+}
+
+/**
+ * 通用 API 响应解析器：兼容数据平台 PRD M5.1 统一格式 {data, meta, errors}
+ * 和当前后端扁平格式。返回 {data, meta, errors} 三元组。
+ */
+async function parseApiResponse<T>(res: Response): Promise<{ data: T[]; meta: Record<string, unknown>; errors: string[] }> {
+  const json = await res.json();
+  // 数据平台 PRD 格式: { data: [...], meta: {...}, errors: [...] }
+  if (json && "data" in json && Array.isArray(json.data)) {
+    return {
+      data: json.data as T[],
+      meta: (json.meta as Record<string, unknown>) || {},
+      errors: (json.errors as string[]) || [],
+    };
+  }
+  // 当前后端扁平格式：直接是数组或对象带 data 属性
+  if (Array.isArray(json)) {
+    return { data: json as T[], meta: {}, errors: [] };
+  }
+  // 兼容部分接口的 { data: [...], total: N } 格式
+  if (json && Array.isArray(json.data)) {
+    return { data: json.data as T[], meta: { total: json.total }, errors: [] };
+  }
+  // 空响应或对象响应
+  if (json && typeof json === "object" && !json.error) {
+    return { data: [], meta: json as Record<string, unknown>, errors: json.error ? [json.error] : [] };
+  }
+  return { data: [], meta: {}, errors: json?.error ? [json.error] : [] };
 }
 
 function formatFactorValue(value: number | undefined) {
@@ -120,11 +167,26 @@ function formatFactorValue(value: number | undefined) {
 // ─── Page ───────────────────────────────────────────────────────────────────
 
 export default function SignalsPage() {
-  // Research context
-  const [symbol, setSymbol] = useState("BTCUSDT");
+  // Research context — 支持从 URL 参数读取初始交易对
+  const [symbol, setSymbol] = useState(() => {
+    if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search);
+      return p.get("symbol") || "BTCUSDT";
+    }
+    return "BTCUSDT";
+  });
   const [interval, setInterval] = useState("1h");
-  const [asOfTime, setAsOfTime] = useState("");
+  const [asOfTime, setAsOfTime] = useState(() => {
+    if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search);
+      return p.get("as_of_time") || "";
+    }
+    return "";
+  });
   const [appliedAsOf, setAppliedAsOf] = useState("");
+  const [replayMode, setReplayMode] = useState(false);
+  const [timeSuggestions, setTimeSuggestions] = useState<string[]>([]);
+  const [showTimeline, setShowTimeline] = useState(false);
 
   // Data
   const [factors, setFactors] = useState<FactorRow[]>([]);
@@ -141,6 +203,7 @@ export default function SignalsPage() {
   const [signalTypeFilter, setSignalTypeFilter] = useState("all");
   const [factorPage, setFactorPage] = useState(0);
   const [signalPage, setSignalPage] = useState(0);
+  const [providerOptions, setProviderOptions] = useState<string[]>([]);
   const PAGE_SIZE = 50;
 
   // Signal detail drawer
@@ -158,10 +221,23 @@ export default function SignalsPage() {
     try {
       const res = await fetch("/api/v1/signals/factor-definitions");
       if (res.ok) {
-        const d = await res.json();
-        setFactorDefinitions(d.data || []);
+        const { data } = await parseApiResponse<FactorDefinition>(res);
+        setFactorDefinitions(data || []);
       }
     } catch { /* silent */ }
+  }, []);
+
+  const fetchProviders = useCallback(async () => {
+    try {
+      const res = await fetch("/api/v1/meta/providers");
+      if (res.ok) {
+        const { data } = await parseApiResponse<{ name: string }>(res);
+        setProviderOptions(data.map((p) => p.name));
+      }
+    } catch {
+      // 数据平台 API 尚未就绪，使用 PRD M5.8 定义的默认 provider 列表
+      setProviderOptions(["OpenBB", "Binance", "FRED", "CCXT", "内部指标计算", "实时拉取"]);
+    }
   }, []);
 
   const fetchFactors = useCallback(async () => {
@@ -171,8 +247,8 @@ export default function SignalsPage() {
       if (appliedAsOf) params.set("as_of_time", appliedAsOf);
       const res = await fetch(`/api/v1/signals/factors?${params}`);
       if (res.ok) {
-        const d = await res.json();
-        setFactors(d.data || []);
+        const { data } = await parseApiResponse<FactorRow>(res);
+        setFactors(data || []);
       }
     } catch (e: unknown) { setError(errorMessage(e)); }
   }, [symbol, interval, appliedAsOf, factorSearch, factorPage]);
@@ -184,8 +260,8 @@ export default function SignalsPage() {
       if (appliedAsOf) params.set("as_of_time", appliedAsOf);
       const res = await fetch(`/api/v1/signals/events?${params}`);
       if (res.ok) {
-        const d = await res.json();
-        setEvents(d.data || []);
+        const { data } = await parseApiResponse<SignalEventRow>(res);
+        setEvents(data || []);
       }
     } catch (e: unknown) { setError(errorMessage(e)); }
   }, [symbol, interval, appliedAsOf, signalTypeFilter, signalPage]);
@@ -196,9 +272,13 @@ export default function SignalsPage() {
       if (appliedAsOf) params.set("as_of_time", appliedAsOf);
       const res = await fetch(`/api/v1/signals/overview?${params}`);
       if (res.ok) {
-        const d = await res.json();
-        if (!d.error) setSignalOverview(d);
-        else setSignalOverview(null);
+        const { data, meta, errors } = await parseApiResponse<SignalOverview>(res);
+        if (errors.length === 0 && meta && Object.keys(meta).length > 0) {
+          // 如果 meta 中直接包含 overview 数据（当前后端格式）
+          setSignalOverview(meta as unknown as SignalOverview);
+        } else if (data.length > 0) {
+          setSignalOverview(data[0] as unknown as SignalOverview);
+        }
       }
     } catch {
       setSignalOverview(null);
@@ -215,9 +295,31 @@ export default function SignalsPage() {
   // ── Effects ────────────────────────────────────────────────────────────────
 
   useEffect(() => { fetchFactorDefinitions(); }, [fetchFactorDefinitions]);
+  useEffect(() => { fetchProviders(); }, [fetchProviders]);
   useEffect(() => { fetchFactors(); }, [fetchFactors]);
   useEffect(() => { fetchEvents(); }, [fetchEvents]);
   useEffect(() => { fetchSignalOverview(); }, [fetchSignalOverview]);
+
+  // Fetch time suggestions from recent events
+  useEffect(() => {
+    fetch("/api/v1/signals/events?symbol=BTCUSDT&interval=1h&limit=10")
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (!d?.data) return;
+        const times: string[] = d.data
+          .map((e: { timestamp?: string }) => e.timestamp)
+          .filter(Boolean)
+          .slice(0, 8);
+        setTimeSuggestions(times);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Auto-apply as_of_time from URL on mount
+  useEffect(() => {
+    if (asOfTime) handleApply();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleApply = () => {
     if (!asOfTime.trim()) { setAppliedAsOf(""); return; }
@@ -298,11 +400,14 @@ export default function SignalsPage() {
             interval={interval}
             asOfTime={asOfTime}
             appliedAsOf={appliedAsOf}
+            replayMode={replayMode}
+            timeSuggestions={timeSuggestions}
             onSymbolChange={setSymbol}
             onIntervalChange={setInterval}
             onAsOfTimeChange={setAsOfTime}
             onApply={handleApply}
             onClear={handleClear}
+            onReplayModeChange={setReplayMode}
           />
         </section>
 
@@ -354,11 +459,32 @@ export default function SignalsPage() {
                   <p className="text-xs text-muted-foreground mt-0.5">
                     每行是交易对在某个时间点的具体因子值。使用上方搜索和分类筛选精准定位。
                   </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowTimeline(!showTimeline)}
+                    className={cn(
+                      "h-7 text-[10px] border-border mt-2",
+                      showTimeline
+                        ? "bg-cyan-500/10 text-cyan-400 border-cyan-500/25"
+                        : "text-muted-foreground"
+                    )}
+                  >
+                    <Activity className="w-3 h-3 mr-1" />
+                    {showTimeline ? "隐藏时间轴" : "时间轴"}
+                  </Button>
                 </div>
                 <Badge className="bg-blue-500/10 text-blue-300 border-blue-500/20 text-[10px]">
                   {factors.length} 条记录
                 </Badge>
               </div>
+
+              {/* Factor Timeline (toggleable) */}
+              {showTimeline && (
+                <div className="mt-3">
+                  <FactorTimeline symbol={symbol} interval={interval} />
+                </div>
+              )}
 
               {/* Filters */}
               <div className="flex flex-wrap items-center gap-2 mt-3">
@@ -386,10 +512,9 @@ export default function SignalsPage() {
                   </SelectTrigger>
                   <SelectContent className="bg-card border-border">
                     <SelectItem value="all" className="text-xs">全部来源</SelectItem>
-                    <SelectItem value="indicators" className="text-xs">内部指标</SelectItem>
-                    <SelectItem value="l5_pipeline" className="text-xs">L5 管线</SelectItem>
-                    <SelectItem value="storage" className="text-xs">缓存读取</SelectItem>
-                    <SelectItem value="live-fetch" className="text-xs">实时拉取</SelectItem>
+                    {providerOptions.map((p) => (
+                      <SelectItem key={p} value={p.toLowerCase()} className="text-xs">{p}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -405,21 +530,23 @@ export default function SignalsPage() {
                       <TableHead className="text-muted-foreground text-xs w-[140px]">当前值</TableHead>
                       <TableHead className="text-muted-foreground text-xs w-[100px]">计算来源</TableHead>
                       <TableHead className="text-muted-foreground text-xs w-[120px]">上游来源</TableHead>
-                      <TableHead className="text-muted-foreground text-xs w-[140px]">时间</TableHead>
+                      <TableHead className="text-muted-foreground text-xs w-[90px]">版本</TableHead>
+                      <TableHead className="text-muted-foreground text-xs w-[140px]">可用时间</TableHead>
+                      <TableHead className="text-muted-foreground text-xs w-[140px]">记录时间</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {loading ? (
                       Array.from({ length: 5 }).map((_, i) => (
                         <TableRow key={i} className="border-border">
-                          {Array.from({ length: 7 }).map((_, j) => (
+                          {Array.from({ length: 9 }).map((_, j) => (
                             <TableCell key={j}><Skeleton className="h-3 w-16" /></TableCell>
                           ))}
                         </TableRow>
                       ))
                     ) : filteredFactors.length === 0 ? (
                       <TableRow className="border-border">
-                        <TableCell colSpan={7} className="text-center text-muted-foreground py-12 text-sm">
+                        <TableCell colSpan={9} className="text-center text-muted-foreground py-12 text-sm">
                           <Info className="w-8 h-8 mx-auto mb-2 opacity-30" />
                           暂无因子快照数据 — 请先确认已运行信号管线，或调整筛选条件
                         </TableCell>
@@ -450,6 +577,12 @@ export default function SignalsPage() {
                             <TableCell className="text-muted-foreground text-xs">
                               <div>{formatProviderLabel(f.provider)}</div>
                               <div className="mt-0.5 text-[10px] text-muted-foreground/70">{formatSourceLabel(f.data_source)}</div>
+                            </TableCell>
+                            <TableCell className="text-muted-foreground text-[10px] font-mono">
+                              {f.schema_version || "—"}
+                            </TableCell>
+                            <TableCell className="text-muted-foreground text-[11px]">
+                              {f.available_time ? new Date(f.available_time).toLocaleString("zh-CN") : "—"}
                             </TableCell>
                             <TableCell className="text-muted-foreground text-[11px]">
                               {f.timestamp ? new Date(f.timestamp).toLocaleString("zh-CN") : "-"}
@@ -536,7 +669,8 @@ export default function SignalsPage() {
                       <TableHead className="text-muted-foreground text-xs w-[80px]">置信度</TableHead>
                       <TableHead className="text-muted-foreground text-xs">策略</TableHead>
                       <TableHead className="text-muted-foreground text-xs">触发原因</TableHead>
-                      <TableHead className="text-muted-foreground text-xs w-[140px]">时间</TableHead>
+                      <TableHead className="text-muted-foreground text-xs w-[140px]">事件时间</TableHead>
+                      <TableHead className="text-muted-foreground text-xs w-[140px]">触发时间</TableHead>
                       <TableHead className="text-muted-foreground text-xs w-[80px]">详情</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -544,14 +678,14 @@ export default function SignalsPage() {
                     {loading ? (
                       Array.from({ length: 5 }).map((_, i) => (
                         <TableRow key={i} className="border-border">
-                          {Array.from({ length: 7 }).map((_, j) => (
+                          {Array.from({ length: 8 }).map((_, j) => (
                             <TableCell key={j}><Skeleton className="h-3 w-14" /></TableCell>
                           ))}
                         </TableRow>
                       ))
                     ) : events.length === 0 ? (
                       <TableRow className="border-border">
-                        <TableCell colSpan={7} className="text-center text-muted-foreground py-12 text-sm">
+                        <TableCell colSpan={8} className="text-center text-muted-foreground py-12 text-sm">
                           <Info className="w-8 h-8 mx-auto mb-2 opacity-30" />
                           暂无信号事件数据 — 请先运行信号管线
                         </TableCell>
@@ -577,6 +711,14 @@ export default function SignalsPage() {
                           <TableCell className="text-muted-foreground text-xs">{ev.source_strategy}</TableCell>
                           <TableCell className="text-muted-foreground text-xs max-w-[180px] truncate">
                             {ev.strategy_id ? `${ev.strategy_id} 策略触发` : "—"}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground text-[11px]">
+                            {/* TODO: 待后端补充 event_time 字段，当前使用 timestamp 作为事件时间 */}
+                            {ev.event_time
+                              ? new Date(ev.event_time).toLocaleString("zh-CN")
+                              : ev.timestamp
+                                ? new Date(ev.timestamp).toLocaleString("zh-CN")
+                                : "—"}
                           </TableCell>
                           <TableCell className="text-muted-foreground text-[11px]">
                             {ev.timestamp ? new Date(ev.timestamp).toLocaleString("zh-CN") : "-"}

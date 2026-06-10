@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { TrendingUp, TrendingDown, DollarSign, BarChart3, Info } from "lucide-react";
+import { TrendingUp, TrendingDown, DollarSign, BarChart3, Info, AlertTriangle, Clock } from "lucide-react";
 
 interface QuoteData {
   symbol: string;
@@ -15,13 +15,44 @@ interface QuoteData {
   volume: number;
   high_24h?: number;
   low_24h?: number;
+  provider?: string;
+  updated_at?: string | null;
+  bar_time?: string | null;
+  stale?: boolean;
 }
 
 interface MarketQuoteProps {
   symbol: string;
+  interval?: string;
 }
 
-export function MarketQuote({ symbol }: MarketQuoteProps) {
+/** 判断 K 线是否过期：最新 bar 距当前时间超过 interval 的 2 倍 */
+function isStale(barTime: string | null | undefined, interval: string): boolean {
+  if (!barTime) return false;
+  const barMs = new Date(barTime).getTime();
+  if (Number.isNaN(barMs)) return false;
+  const nowMs = Date.now();
+  const intervalMs: Record<string, number> = {
+    "1m": 60_000, "5m": 300_000, "15m": 900_000,
+    "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000,
+  };
+  const threshold = (intervalMs[interval] || 3_600_000) * 2;
+  return nowMs - barMs > threshold;
+}
+
+function formatProvider(provider?: string): string {
+  if (!provider) return "未记录";
+  const map: Record<string, string> = {
+    "openbb:yfinance": "YFinance (OpenBB)",
+    "openbb:fred": "FRED (OpenBB)",
+    "ccxt:binance": "Binance (CCXT)",
+    "ccxt:okx": "OKX (CCXT)",
+    "binance": "Binance",
+  };
+  return map[provider] || provider;
+}
+
+export function MarketQuote({ symbol, interval = "1h" }: MarketQuoteProps) {
   const [quote, setQuote] = useState<QuoteData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -32,19 +63,15 @@ export function MarketQuote({ symbol }: MarketQuoteProps) {
       setLoading(true);
       setError("");
       try {
+        // TODO: 切换到数据平台 API /api/v1/quotes/latest?symbols={symbol}
         const overviewResponse = await fetch("/api/v1/market/overview");
         const data = await overviewResponse.json();
         if (cancelled) return;
-        const tickers = data.tickers || [];
+        const tickers: QuoteData[] = data.tickers || [];
         const found = tickers.find((t: QuoteData) => t.symbol === symbol);
-        if (found) {
-          setQuote(found);
-          return;
-        }
-        const tickerResponse = await fetch(`/api/v1/market/ticker/${symbol}`);
-        const singleData = await tickerResponse.json();
+        const singleData = found || await fetch(`/api/v1/market/ticker/${symbol}`).then((r) => r.json());
         if (cancelled || !singleData) return;
-        if (singleData && singleData.price > 0) {
+        if (singleData.price > 0) {
           setQuote({
             symbol: singleData.symbol || symbol,
             price: singleData.price,
@@ -53,6 +80,10 @@ export function MarketQuote({ symbol }: MarketQuoteProps) {
             volume: singleData.volume || 0,
             high_24h: singleData.high_24h,
             low_24h: singleData.low_24h,
+            provider: singleData.provider || "",
+            updated_at: singleData.updated_at || singleData.timestamp || null,
+            bar_time: singleData.timestamp || null,
+            stale: isStale(singleData.timestamp || singleData.bar_time, interval),
           });
         } else {
           setError("暂无行情");
@@ -65,9 +96,10 @@ export function MarketQuote({ symbol }: MarketQuoteProps) {
     }
     void load();
     return () => { cancelled = true; };
-  }, [symbol]);
+  }, [symbol, interval]);
 
   const isUp = quote ? quote.change_24h_pct >= 0 : false;
+  const stale = quote?.stale || isStale(quote?.bar_time, interval);
 
   return (
     <Card className="border-border bg-card h-full">
@@ -97,7 +129,7 @@ export function MarketQuote({ symbol }: MarketQuoteProps) {
           </div>
         ) : quote ? (
           <div className="space-y-3">
-            {/* Price */}
+            {/* Price — large font */}
             <div>
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider">
                 {symbol.replace("USDT", "")} / USDT
@@ -149,17 +181,33 @@ export function MarketQuote({ symbol }: MarketQuoteProps) {
                 <p className="text-[10px] text-muted-foreground">当前周期</p>
                 <div className="flex items-center gap-1.5 mt-0.5">
                   <BarChart3 className="w-3.5 h-3.5 text-blue-400" />
-                  <p className="text-sm font-mono text-foreground">1h</p>
+                  <p className="text-sm font-mono text-foreground">{interval}</p>
                 </div>
               </div>
             </div>
 
-            {/* Source badge */}
-            <div className="flex items-center gap-1">
-              <Badge variant="outline" className="text-[10px] border-border text-muted-foreground">
-                数据来源: 本地行情库
-              </Badge>
+            {/* Provider + Bar time */}
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-1">
+                <Badge variant="outline" className="text-[10px] border-border text-muted-foreground">
+                  数据来源: {formatProvider(quote.provider)}
+                </Badge>
+              </div>
+              {quote.bar_time && (
+                <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <Clock className="w-3 h-3" />
+                  最新 Bar: {new Date(quote.bar_time).toLocaleString("zh-CN")}
+                </div>
+              )}
             </div>
+
+            {/* Stale data warning */}
+            {stale && (
+              <div className="flex items-center gap-1.5 rounded-md bg-amber-500/10 border border-amber-500/20 px-2.5 py-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                <span className="text-[11px] text-amber-400">⚠️ 数据可能过期</span>
+              </div>
+            )}
           </div>
         ) : null}
       </CardContent>

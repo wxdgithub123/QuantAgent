@@ -15,7 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
   ArrowUp, ArrowDown, Minus, ExternalLink,
-  Clock, AlertTriangle, CheckCircle, Database, BarChart3, FileSearch,
+  Clock, AlertTriangle, CheckCircle, Database, BarChart3, FileSearch, Shield,
 } from "lucide-react";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -71,20 +71,16 @@ export function SignalDrawer({ signalId, symbol, onClose }: SignalDrawerProps) {
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      if (signalId === null) {
-        setDetail(null);
-        setError("");
-        setLoading(false);
-        return;
-      }
+      if (signalId === null) return;
       setLoading(true);
       setError("");
       try {
         const response = await fetch(`/api/v1/signals/events/${signalId}/detail`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
-        if (!cancelled) setDetail(data.error ? null : data);
-        if (!cancelled && data.error) setError("信号详情暂不可用");
+        if (cancelled) return;
+        setDetail(data.error ? null : data);
+        if (data.error) setError("信号详情暂不可用");
       } catch {
         if (!cancelled) setError("无法加载信号详情，请稍后重试");
       } finally {
@@ -166,10 +162,10 @@ export function SignalDrawer({ signalId, symbol, onClose }: SignalDrawerProps) {
                 </p>
                 <div className="grid grid-cols-2 gap-2 text-[11px]">
                   {[
+                    { label: "事件时间 (event_time)", value: detail.eventTime || detail.triggeredAt },
+                    { label: "系统可见时间 (available_time)", value: detail.availableTime },
+                    { label: "查询时点 (as_of_time)", value: detail.asOfTime },
                     { label: "触发时间 (triggeredAt)", value: detail.triggeredAt },
-                    { label: "事件时间 (eventTime)", value: detail.eventTime },
-                    { label: "可用时间 (availableTime)", value: detail.availableTime },
-                    { label: "回看时间 (asOfTime)", value: detail.asOfTime },
                   ].map((row) => (
                     <div key={row.label} className="flex flex-col gap-0.5">
                       <span className="text-muted-foreground">{row.label}</span>
@@ -177,20 +173,50 @@ export function SignalDrawer({ signalId, symbol, onClose }: SignalDrawerProps) {
                     </div>
                   ))}
                 </div>
+                {/* ── 检查1: 数据写入时序 ── */}
                 <div className="mt-2 flex items-center gap-1.5">
                   {detail.availableTime && detail.eventTime && new Date(detail.availableTime) >= new Date(detail.eventTime) ? (
                     <>
                       <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-                      <span className="text-[10px] text-emerald-400">时间对齐: availableTime ≥ eventTime</span>
+                      <span className="text-[10px] text-emerald-400">数据时序正常: available_time ≥ event_time</span>
                     </>
                   ) : (
                     <>
                       <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
                       <span className="text-[10px] text-amber-400">
-                        {detail.availableTime ? "availableTime < eventTime（数据可能尚未就绪）" : "缺少时间信息"}
+                        {detail.availableTime ? "available_time < event_time（数据写入时序异常）" : "缺少时间信息"}
                       </span>
                     </>
                   )}
+                </div>
+                {/* ── 检查2: Point-in-Time 合规 ── */}
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  {(() => {
+                    if (!detail.availableTime || !detail.asOfTime) {
+                      return (
+                        <>
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                          <span className="text-[10px] text-amber-400">缺少 available_time 或 as_of_time，无法判断</span>
+                        </>
+                      );
+                    }
+                    const av = new Date(detail.availableTime).getTime();
+                    const ao = new Date(detail.asOfTime).getTime();
+                    if (av <= ao) {
+                      return (
+                        <>
+                          <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                          <span className="text-[10px] text-emerald-400">Point-in-Time 合规 ✅: available_time ≤ as_of_time</span>
+                        </>
+                      );
+                    }
+                    return (
+                      <>
+                        <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+                        <span className="text-[10px] text-red-400 font-semibold">违反（未来函数）❌: available_time &gt; as_of_time</span>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
 
@@ -264,10 +290,14 @@ export function SignalDrawer({ signalId, symbol, onClose }: SignalDrawerProps) {
                   </Link>
                   <Link href={detail.relatedAuditIds?.length ? `/audit` : "/audit"}>
                     <Button variant="outline" size="sm" className="w-full h-9 text-xs border-border text-muted-foreground hover:text-foreground">
-                      <FileSearch className="w-3.5 h-3.5 mr-1.5" />
+                      <Shield className="w-3.5 h-3.5 mr-1.5" />
                       查看审计
+                      {!detail.relatedAuditIds?.length && (
+                        <Badge className="ml-1.5 bg-amber-500/10 text-amber-400 border-amber-500/20 text-[9px]">待上线</Badge>
+                      )}
                     </Button>
                   </Link>
+                  {/* TODO: P1.6 审计台尚未开发，按钮标记"待上线 🔒"。上线后移除 Badge 并根据 relatedAuditIds 跳转 */}
                 </div>
               </div>
 

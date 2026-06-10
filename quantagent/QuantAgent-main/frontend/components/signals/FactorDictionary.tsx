@@ -3,9 +3,15 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { Search, BookOpen, TrendingUp, Newspaper, Globe } from "lucide-react";
+import { Search, BookOpen, TrendingUp, Newspaper, Globe, Plus } from "lucide-react";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -76,6 +82,49 @@ export function FactorDictionary() {
   const [catalog, setCatalog] = useState<FactorCatalogItem[]>([]);
   const [definitions, setDefinitions] = useState<FactorDefinitionRow[]>([]);
   const [categoryFilter, setCategoryFilter] = useState("all");
+
+  // ── 新增因子 Dialog ──
+  const [showNewFactor, setShowNewFactor] = useState(false);
+  const [newFactor, setNewFactor] = useState({ code: "", name: "", category: "技术指标因子", formula: "", params: "", description: "" });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleAddFactor = async () => {
+    if (!newFactor.code || !newFactor.name) { toast.error("因子代码和名称为必填"); return; }
+    setIsSubmitting(true);
+    try {
+      // TODO: 后端接口就绪后调用 POST /api/v1/signals/factor-definitions
+      const res = await fetch("/api/v1/signals/factor-definitions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          factor_name: newFactor.code.toLowerCase(),
+          display_name: newFactor.name,
+          category: newFactor.category,
+          calculation: newFactor.formula,
+          description: newFactor.description,
+        }),
+      });
+      if (res.ok) {
+        toast.success(`因子 ${newFactor.code} 已创建`);
+        setShowNewFactor(false);
+        // 关闭 dialog 后重新加载列表
+      } else {
+        throw new Error("API 返回错误");
+      }
+    } catch {
+      // 后端未就绪：存入 localStorage 作为临时方案
+      try {
+        const existing = JSON.parse(localStorage.getItem("quantagent_custom_factors") || "[]");
+        existing.push({ ...newFactor, code: newFactor.code.toLowerCase(), createdAt: new Date().toISOString() });
+        localStorage.setItem("quantagent_custom_factors", JSON.stringify(existing));
+        toast.success(`因子 ${newFactor.code} 已保存到本地（后端未就绪，TODO 接入）`);
+        setShowNewFactor(false);
+        setNewFactor({ code: "", name: "", category: "技术指标因子", formula: "", params: "", description: "" });
+      } catch (lsErr) {
+        toast.error(`保存失败: ${lsErr instanceof Error ? lsErr.message : "未知错误"}`);
+      }
+    } finally { setIsSubmitting(false); }
+  };
   const [search, setSearch] = useState("");
 
   useEffect(() => {
@@ -125,9 +174,9 @@ export function FactorDictionary() {
     dataSource: d.upstream_data || "",
     updateFrequency: "",
     availabilityStatus: "available" as const,
-    supportsPIT: true,
     usedByStrategies: [],
     usedBySignals: [],
+    supportsPIT: true,
     signalCount: d.snapshot_count || 0,
     description: d.description || "",
     snapshotCount: d.snapshot_count || 0,
@@ -207,6 +256,14 @@ export function FactorDictionary() {
             className="w-full h-9 pl-8 pr-3 rounded-lg border border-border bg-secondary text-foreground text-xs placeholder:text-muted-foreground focus:outline-none focus:border-blue-500/50"
           />
         </div>
+        {/* 新增因子按钮 */}
+        <Button
+          size="sm"
+          onClick={() => setShowNewFactor(true)}
+          className="h-9 bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/20 text-xs"
+        >
+          <Plus className="w-3.5 h-3.5 mr-1" /> 新增因子
+        </Button>
         <div className="flex flex-wrap gap-1.5">
           {CATEGORY_FILTER_OPTIONS.map((opt) => (
             <button
@@ -254,7 +311,7 @@ export function FactorDictionary() {
             const displayName = item.displayName || def?.display_name || item.factorName;
             const formula = item.formula || def?.calculation || "";
             const source = item.dataSource || def?.upstream_data || "";
-            const strategies = item.usedByStrategies || item.usedBySignals || [];
+            const strategies: string[] = item.usedByStrategies || item.usedBySignals || [];
             const sigCount = item.signalCount || item.snapshotCount || 0;
 
             return (
@@ -297,7 +354,7 @@ export function FactorDictionary() {
 
                   {strategies.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-1">
-                      {strategies.slice(0, 5).map((s: string) => (
+                      {strategies.slice(0, 5).map((s) => (
                         <Badge key={s} variant="outline" className="text-[10px] px-1.5 py-0 border-border text-muted-foreground">
                           {s}
                         </Badge>
@@ -318,6 +375,91 @@ export function FactorDictionary() {
         共 {mergedItems.length} 个因子类型
         {categoryFilter !== "all" && `（已筛选：${CATEGORY_FILTER_OPTIONS.find((o) => o.value === categoryFilter)?.label}）`}
       </p>
+
+      {/* ── 新增因子 Dialog ── */}
+      <Dialog open={showNewFactor} onOpenChange={setShowNewFactor}>
+        <DialogContent className="bg-card border-border sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-foreground">新增因子</DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              创建新的因子定义。后端接口就绪后会提交到数据库，当前保存到本地。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 mt-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs text-muted-foreground">因子代码 *</Label>
+                <Input
+                  value={newFactor.code}
+                  onChange={(e) => setNewFactor({ ...newFactor, code: e.target.value })}
+                  placeholder="如 sma_99"
+                  className="h-9 bg-secondary border-border text-xs mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">因子名称 *</Label>
+                <Input
+                  value={newFactor.name}
+                  onChange={(e) => setNewFactor({ ...newFactor, name: e.target.value })}
+                  placeholder="如 99日均线"
+                  className="h-9 bg-secondary border-border text-xs mt-1"
+                />
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">分类</Label>
+              <Select value={newFactor.category} onValueChange={(v) => setNewFactor({ ...newFactor, category: v })}>
+                <SelectTrigger className="h-9 bg-secondary border-border text-xs mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-card border-border">
+                  <SelectItem value="技术指标因子" className="text-xs">技术指标因子</SelectItem>
+                  <SelectItem value="行情基础因子" className="text-xs">行情基础因子</SelectItem>
+                  <SelectItem value="波动率因子" className="text-xs">波动率因子</SelectItem>
+                  <SelectItem value="情绪新闻因子" className="text-xs">情绪/新闻因子</SelectItem>
+                  <SelectItem value="宏观因子" className="text-xs">宏观因子</SelectItem>
+                  <SelectItem value="加密特有因子" className="text-xs">加密特有因子</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">公式</Label>
+              <Input
+                value={newFactor.formula}
+                onChange={(e) => setNewFactor({ ...newFactor, formula: e.target.value })}
+                placeholder="如 SMA(close, 99)"
+                className="h-9 bg-secondary border-border text-xs mt-1"
+              />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">参数（可选）</Label>
+              <Input
+                value={newFactor.params}
+                onChange={(e) => setNewFactor({ ...newFactor, params: e.target.value })}
+                placeholder='如 {"period": 99}'
+                className="h-9 bg-secondary border-border text-xs mt-1"
+              />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">描述</Label>
+              <Input
+                value={newFactor.description}
+                onChange={(e) => setNewFactor({ ...newFactor, description: e.target.value })}
+                placeholder="因子用途说明"
+                className="h-9 bg-secondary border-border text-xs mt-1"
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="outline" size="sm" className="text-xs border-border" onClick={() => setShowNewFactor(false)}>
+              取消
+            </Button>
+            <Button size="sm" className="text-xs bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/20" onClick={handleAddFactor} disabled={isSubmitting}>
+              {isSubmitting ? "保存中..." : "保存因子"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

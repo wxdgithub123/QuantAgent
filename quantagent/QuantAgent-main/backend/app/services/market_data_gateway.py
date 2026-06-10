@@ -441,6 +441,7 @@ class MarketDataGateway:
         start_time: Optional[datetime],
         end_time: Optional[datetime],
     ) -> List[KlineData]:
+        rows: List[Dict[str, Any]] = []
         try:
             from app.services.clickhouse_service import clickhouse_service
 
@@ -463,12 +464,55 @@ class MarketDataGateway:
                 limit=limit,
                 offset=query_offset,
             )
-            klines = [_row_to_kline(row) for row in rows]
-            by_time = {_as_utc(kline.timestamp): kline for kline in klines}
-            return [by_time[ts] for ts in sorted(by_time.keys())][-limit:]
         except Exception as exc:
-            logger.debug("Local kline query failed for %s/%s: %s", symbol, interval, exc)
+            logger.debug("ClickHouse kline query failed for %s/%s: %s", symbol, interval, exc)
+
+        if not rows:
+            try:
+                from app.services.duckdb_service import DuckDBService
+
+                duck = DuckDBService()
+                if start_time is None:
+                    count = await duck.count_klines(symbol, interval)
+                    query_offset = max(count - limit, 0)
+                else:
+                    query_offset = 0
+                duck_rows = await duck.query_klines(
+                    symbol=symbol,
+                    interval=interval,
+                    start=start_time,
+                    end=end_time,
+                    limit=limit,
+                    offset=query_offset,
+                )
+                rows = [
+                    {
+                        "open_time": row.get("open_time"),
+                        "open": row.get("open"),
+                        "high": row.get("high"),
+                        "low": row.get("low"),
+                        "close": row.get("close"),
+                        "volume": row.get("volume"),
+                        "close_time": row.get("close_time"),
+                        "event_time": row.get("event_time"),
+                        "available_time": row.get("available_time"),
+                        "provider": row.get("provider"),
+                        "source_version": row.get("source_version"),
+                        "schema_version": row.get("schema_version"),
+                    }
+                    for row in duck_rows
+                ]
+                if rows:
+                    logger.debug("DuckDB fallback returned %d klines for %s/%s", len(rows), symbol, interval)
+            except Exception as exc:
+                logger.debug("DuckDB kline fallback failed for %s/%s: %s", symbol, interval, exc)
+
+        if not rows:
             return []
+
+        klines = [_row_to_kline(row) for row in rows]
+        by_time = {_as_utc(kline.timestamp): kline for kline in klines}
+        return [by_time[ts] for ts in sorted(by_time.keys())][-limit:]
 
     async def _get_local_ticker(self, symbol: str) -> Optional[TickerData]:
         klines = await self._get_local_klines(

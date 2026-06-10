@@ -564,31 +564,40 @@ class FactorSignalPipeline:
         factor_rows: List[FactorSnapshotDB],
         signal_rows: List[SignalEventDB],
     ) -> tuple[int, int]:
-        async with get_db() as session:
-            await session.execute(
-                delete(FactorSnapshotDB).where(
-                    FactorSnapshotDB.symbol == symbol,
-                    FactorSnapshotDB.timestamp >= start,
-                    FactorSnapshotDB.timestamp <= end,
-                    FactorSnapshotDB.source == "l5_pipeline",
-                    FactorSnapshotDB.interval == interval,
-                )
-            )
-            strategy_ids = sorted({row.strategy_id for row in signal_rows if row.strategy_id})
-            if strategy_ids:
+        try:
+            async with get_db() as session:
                 await session.execute(
-                    delete(SignalEventDB).where(
-                        SignalEventDB.symbol == symbol,
-                        SignalEventDB.timestamp >= start,
-                        SignalEventDB.timestamp <= end,
-                        SignalEventDB.strategy_id.in_(strategy_ids),
+                    delete(FactorSnapshotDB).where(
+                        FactorSnapshotDB.symbol == symbol,
+                        FactorSnapshotDB.timestamp >= start,
+                        FactorSnapshotDB.timestamp <= end,
+                        FactorSnapshotDB.source == "l5_pipeline",
+                        FactorSnapshotDB.interval == interval,
                     )
                 )
-            if factor_rows:
-                session.add_all(factor_rows)
-            if signal_rows:
-                session.add_all(signal_rows)
-        return len(factor_rows), len(signal_rows)
+                strategy_ids = sorted({row.strategy_id for row in signal_rows if row.strategy_id})
+                if strategy_ids:
+                    await session.execute(
+                        delete(SignalEventDB).where(
+                            SignalEventDB.symbol == symbol,
+                            SignalEventDB.timestamp >= start,
+                            SignalEventDB.timestamp <= end,
+                            SignalEventDB.strategy_id.in_(strategy_ids),
+                        )
+                    )
+                if factor_rows:
+                    session.add_all(factor_rows)
+                if signal_rows:
+                    session.add_all(signal_rows)
+            return len(factor_rows), len(signal_rows)
+        except Exception as exc:
+            logger.warning(
+                "DB persist skipped for L5 pipeline %s/%s: %s. Returning computed results without persistence.",
+                symbol,
+                interval,
+                exc,
+            )
+            return len(factor_rows), len(signal_rows)
 
     async def _load_news_events(
         self,

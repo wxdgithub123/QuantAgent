@@ -3,9 +3,14 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { Target, TrendingUp, Activity, BarChart3, Zap } from "lucide-react";
+import { Target, TrendingUp, Activity, BarChart3, Zap, Settings } from "lucide-react";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -48,6 +53,64 @@ export function StrategySystem() {
   const [loading, setLoading] = useState(true);
   const [strategies, setStrategies] = useState<StrategyAsset[]>([]);
   const [categoryFilter, setCategoryFilter] = useState("all");
+
+  // ── 策略配置 Dialog ──
+  const [configStrategy, setConfigStrategy] = useState<StrategyAsset | null>(null);
+  const [configParams, setConfigParams] = useState<Record<string, string>>({});
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
+
+  const handleConfigOpen = (s: StrategyAsset) => {
+    setConfigStrategy(s);
+    // 从 localStorage 加载已保存的配置，或使用默认值
+    const saved = loadStrategyConfig(s.strategyId);
+    setConfigParams(saved);
+  };
+
+  const handleSaveConfig = async () => {
+    if (!configStrategy) return;
+    setIsSavingConfig(true);
+    try {
+      // TODO: 后端接口就绪后调用 PUT /api/v1/signals/strategies/{id}
+      const res = await fetch(`/api/v1/signals/strategies/${configStrategy.strategyId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ params: configParams }),
+      });
+      if (res.ok) {
+        toast.success(`${configStrategy.strategyName} 配置已保存`);
+      } else {
+        throw new Error("API 返回错误");
+      }
+    } catch {
+      // 后端未就绪：存入 localStorage
+      const all = JSON.parse(localStorage.getItem("quantagent_strategy_configs") || "{}");
+      all[configStrategy.strategyId] = configParams;
+      localStorage.setItem("quantagent_strategy_configs", JSON.stringify(all));
+      toast.success(`${configStrategy.strategyName} 配置已保存到本地（后端未就绪，TODO 接入）`);
+    } finally {
+      setIsSavingConfig(false);
+      setConfigStrategy(null);
+    }
+  };
+
+  function loadStrategyConfig(strategyId: string): Record<string, string> {
+    try {
+      const all = JSON.parse(localStorage.getItem("quantagent_strategy_configs") || "{}");
+      if (all[strategyId]) return all[strategyId];
+    } catch { /* silent */ }
+    // 默认配置参数
+    return {
+      "RSI 超卖线": "30",
+      "RSI 超买线": "70",
+      "MACD 快线": "12",
+      "MACD 慢线": "26",
+      "MACD 信号线": "9",
+      "布林带周期": "20",
+      "布林带标准差倍数": "2.0",
+      "ATR 周期": "14",
+      "ATR 倍数": "2.0",
+    };
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -141,9 +204,19 @@ export function StrategySystem() {
                     </div>
                     <p className="mt-0.5 font-mono text-[11px] text-orange-300/60">{s.strategyId}</p>
                   </div>
-                  <Badge variant="outline" className="text-[10px] border-border text-muted-foreground shrink-0">
-                    {s.recentBacktestCount ?? 0} 次回测
-                  </Badge>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-[10px] border-border text-muted-foreground hover:text-foreground"
+                      onClick={(e) => { e.stopPropagation(); handleConfigOpen(s); }}
+                    >
+                      <Settings className="w-3 h-3" />
+                    </Button>
+                    <Badge variant="outline" className="text-[10px] border-border text-muted-foreground">
+                      {s.recentBacktestCount ?? 0} 次回测
+                    </Badge>
+                  </div>
                 </div>
 
                 {s.description && (
@@ -230,6 +303,38 @@ export function StrategySystem() {
         共 {filtered.length} 个策略模板
         {categoryFilter !== "all" && `（已筛选：${categoryFilter}）`}
       </p>
+
+      {/* ── 策略配置 Dialog ── */}
+      <Dialog open={!!configStrategy} onOpenChange={(o) => { if (!o) setConfigStrategy(null); }}>
+        <DialogContent className="bg-card border-border sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-foreground">策略配置: {configStrategy?.strategyName || ""}</DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              修改策略阈值参数。后端接口就绪后会提交到数据库，当前保存到本地。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 mt-3 max-h-[400px] overflow-y-auto">
+            {Object.entries(configParams).map(([key, val]) => (
+              <div key={key}>
+                <Label className="text-xs text-muted-foreground">{key}</Label>
+                <Input
+                  value={val}
+                  onChange={(e) => setConfigParams({ ...configParams, [key]: e.target.value })}
+                  className="h-9 bg-secondary border-border text-xs mt-1 font-mono"
+                />
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="outline" size="sm" className="text-xs border-border" onClick={() => setConfigStrategy(null)}>
+              取消
+            </Button>
+            <Button size="sm" className="text-xs bg-orange-500/15 text-orange-400 hover:bg-orange-500/20" onClick={handleSaveConfig} disabled={isSavingConfig}>
+              {isSavingConfig ? "保存中..." : "保存配置"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

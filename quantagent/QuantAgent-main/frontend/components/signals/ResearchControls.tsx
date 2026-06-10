@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { Search, X } from "lucide-react";
+import { Search, X, RefreshCw } from "lucide-react";
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
@@ -15,11 +15,14 @@ export interface ResearchControlsProps {
   interval: string;
   asOfTime: string;
   appliedAsOf: string;
+  replayMode: boolean;
+  timeSuggestions?: string[];
   onSymbolChange: (v: string) => void;
   onIntervalChange: (v: string) => void;
   onAsOfTimeChange: (v: string) => void;
   onApply: () => void;
   onClear: () => void;
+  onReplayModeChange: (v: boolean) => void;
 }
 
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"];
@@ -32,11 +35,14 @@ export function ResearchControls({
   interval,
   asOfTime,
   appliedAsOf,
+  replayMode,
+  timeSuggestions = [],
   onSymbolChange,
   onIntervalChange,
   onAsOfTimeChange,
   onApply,
   onClear,
+  onReplayModeChange,
 }: ResearchControlsProps) {
   const [isApplying, setIsApplying] = useState(false);
 
@@ -64,6 +70,11 @@ export function ResearchControls({
               {!appliedAsOf && (
                 <Badge variant="outline" className="border-emerald-500/40 text-emerald-300 text-[10px]">
                   当前最新状态
+                </Badge>
+              )}
+              {replayMode && (
+                <Badge className="border-purple-500/40 bg-purple-500/15 text-purple-300 text-[10px]">
+                  回放模式 🔄
                 </Badge>
               )}
             </div>
@@ -105,6 +116,25 @@ export function ResearchControls({
               </Select>
             </div>
 
+            {/* Replay Mode Toggle */}
+            <div>
+              <label className="mb-1 block text-[11px] text-muted-foreground">回放模式</label>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onReplayModeChange(!replayMode)}
+                className={cn(
+                  "h-9 text-xs border-border transition-colors",
+                  replayMode
+                    ? "bg-purple-500/15 text-purple-400 border-purple-500/30 hover:bg-purple-500/20"
+                    : "bg-secondary text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <RefreshCw className={cn("w-3.5 h-3.5 mr-1.5", replayMode && "animate-spin-slow")} />
+                {replayMode ? "回放中" : "已关闭"}
+              </Button>
+            </div>
+
             {/* As-of-time */}
             <div>
               <label className="mb-1 block text-[11px] text-muted-foreground">回看时间（可选）</label>
@@ -116,8 +146,16 @@ export function ResearchControls({
                     value={asOfTime}
                     onChange={(e) => onAsOfTimeChange(e.target.value)}
                     placeholder="2026-05-28 09:30"
+                    list="asOfTimeSuggestions"
                     className="h-9 w-[180px] pl-8 pr-3 rounded-lg border border-border bg-secondary text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-blue-500/50"
                   />
+                  {timeSuggestions.length > 0 && (
+                    <datalist id="asOfTimeSuggestions">
+                      {timeSuggestions.map((t) => (
+                        <option key={t} value={t} />
+                      ))}
+                    </datalist>
+                  )}
                 </div>
                 <Button
                   size="sm"
