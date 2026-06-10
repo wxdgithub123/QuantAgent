@@ -41,9 +41,9 @@ class IngestionService:
             self.nc = await nats.connect(
                 settings.NATS_URL,
                 name="quantagent-backend-ingestion",
-                reconnect_time_wait=2,
-                max_reconnect_attempts=2, # Fail fast to switch to fallback
-                connect_timeout=2
+                reconnect_time_wait=1,
+                max_reconnect_attempts=settings.NATS_MAX_RECONNECT_ATTEMPTS,
+                connect_timeout=settings.NATS_CONNECT_TIMEOUT_SECONDS,
             )
             logger.info(f"NATS connected: {settings.NATS_URL}")
 
@@ -58,8 +58,15 @@ class IngestionService:
             self.use_nats = True
 
         except (NoServersError, TimeoutError, OSError, Exception) as e:
-            logger.warning(f"NATS connection failed ({e}). Switching to local Binance WebSocket.")
             self.use_nats = False
+            if not settings.ENABLE_INGESTION_BINANCE_FALLBACK:
+                self.running = False
+                logger.warning(
+                    "NATS connection failed (%s). Binance WebSocket fallback is disabled; ingestion service is idle.",
+                    e,
+                )
+                return
+            logger.warning(f"NATS connection failed ({e}). Switching to local Binance WebSocket.")
             self.local_ws_task = asyncio.create_task(self._start_local_stream())
 
     async def stop(self):

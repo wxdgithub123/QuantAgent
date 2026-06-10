@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -23,6 +25,11 @@ class AnalysisContextBuilder:
     """Assemble Agent input while enforcing available_time <= as_of_time."""
 
     _instance: Optional["AnalysisContextBuilder"] = None
+    _SQL_UNAVAILABLE_RETRY_SECONDS = 30.0
+    _SQL_QUERY_TIMEOUT_SECONDS = 0.75
+
+    def __init__(self) -> None:
+        self._sql_unavailable_until = 0.0
 
     @classmethod
     def get_instance(cls) -> "AnalysisContextBuilder":
@@ -44,14 +51,18 @@ class AnalysisContextBuilder:
         instrument = Instrument.from_raw(symbol)
         cutoff = self._normalize_cutoff(as_of_time)
         bars = await self._load_bars(instrument.symbol, interval, cutoff, bar_limit)
-        factors, factor_ids, factor_versions = await self._load_factors(
-            instrument.symbol, interval, cutoff, factor_limit
+        factors, factor_ids, factor_versions = (
+            ({}, [], {})
+            if factor_limit <= 0
+            else await self._load_factors(instrument.symbol, interval, cutoff, factor_limit)
         )
-        signals, signal_ids, signal_versions = await self._load_signals(
-            instrument.symbol, interval, cutoff, signal_limit
+        signals, signal_ids, signal_versions = (
+            ([], [], {})
+            if signal_limit <= 0
+            else await self._load_signals(instrument.symbol, interval, cutoff, signal_limit)
         )
-        news = self._load_news(instrument, cutoff, news_limit)
-        macro = self._load_macro(cutoff, macro_limit)
+        news = [] if news_limit <= 0 else self._load_news(instrument, cutoff, news_limit)
+        macro = [] if macro_limit <= 0 else self._load_macro(cutoff, macro_limit)
 
         bar_meta = self._build_bar_meta(bars, interval)
         data_versions = {
@@ -110,6 +121,9 @@ class AnalysisContextBuilder:
                 interval=interval,
                 limit=limit,
                 end_time=cutoff,
+                allow_external_fallback=False,
+                allow_ccxt_fallback=False,
+                allow_binance_fallback=False,
             )
             out: List[Dict[str, Any]] = []
             for kline in klines or []:
@@ -128,7 +142,7 @@ class AnalysisContextBuilder:
                     "low": float(kline.low),
                     "close": float(kline.close),
                     "volume": float(kline.volume),
-                    "provider": "market_data_gateway",
+                    "provider": "market_data_gateway:local_storage",
                     "schema_version": "bar.v1",
                 })
             return out[-limit:]
@@ -165,6 +179,8 @@ class AnalysisContextBuilder:
             "ohlc_digest": f"sha256:{digest}",
             "provider": providers[0] if len(providers) == 1 else ("multiple" if providers else "unknown"),
             "providers": providers,
+            "agent_input_policy": "local_storage_only",
+            "external_fallback_allowed": False,
             "schema_version": "bar_meta.v1",
         }
 
@@ -196,9 +212,13 @@ class AnalysisContextBuilder:
         cutoff: datetime,
         limit: int,
     ) -> tuple[Dict[str, float], List[Any], Dict[str, Any]]:
+        if limit <= 0:
+            return {}, [], {}
+        if self._sql_short_circuited():
+            return {}, [], {}
         try:
             async with get_db() as session:
-                result = await session.execute(text("""
+                result = await asyncio.wait_for(session.execute(text("""
                     SELECT DISTINCT ON (factor_name)
                            id, factor_name, factor_value, timestamp, available_time,
                            provider, data_source, source_version, schema_version
@@ -213,7 +233,7 @@ class AnalysisContextBuilder:
                     "interval": interval,
                     "cutoff": cutoff,
                     "limit": limit,
-                })
+                }), timeout=self._SQL_QUERY_TIMEOUT_SECONDS)
                 values: Dict[str, float] = {}
                 ids: List[Any] = []
                 versions: Dict[str, Any] = {}
@@ -228,6 +248,7 @@ class AnalysisContextBuilder:
                     }
                 return values, ids, versions
         except Exception as e:
+            self._mark_sql_unavailable(e)
             logger.debug(f"AnalysisContext factor load skipped for {symbol}: {e}")
             return {}, [], {}
 
@@ -238,9 +259,13 @@ class AnalysisContextBuilder:
         cutoff: datetime,
         limit: int,
     ) -> tuple[List[Dict[str, Any]], List[Any], Dict[str, Any]]:
+        if limit <= 0:
+            return [], [], {}
+        if self._sql_short_circuited():
+            return [], [], {}
         try:
             async with get_db() as session:
-                result = await session.execute(text("""
+                result = await asyncio.wait_for(session.execute(text("""
                     SELECT id, timestamp, available_time, signal_type, signal_value,
                            confidence, source_strategy, strategy_id, factors,
                            provider, data_source, source_version, schema_version,
@@ -256,7 +281,7 @@ class AnalysisContextBuilder:
                     "interval": interval,
                     "cutoff": cutoff,
                     "limit": limit,
-                })
+                }), timeout=self._SQL_QUERY_TIMEOUT_SECONDS)
                 rows: List[Dict[str, Any]] = []
                 ids: List[Any] = []
                 versions: Dict[str, Any] = {}
@@ -286,10 +311,24 @@ class AnalysisContextBuilder:
                     }
                 return rows, ids, versions
         except Exception as e:
+            self._mark_sql_unavailable(e)
             logger.debug(f"AnalysisContext signal load skipped for {symbol}: {e}")
             return [], [], {}
 
+    def _sql_short_circuited(self) -> bool:
+        return time.monotonic() < self._sql_unavailable_until
+
+    def _mark_sql_unavailable(self, reason: Exception) -> None:
+        self._sql_unavailable_until = time.monotonic() + self._SQL_UNAVAILABLE_RETRY_SECONDS
+        logger.debug(
+            "AnalysisContext SQL panels unavailable for %.0fs: %s",
+            self._SQL_UNAVAILABLE_RETRY_SECONDS,
+            reason,
+        )
+
     def _load_news(self, instrument: Instrument, cutoff: datetime, limit: int) -> List[Dict[str, Any]]:
+        if limit <= 0:
+            return []
         try:
             from app.pipeline.storage.duckdb_store import pipeline_store
 
@@ -314,6 +353,8 @@ class AnalysisContextBuilder:
             return []
 
     def _load_macro(self, cutoff: datetime, limit: int) -> List[Dict[str, Any]]:
+        if limit <= 0:
+            return []
         try:
             from app.pipeline.storage.duckdb_store import pipeline_store
 
@@ -364,9 +405,12 @@ class AnalysisContextBuilder:
             return True
         try:
             ts = pd.Timestamp(value)
+            cutoff_ts = pd.Timestamp(cutoff)
             if ts.tzinfo is not None:
                 ts = ts.tz_convert(timezone.utc).tz_localize(None)
-            return ts.to_pydatetime() <= cutoff
+            if cutoff_ts.tzinfo is not None:
+                cutoff_ts = cutoff_ts.tz_convert(timezone.utc).tz_localize(None)
+            return ts.to_pydatetime() <= cutoff_ts.to_pydatetime()
         except Exception:
             return True
 

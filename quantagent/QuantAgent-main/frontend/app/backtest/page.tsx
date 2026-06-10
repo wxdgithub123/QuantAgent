@@ -9,6 +9,7 @@ import { ParamStabilityChart } from "@/components/charts/ParamStabilityChart";
 import { EquityCurveChart } from "@/components/charts/EquityCurveChart";
 import { MarketConfigPanel } from "@/components/backtest/MarketConfigPanel";
 import { AppTopNav } from "@/components/navigation/AppTopNav";
+import { WorkbenchLinkBar } from "@/components/linkage/WorkbenchLinkBar";
 import { createChart, LineSeries, createSeriesMarkers, IChartApi, ISeriesApi, Time } from "lightweight-charts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -215,7 +216,16 @@ interface BacktestTask {
   failed_runs: number;
   max_parallel: number;
   storage?: string;
+  result_storage?: {
+    primary?: string;
+    archive?: string;
+    archive_schema?: string;
+  };
   queue_scope?: string;
+  cancel_supported?: boolean;
+  retry_supported?: boolean;
+  cancelAccepted?: boolean;
+  retry_of?: string;
   results?: BacktestTaskResult[];
   error?: string;
 }
@@ -289,6 +299,10 @@ function friendlyBacktestError(value: unknown, fallback = "数据暂不可用，
   if (!raw) return fallback;
   if (/failed to fetch|ECONNREFUSED|HTTP 500|Internal Server Error/i.test(raw)) return fallback;
   return raw;
+}
+
+function errorMessage(value: unknown, fallback: string) {
+  return value instanceof Error ? value.message : fallback;
 }
 
 function formatMoney(value?: number | null) {
@@ -1138,8 +1152,15 @@ function BacktestPageContent() {
         completed_runs: 0,
         failed_runs: 0,
         max_parallel: data.max_parallel,
-        storage: "PostgreSQL backtest_results",
+        storage: "PostgreSQL backtest_results + DuckDB backtest_results archive",
+        result_storage: {
+          primary: "PostgreSQL backtest_results",
+          archive: "DuckDB data/backtest/backtest_results.duckdb",
+          archive_schema: "backtest_duckdb_archive.v1",
+        },
         queue_scope: "in_process_memory",
+        cancel_supported: true,
+        retry_supported: true,
         results: [],
       });
       setTimeout(() => refreshBatchTask(data.task_id), 1000);
@@ -1158,6 +1179,55 @@ function BacktestPageContent() {
     }, 2000);
     return () => window.clearTimeout(timer);
   }, [batchTask?.task_id, batchTask?.status, refreshBatchTask]);
+
+  const handleCancelBatchTask = async () => {
+    if (!batchTask?.task_id) return;
+    setBatchError(null);
+    try {
+      const res = await fetch(`/api/v1/strategy/backtest/tasks/${batchTask.task_id}/cancel`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "取消回测任务失败");
+      setBatchTask(data as BacktestTask);
+    } catch (err: unknown) {
+      setBatchError(errorMessage(err, "取消回测任务失败"));
+    }
+  };
+
+  const handleRetryBatchTask = async () => {
+    if (!batchTask?.task_id) return;
+    setBatchError(null);
+    try {
+      const res = await fetch(`/api/v1/strategy/backtest/tasks/${batchTask.task_id}/retry`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "重试回测任务失败");
+      setBatchTask({
+        task_id: data.task_id,
+        status: data.status,
+        kind: "parameter_batch",
+        symbol,
+        interval,
+        strategy_type: selectedType,
+        total_runs: data.total_runs,
+        completed_runs: 0,
+        failed_runs: 0,
+        max_parallel: data.max_parallel,
+        storage: "PostgreSQL backtest_results + DuckDB backtest_results archive",
+        result_storage: {
+          primary: "PostgreSQL backtest_results",
+          archive: "DuckDB data/backtest/backtest_results.duckdb",
+          archive_schema: "backtest_duckdb_archive.v1",
+        },
+        queue_scope: "in_process_memory",
+        cancel_supported: true,
+        retry_supported: true,
+        retry_of: batchTask.task_id,
+        results: [],
+      });
+      setTimeout(() => refreshBatchTask(data.task_id), 1000);
+    } catch (err: unknown) {
+      setBatchError(errorMessage(err, "重试回测任务失败"));
+    }
+  };
 
   const handleOptApplyToBacktest = () => {
     if (!optResult) return;
@@ -1664,6 +1734,17 @@ function BacktestPageContent() {
       />
 
       <main className="container mx-auto px-4 py-6">
+        <WorkbenchLinkBar
+          source="backtest"
+          symbol={result?.symbol || symbol}
+          interval={result?.interval || interval}
+          asOfTime={resultAsOfTime || asOfTime || null}
+          backtestId={result?.id}
+          replaySessionId={result?.linkedReplay?.replaySessionId || null}
+          auditId={result?.auditRecordIds?.[0] || null}
+          className="mb-6"
+        />
+
         <Card className="mb-6 border-cyan-500/20 bg-cyan-500/5">
           <CardContent className="grid gap-4 p-4 md:grid-cols-4">
             <div>
@@ -3245,6 +3326,26 @@ function BacktestPageContent() {
                       >
                         刷新
                       </Button>
+                      {["queued", "running", "cancelling"].includes(batchTask.status) && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs text-amber-200 hover:bg-amber-500/10"
+                          onClick={handleCancelBatchTask}
+                        >
+                          取消
+                        </Button>
+                      )}
+                      {!["queued", "running", "cancelling"].includes(batchTask.status) && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs text-cyan-200 hover:bg-cyan-500/10"
+                          onClick={handleRetryBatchTask}
+                        >
+                          重试
+                        </Button>
+                      )}
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
@@ -3257,7 +3358,9 @@ function BacktestPageContent() {
                     </div>
                     <div className="rounded-xl border border-emerald-500/15 bg-background/40 p-3 text-xs text-muted-foreground">
                       <p>任务 ID：<span className="font-mono text-emerald-200">{batchTask.task_id}</span></p>
-                      <p>保存位置：{batchTask.storage || "PostgreSQL backtest_results"}；队列范围：{batchTask.queue_scope === "in_process_memory" ? "后端进程内存" : batchTask.queue_scope || "未知"}</p>
+                      <p>保存位置：{batchTask.storage || "PostgreSQL backtest_results + DuckDB backtest_results archive"}；队列范围：{batchTask.queue_scope === "in_process_memory" ? "后端进程内存" : batchTask.queue_scope || "未知"}</p>
+                      <p>归档：{batchTask.result_storage?.archive || "DuckDB data/backtest/backtest_results.duckdb"} · {batchTask.result_storage?.archive_schema || "backtest_duckdb_archive.v1"}</p>
+                      {batchTask.retry_of && <p>重试来源：<span className="font-mono text-cyan-200">{batchTask.retry_of}</span></p>}
                     </div>
                     {(batchTask.results || []).length > 0 && (
                       <div className="overflow-x-auto rounded-xl border border-border/50">

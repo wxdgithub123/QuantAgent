@@ -51,6 +51,9 @@ class Settings(BaseSettings):
 
     # NATS (Message Queue — Phase B)
     NATS_URL: str = "nats://localhost:4222"
+    NATS_CONNECT_TIMEOUT_SECONDS: float = 1.5
+    NATS_MAX_RECONNECT_ATTEMPTS: int = 1
+    ENABLE_INGESTION_BINANCE_FALLBACK: bool = False
 
     # JWT
     SECRET_KEY: str = "your-secret-key-change-in-production"
@@ -76,6 +79,9 @@ class Settings(BaseSettings):
     MAX_DAILY_LOSS_PCT: float = 0.05
     FORBIDDEN_SYMBOLS: list[str] = []
     PRICE_DEVIATION_PCT: float = 0.05
+    MIN_ORDER_NOTIONAL: float = 5.0
+    WAIT_ORDER_INTENT_POLICY: str = "record_flat"  # record_flat | skip
+    RISK_FAILURE_ACTION: str = "block"             # block | reduce | warn
     
     # Leverage & Margin (Phase C)
     MAINTENANCE_MARGIN_RATE: float = 0.05    # 5% maintenance margin

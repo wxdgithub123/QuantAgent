@@ -116,6 +116,7 @@ class MarketDataGateway:
         end_time: Optional[datetime] = None,
         openbb_provider: str = "yfinance",
         openbb_fallback_providers: Optional[List[str]] = None,
+        allow_external_fallback: bool = True,
         allow_ccxt_fallback: bool = True,
         fallback_exchange: str = "okx",
         allow_binance_fallback: bool = False,
@@ -124,6 +125,8 @@ class MarketDataGateway:
 
         rows = await self._get_local_klines(clean_symbol, interval, limit, start_time, end_time)
         if rows and _is_fresh(rows, interval, end_time):
+            return rows
+        if not allow_external_fallback:
             return rows
 
         openbb_start = start_time
@@ -222,6 +225,7 @@ class MarketDataGateway:
         symbol: str,
         openbb_provider: str = "yfinance",
         openbb_fallback_providers: Optional[List[str]] = None,
+        allow_external_fallback: bool = True,
         allow_ccxt_fallback: bool = True,
         fallback_exchange: str = "okx",
         allow_binance_fallback: bool = False,
@@ -230,6 +234,8 @@ class MarketDataGateway:
         ticker = await self._get_local_ticker(clean_symbol)
         if ticker:
             return ticker
+        if not allow_external_fallback:
+            return None
 
         from app.services.openbb_data_service import openbb_data_service
 
@@ -266,6 +272,7 @@ class MarketDataGateway:
         symbol: str,
         openbb_provider: str = "yfinance",
         openbb_fallback_providers: Optional[List[str]] = None,
+        allow_external_fallback: bool = True,
         allow_ccxt_fallback: bool = True,
         fallback_exchange: str = "okx",
         allow_binance_fallback: bool = False,
@@ -274,6 +281,7 @@ class MarketDataGateway:
             symbol,
             openbb_provider=openbb_provider,
             openbb_fallback_providers=openbb_fallback_providers,
+            allow_external_fallback=allow_external_fallback,
             allow_ccxt_fallback=allow_ccxt_fallback,
             fallback_exchange=fallback_exchange,
             allow_binance_fallback=allow_binance_fallback,
@@ -351,6 +359,7 @@ class MarketDataGateway:
         end: Optional[datetime] = None,
         openbb_provider: str = "yfinance",
         openbb_fallback_providers: Optional[List[str]] = None,
+        allow_external_fallback: bool = True,
         allow_ccxt_fallback: bool = True,
         fallback_exchange: str = "okx",
         allow_binance_fallback: bool = False,
@@ -363,6 +372,7 @@ class MarketDataGateway:
             end_time=end,
             openbb_provider=openbb_provider,
             openbb_fallback_providers=openbb_fallback_providers,
+            allow_external_fallback=allow_external_fallback,
             allow_ccxt_fallback=allow_ccxt_fallback,
             fallback_exchange=fallback_exchange,
             allow_binance_fallback=allow_binance_fallback,

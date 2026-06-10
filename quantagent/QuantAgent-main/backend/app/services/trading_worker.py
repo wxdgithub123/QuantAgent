@@ -33,9 +33,9 @@ class TradingWorker:
             self.nc = await nats.connect(
                 settings.NATS_URL,
                 name="quantagent-trading-worker",
-                reconnect_time_wait=2,
-                max_reconnect_attempts=-1,
-                connect_timeout=5
+                reconnect_time_wait=1,
+                max_reconnect_attempts=settings.NATS_MAX_RECONNECT_ATTEMPTS,
+                connect_timeout=settings.NATS_CONNECT_TIMEOUT_SECONDS,
             )
             logger.info("TradingWorker NATS connected.")
 

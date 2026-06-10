@@ -24,6 +24,7 @@ import Breadcrumb from "@/components/navigation/Breadcrumb";
 type ActiveSection =
   | "overview"
   | "data-sources"
+  | "data-governance"
   | "paper"
   | "decisions"
   | "analytics"
@@ -41,6 +42,8 @@ type ActiveSection =
   | "strategies-monitor"
   | "profiles"
   | "monitor"
+  | "risk"
+  | "config-center"
   | "home"
   | "none"
 
@@ -72,7 +75,7 @@ const MORE_NAV_GROUPS = [
   {
     title: "交易执行",
     links: [
-      { href: "/dashboard?tab=positions", label: "模拟交易", icon: Wallet, activeKey: "paper" as const, desc: "模拟盘持仓与下单" },
+      { href: "/paper-trading", label: "模拟交易", icon: Wallet, activeKey: "paper" as const, desc: "OrderIntent、风控与模拟成交" },
       { href: "/trades", label: "交易流水", icon: Activity, activeKey: "trades" as const, desc: "成交记录查询" },
       { href: "/hummingbot", label: "执行服务", icon: Server, activeKey: "hummingbot" as const, desc: "Hummingbot 机器人管理" },
       { href: "/hummingbot-testnet", label: "测试网", icon: Server, activeKey: "hummingbot-testnet" as const, desc: "Testnet 纸交易" },
@@ -82,6 +85,9 @@ const MORE_NAV_GROUPS = [
     title: "审计与工具",
     links: [
       { href: "/audit", label: "审计台", icon: Shield, activeKey: "audit" as const, desc: "决策追踪与合规审计" },
+      { href: "/config-center", label: "配置中心", icon: Server, activeKey: "config-center" as const, desc: "Agent、数据源与系统配置" },
+      { href: "/data-governance", label: "数据治理", icon: Database, activeKey: "data-governance" as const, desc: "数据预览、清洗与血缘" },
+      { href: "/risk", label: "风控配置", icon: Shield, activeKey: "risk" as const, desc: "RiskGuard 阈值与熔断" },
       { href: "/profiles", label: "策略方案", icon: Layers, activeKey: "profiles" as const, desc: "策略配置方案管理" },
       { href: "/terminal", label: "对话分析", icon: MessageSquareText, activeKey: "terminal" as const, desc: "自然语言交互分析" },
       { href: "/dashboard?tab=diagnostics", label: "系统状态", icon: Database, activeKey: "diagnostics" as const, desc: "数据链路与服务健康" },

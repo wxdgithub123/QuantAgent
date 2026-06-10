@@ -136,6 +136,33 @@ async def test_wait_draft_intent_writes_hold_recorded(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_wait_draft_can_skip_order_intent_by_policy(monkeypatch):
+    service = OrderIntentService()
+    audit_events = []
+
+    async def fake_load_decision(decision_id):
+        return make_decision(final_signal="WAIT", confidence=0.65)
+
+    async def fake_policy():
+        return "skip"
+
+    async def fake_audit_once(action, intent, details):
+        audit_events.append((action, details.get("wait_order_intent_policy"), details.get("generated_order_intent")))
+
+    monkeypatch.setattr(service, "_load_decision", fake_load_decision)
+    monkeypatch.setattr(service, "_wait_order_intent_policy", fake_policy)
+    monkeypatch.setattr(service, "_audit_once", fake_audit_once)
+
+    result = await service.draft_intent_from_decision(101, exchange_id="okx")
+
+    assert result["status"] == "SKIPPED"
+    assert result["intent"]["action"] == "HOLD"
+    assert result["wait_order_intent_policy"] == "skip"
+    assert result["generated_order_intent"] is False
+    assert audit_events == [("HOLD_RECORDED", "skip", False)]
+
+
+@pytest.mark.asyncio
 async def test_buy_decision_executes_paper_order_once(monkeypatch):
     service = OrderIntentService()
     decision = make_decision(final_signal="BUY", confidence=0.8, position_advice={"position_pct": 0.05})
@@ -195,7 +222,7 @@ async def test_buy_decision_executes_paper_order_once(monkeypatch):
     assert calls[1]["client_order_id"] == "OI-101-okx-0500"
     assert calls[0]["mode"] == "paper"
     assert calls[0]["exchange_id"] == "okx"
-    assert audit_events[:3] == ["ORDER_INTENT_CREATED", "RISK_CHECK_PASSED", "PAPER_ORDER_FILLED"]
+    assert audit_events[:3] == ["ORDER_INTENT_CREATED", "RISK_CHECK_PASSED", "ORDER_INTENT_EXECUTION_LINKED"]
 
 
 @pytest.mark.asyncio
@@ -244,6 +271,46 @@ async def test_risk_blocked_decision_writes_risk_blocked(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_risk_preview_records_failure_action_but_blocks(monkeypatch):
+    service = OrderIntentService()
+    intent = service._build_intent(make_decision(final_signal="BUY", confidence=0.8), exchange_id="okx", position_pct=0.05)
+
+    async def fake_balance():
+        return {"available_balance": 100000.0, "total_balance": 100000.0}
+
+    async def fake_positions(exchange_id="okx"):
+        return []
+
+    class FakeRiskResult:
+        allowed = False
+        rule = "MIN_ORDER_NOTIONAL"
+        reason = "too small"
+        action = "warn"
+
+    async def fake_preview_order_rules(**kwargs):
+        return [{"ruleName": "最小订单金额", "passed": False, "message": "too small"}]
+
+    async def fake_check_order(**kwargs):
+        return FakeRiskResult()
+
+    monkeypatch.setattr(
+        "app.services.order_intent_service.paper_trading_service",
+        SimpleNamespace(get_balance=fake_balance, get_positions=fake_positions),
+    )
+    monkeypatch.setattr(
+        "app.services.risk_manager.risk_manager",
+        SimpleNamespace(preview_order_rules=fake_preview_order_rules, check_order=fake_check_order),
+    )
+
+    preview = await service._risk_preview(intent, price=100.0, quantity=0.01)
+
+    assert preview["allowed"] is False
+    assert preview["failure_action"] == "warn"
+    assert preview["effective_failure_action"] == "block"
+    assert preview["blockedReason"] == "too small"
+
+
+@pytest.mark.asyncio
 async def test_manual_order_generates_manual_intent_and_audit(monkeypatch):
     service = OrderIntentService()
     audit_events = []
@@ -282,5 +349,5 @@ async def test_manual_order_generates_manual_intent_and_audit(monkeypatch):
     assert result["status"] == "FILLED"
     assert calls[0]["strategy_id"] == "manual"
     assert calls[0]["client_order_id"].startswith("OI-MANUAL-")
-    assert [event[0] for event in audit_events] == ["ORDER_INTENT_CREATED", "RISK_CHECK_PASSED", "PAPER_ORDER_FILLED"]
+    assert [event[0] for event in audit_events] == ["ORDER_INTENT_CREATED", "RISK_CHECK_PASSED", "ORDER_INTENT_EXECUTION_LINKED"]
     assert all(event[1] == "manual" for event in audit_events)

@@ -19,7 +19,7 @@ from typing import Tuple, Dict, Any, Optional, List
 
 from sqlalchemy import select, func as sqlfunc
 
-from app.services.database import get_db, redis_get, redis_set
+from app.services.database import get_db, redis_get, redis_set, redis_delete
 from app.core.config import settings
 from app.models.db_models import RiskEvent, PaperTrade, PaperAccount
 from app.services.macro_analysis_service import macro_analysis_service
@@ -42,13 +42,14 @@ HARD_TO_BORROW_SYMBOLS = ["DOGEUSDT", "SHIBUSDT"]
 class RiskCheckResult:
     """风控检查结果"""
 
-    def __init__(self, allowed: bool, rule: Optional[str] = None, reason: str = ""):
+    def __init__(self, allowed: bool, rule: Optional[str] = None, reason: str = "", action: str = "block"):
         self.allowed = allowed
         self.rule    = rule    # 触发的规则名称
         self.reason  = reason  # 拒绝原因（允许时为空）
+        self.action  = action  # block | reduce | warn
 
     def __repr__(self):
-        return f"RiskCheckResult(allowed={self.allowed}, rule={self.rule}, reason={self.reason!r})"
+        return f"RiskCheckResult(allowed={self.allowed}, rule={self.rule}, reason={self.reason!r}, action={self.action!r})"
 
 
 class RiskManager:
@@ -68,17 +69,7 @@ class RiskManager:
         """Get current time (real or simulated)"""
         return self.simulated_time or datetime.now(timezone.utc)
 
-    # ── 阈值获取 (支持热更新) ──────────────────────────────────────────────────
-    async def get_config(self) -> Dict[str, Any]:
-        """获取当前风控配置，优先从 Redis 获取，否则使用 settings"""
-        cached = await redis_get(REDIS_RISK_CONFIG_KEY)
-        if cached:
-            try:
-                import json
-                return json.loads(cached)
-            except Exception:
-                pass
-        
+    def _default_config(self) -> Dict[str, Any]:
         return {
             "MAX_SINGLE_POSITION_PCT": settings.MAX_SINGLE_POSITION_PCT,
             "MAX_TOTAL_DRAWDOWN_PCT": settings.MAX_TOTAL_DRAWDOWN_PCT,
@@ -86,12 +77,31 @@ class RiskManager:
             "MAX_TOTAL_EXPOSURE_PCT": getattr(settings, "MAX_TOTAL_EXPOSURE_PCT", 1.0),
             "FORBIDDEN_SYMBOLS": getattr(settings, "FORBIDDEN_SYMBOLS", []),
             "PRICE_DEVIATION_PCT": settings.PRICE_DEVIATION_PCT,
+            "MIN_ORDER_NOTIONAL": getattr(settings, "MIN_ORDER_NOTIONAL", 5.0),
+            "WAIT_ORDER_INTENT_POLICY": getattr(settings, "WAIT_ORDER_INTENT_POLICY", "record_flat"),
+            "RISK_FAILURE_ACTION": getattr(settings, "RISK_FAILURE_ACTION", "block"),
             "MAX_VOLATILITY_THRESHOLD": 0.80, # 80% 年化波动率阈值
             "MAINTENANCE_MARGIN_RATE": settings.MAINTENANCE_MARGIN_RATE,
             "MARGIN_WARNING_LEVEL": settings.MARGIN_WARNING_LEVEL,
             "PRE_LIQUIDATION_LEVEL": settings.PRE_LIQUIDATION_LEVEL,
             "VOLATILITY_TARGET_PCT": settings.VOLATILITY_TARGET_PCT,
         }
+
+    # ── 阈值获取 (支持热更新) ──────────────────────────────────────────────────
+    async def get_config(self) -> Dict[str, Any]:
+        """获取当前风控配置，优先从 Redis 获取，否则使用 settings"""
+        defaults = self._default_config()
+        cached = await redis_get(REDIS_RISK_CONFIG_KEY)
+        if cached:
+            try:
+                import json
+                cached_config = json.loads(cached) if isinstance(cached, str) else cached
+                if isinstance(cached_config, dict):
+                    return {**defaults, **cached_config}
+            except Exception:
+                pass
+
+        return defaults
 
     async def preview_order_rules(
         self,
@@ -124,6 +134,9 @@ class RiskManager:
         exposure_limit_pct = float(config.get("MAX_TOTAL_EXPOSURE_PCT", 1.0))
         drawdown_limit_pct = float(config.get("MAX_TOTAL_DRAWDOWN_PCT", 0.15))
         daily_loss_limit_pct = float(config.get("MAX_DAILY_LOSS_PCT", 0.05))
+        min_order_notional = float(config.get("MIN_ORDER_NOTIONAL", 5.0))
+        failure_action = str(config.get("RISK_FAILURE_ACTION", "block")).lower()
+        wait_policy = str(config.get("WAIT_ORDER_INTENT_POLICY", "record_flat")).lower()
         max_leverage = self._calculate_dynamic_leverage(portfolio_value)
         forbidden_symbols = {str(item).upper() for item in (config.get("FORBIDDEN_SYMBOLS") or [])}
         peak = await self._get_peak_balance(portfolio_value)
@@ -159,14 +172,25 @@ class RiskManager:
             row("最大回撤", round(drawdown * 100, 4), round(drawdown_limit_pct * 100, 4), drawdown < drawdown_limit_pct, "账户回撤超过阈值时触发保护。"),
             row("禁止交易标的", symbol, "不在禁用列表", symbol not in forbidden_symbols, "禁用列表中的标的不允许模拟下单。"),
             row("最大杠杆", leverage, max_leverage, int(leverage) <= max_leverage, "模拟订单杠杆不得超过动态上限。"),
+            row("最小订单金额", round(order_value, 4), round(min_order_notional, 4), order_value >= min_order_notional, "低于最小名义金额的订单会被 RiskGuard 拦截。"),
+            row("WAIT 处理策略", wait_policy, "record_flat|skip", wait_policy in {"record_flat", "skip"}, "WAIT/flat 决策必须记录为 flat intent 或显式跳过。"),
+            row("失败动作", failure_action, "block|reduce|warn", failure_action in {"block", "reduce", "warn"}, "生产执行默认按 block 处理，reduce/warn 仅作为配置意图和审计证据。"),
             row("订单名义金额", round(order_value, 4), round(portfolio_value * 1.05, 4), order_value <= portfolio_value * 1.05 or portfolio_value <= 0, "防止把 USDT 金额误填成币数量。"),
         ]
 
-    async def update_config(self, new_config: Dict[str, float]):
+    async def update_config(self, new_config: Dict[str, Any]):
         """更新风控配置到 Redis"""
         import json
-        await redis_set(REDIS_RISK_CONFIG_KEY, json.dumps(new_config))
-        logger.info(f"Risk config updated: {new_config}")
+        merged = {**await self.get_config(), **new_config}
+        await redis_set(REDIS_RISK_CONFIG_KEY, json.dumps(merged), ttl=86400)
+        logger.info(f"Risk config updated: {merged}")
+        return merged
+
+    async def reset_config(self) -> Dict[str, Any]:
+        """清除热更新配置并返回默认配置。"""
+        await redis_delete(REDIS_RISK_CONFIG_KEY)
+        logger.info("Risk config reset to defaults")
+        return self._default_config()
 
     # ── 保证金管理 (Margin Management) ──────────────────────────────────────────
     def calculate_margin_usage(self, positions: List[Dict[str, Any]], total_portfolio_value: float) -> float:
@@ -241,9 +265,21 @@ class RiskManager:
 
         # 获取当前配置
         config = await self.get_config()
+        failure_action = str(config.get("RISK_FAILURE_ACTION", "block")).lower()
+        if failure_action not in {"block", "reduce", "warn"}:
+            failure_action = "block"
         forbidden_symbols = {str(item).upper() for item in (config.get("FORBIDDEN_SYMBOLS") or [])}
         if symbol.upper() in forbidden_symbols:
-            return RiskCheckResult(allowed=False, rule="FORBIDDEN_SYMBOL", reason=f"{symbol} is blocked by RiskGuard forbidden-symbol list")
+            return RiskCheckResult(allowed=False, rule="FORBIDDEN_SYMBOL", reason=f"{symbol} is blocked by RiskGuard forbidden-symbol list", action=failure_action)
+
+        min_order_notional = Decimal(str(config.get("MIN_ORDER_NOTIONAL", 5.0)))
+        if order_value < min_order_notional:
+            return RiskCheckResult(
+                allowed=False,
+                rule="MIN_ORDER_NOTIONAL",
+                reason=f"订单名义金额 ${float(order_value):.2f} 低于最小订单金额 ${float(min_order_notional):.2f}",
+                action=failure_action,
+            )
         
         # 判定是否为开仓/加仓行为 (增加敞口)
         current_pos_qty = Decimal(str(current_positions.get(symbol, 0)))
@@ -261,7 +297,7 @@ class RiskManager:
         # ── 规则 0：全局熔断 (Kill Switch) ────────────────────────────────────
         kill_switch = await redis_get(REDIS_KILL_SWITCH_KEY)
         if kill_switch:
-            return RiskCheckResult(allowed=False, rule="KILL_SWITCH", reason="Global Kill Switch Activated")
+            return RiskCheckResult(allowed=False, rule="KILL_SWITCH", reason="Global Kill Switch Activated", action=failure_action)
 
         # ── 规则 0.1：波动率激增拦截 (Anti-Black Swan) ────────────────────────
         if is_opening:
@@ -271,7 +307,7 @@ class RiskManager:
                 await self._log_risk_event(symbol, "TAIL_RISK_HALT", True, {"symbol": symbol, "market_price": market_price})
                 # 自动触发避险平仓
                 asyncio.create_task(self.handle_tail_risk())
-                return RiskCheckResult(allowed=False, rule="TAIL_RISK_HALT", reason=reason)
+                return RiskCheckResult(allowed=False, rule="TAIL_RISK_HALT", reason=reason, action=failure_action)
 
         # ── 规则 0.2：宏观风险检查 (Macro Risk / Smart Beta) ──────────────────
         if is_opening:
@@ -279,7 +315,7 @@ class RiskManager:
             if macro_risk:
                 reason = f"宏观风险预警 (Macro Risk)：当前宏观环境极差或处于极端波动周期，禁止新开中长线仓位。"
                 await self._log_risk_event(symbol, "MACRO_RISK_HALT", True, {"symbol": symbol})
-                return RiskCheckResult(allowed=False, rule="MACRO_RISK_HALT", reason=reason)
+                return RiskCheckResult(allowed=False, rule="MACRO_RISK_HALT", reason=reason, action=failure_action)
 
         # ── 规则 0.5：异常交易拦截 (Fat Finger) ──────────────────────────────
         if market_price and market_price > 0:
@@ -295,18 +331,18 @@ class RiskManager:
                     "market_price": market_price,
                     "deviation_pct": round(deviation * 100, 2)
                 })
-                return RiskCheckResult(allowed=False, rule="FAT_FINGER", reason=reason)
+                return RiskCheckResult(allowed=False, rule="FAT_FINGER", reason=reason, action=failure_action)
             
             # 大单拆分检查 (ADV 模拟)
             ADV = 100_000_000 
             if float(order_value) > ADV * 0.01:
                  reason = f"订单价值 ${float(order_value):.2f} 超过日均成交量 1% (大单拦截)"
-                 return RiskCheckResult(allowed=False, rule="LARGE_ORDER", reason=reason)
+                 return RiskCheckResult(allowed=False, rule="LARGE_ORDER", reason=reason, action=failure_action)
 
         # ── 杠杆检查 (Tiered Margin) ──────────────────────────────────────────
         max_leverage = self._calculate_dynamic_leverage(total_portfolio_value)
         if leverage > max_leverage:
-             return RiskCheckResult(allowed=False, rule="MAX_LEVERAGE", reason=f"Leverage {leverage}x exceeds dynamic limit {max_leverage}x (Portfolio: ${total_portfolio_value:,.0f})")
+             return RiskCheckResult(allowed=False, rule="MAX_LEVERAGE", reason=f"Leverage {leverage}x exceeds dynamic limit {max_leverage}x (Portfolio: ${total_portfolio_value:,.0f})", action=failure_action)
 
         # ── 规则 1：单仓上限 ──────────────────────────────────────────────────
         if is_opening:
@@ -324,7 +360,7 @@ class RiskManager:
                     "new_pos_value": float(new_pos_value),
                     "max_allowed": float(max_allowed),
                 })
-                return RiskCheckResult(allowed=False, rule="MAX_SINGLE_POSITION", reason=reason)
+                return RiskCheckResult(allowed=False, rule="MAX_SINGLE_POSITION", reason=reason, action=failure_action)
 
             exposure_limit = Decimal(str(config.get("MAX_TOTAL_EXPOSURE_PCT", 1.0)))
             current_exposure = sum(abs(Decimal(str(q))) * price_dec for q in current_positions.values())
@@ -340,7 +376,7 @@ class RiskManager:
                     "total_exposure": float(total_exposure),
                     "max_total_exposure": float(max_total_exposure),
                 })
-                return RiskCheckResult(allowed=False, rule="MAX_TOTAL_EXPOSURE", reason=reason)
+                return RiskCheckResult(allowed=False, rule="MAX_TOTAL_EXPOSURE", reason=reason, action=failure_action)
 
         # ── 规则 1.1：保证金使用率预警/拦截 ────────────────────────────────────
         if is_opening:
@@ -364,7 +400,7 @@ class RiskManager:
             if margin_usage >= pre_liq_level:
                 reason = f"保证金使用率过高：当前模拟使用率 {margin_usage*100:.2f}%，超过强制拦截阈值 {pre_liq_level*100:.0f}%"
                 await self._log_risk_event(symbol, "MARGIN_USAGE_HALT", True, {"usage": margin_usage})
-                return RiskCheckResult(allowed=False, rule="MARGIN_USAGE_HALT", reason=reason)
+                return RiskCheckResult(allowed=False, rule="MARGIN_USAGE_HALT", reason=reason, action=failure_action)
             elif margin_usage >= warning_level:
                 logger.warning(f"MARGIN WARNING: Account margin usage at {margin_usage*100:.2f}% (Limit: {warning_level*100:.0f}%)")
                 await self._log_risk_event(symbol, "MARGIN_USAGE_WARNING", True, {"usage": margin_usage})
@@ -385,7 +421,7 @@ class RiskManager:
                         "current_value": total_portfolio_value,
                         "drawdown_pct": round(drawdown * 100, 2),
                     })
-                    return RiskCheckResult(allowed=False, rule="DRAWDOWN_HALT", reason=reason)
+                    return RiskCheckResult(allowed=False, rule="DRAWDOWN_HALT", reason=reason, action=failure_action)
 
         # ── 规则 3：单日亏损上限 ──────────────────────────────────────────────
         if is_opening:
@@ -402,7 +438,7 @@ class RiskManager:
                         "daily_pnl": daily_pnl,
                         "daily_loss_pct": round(daily_loss_pct * 100, 2),
                     })
-                    return RiskCheckResult(allowed=False, rule="DAILY_LOSS_HALT", reason=reason)
+                    return RiskCheckResult(allowed=False, rule="DAILY_LOSS_HALT", reason=reason, action=failure_action)
 
         # ── 规则 4：余额/保证金充足性 ────────────────────────────────────────
         if is_opening:
@@ -415,7 +451,7 @@ class RiskManager:
                     f"余额不足：需 ${float(total_cost):.2f} (Margin ${float(margin_required):.2f} + Fee ${float(fee):.2f})，"
                     f"可用 ${current_balance:.2f}"
                 )
-                return RiskCheckResult(allowed=False, rule="INSUFFICIENT_BALANCE", reason=reason)
+                return RiskCheckResult(allowed=False, rule="INSUFFICIENT_BALANCE", reason=reason, action=failure_action)
         
         # ── 做空风控 (Locate) ────────────────────────────────────────────────
         if side == "SELL" and is_opening:
@@ -424,7 +460,7 @@ class RiskManager:
                  if random.random() < 0.5:
                      reason = f"融券失败 (Locate Failed): {symbol} 属于难借资产，当前无券源"
                      await self._log_risk_event(symbol, "LOCATE_FAILED", True, {"symbol": symbol})
-                     return RiskCheckResult(allowed=False, rule="LOCATE_FAILED", reason=reason)
+                     return RiskCheckResult(allowed=False, rule="LOCATE_FAILED", reason=reason, action=failure_action)
 
         return RiskCheckResult(allowed=True)
 
@@ -461,10 +497,22 @@ class RiskManager:
             simulated_time: The replay's simulated timestamp for intra-day logic.
         """
         config = await self.get_config()
+        failure_action = str(config.get("RISK_FAILURE_ACTION", "block")).lower()
+        if failure_action not in {"block", "reduce", "warn"}:
+            failure_action = "block"
 
         quantity_dec = Decimal(str(quantity))
         price_dec = Decimal(str(price))
         order_value = quantity_dec * price_dec
+
+        min_order_notional = Decimal(str(config.get("MIN_ORDER_NOTIONAL", 5.0)))
+        if order_value < min_order_notional:
+            return RiskCheckResult(
+                allowed=False,
+                rule="MIN_ORDER_NOTIONAL",
+                reason=f"Order notional ${float(order_value):.2f} is below minimum ${float(min_order_notional):.2f}",
+                action=failure_action,
+            )
 
         # Determine if this is an opening/increasing position
         current_pos_qty = Decimal(str(current_positions.get(symbol, 0)))
@@ -482,7 +530,7 @@ class RiskManager:
         kill_switch = await redis_get(REDIS_KILL_SWITCH_KEY)
         if kill_switch:
             return RiskCheckResult(allowed=False, rule="KILL_SWITCH",
-                                   reason="Global Kill Switch Activated")
+                                   reason="Global Kill Switch Activated", action=failure_action)
 
         # Rule 0.1: Volatility spike — use HISTORICAL volatility, skip live API
         if is_opening and historical_volatility is not None:
@@ -497,7 +545,7 @@ class RiskManager:
                     "source": "historical",
                     "simulated_time": simulated_time.isoformat() if simulated_time else None,
                 })
-                return RiskCheckResult(allowed=False, rule="VOLATILITY_SPIKE", reason=reason)
+                return RiskCheckResult(allowed=False, rule="VOLATILITY_SPIKE", reason=reason, action=failure_action)
 
         # Rule 0.2: Macro risk — use HISTORICAL signal, skip live API
         if is_opening and historical_macro_risk is True:
@@ -509,7 +557,7 @@ class RiskManager:
                 "source": "historical",
                 "simulated_time": simulated_time.isoformat() if simulated_time else None,
             })
-            return RiskCheckResult(allowed=False, rule="MACRO_RISK_HALT", reason=reason)
+            return RiskCheckResult(allowed=False, rule="MACRO_RISK_HALT", reason=reason, action=failure_action)
 
         # Rule 0.5: Fat Finger check (non-time-sensitive, keep as-is)
         if market_price and market_price > 0:
@@ -518,7 +566,8 @@ class RiskManager:
             if deviation > price_dev_limit:
                 return RiskCheckResult(
                     allowed=False, rule="FAT_FINGER",
-                    reason=f"Price deviation {deviation*100:.2f}% exceeds {price_dev_limit*100:.0f}%"
+                    reason=f"Price deviation {deviation*100:.2f}% exceeds {price_dev_limit*100:.0f}%",
+                    action=failure_action,
                 )
 
         # Rule 1: Single position limit
@@ -529,7 +578,8 @@ class RiskManager:
             if new_pos_value > max_allowed:
                 return RiskCheckResult(
                     allowed=False, rule="MAX_SINGLE_POSITION",
-                    reason=f"Position size ${float(new_pos_value):.2f} exceeds {single_pos_limit*100:.0f}% limit"
+                    reason=f"Position size ${float(new_pos_value):.2f} exceeds {single_pos_limit*100:.0f}% limit",
+                    action=failure_action,
                 )
 
         # Rule 2: Total drawdown circuit breaker
@@ -541,7 +591,8 @@ class RiskManager:
                 if drawdown >= drawdown_limit:
                     return RiskCheckResult(
                         allowed=False, rule="DRAWDOWN_HALT",
-                        reason=f"Drawdown {drawdown*100:.2f}% exceeds {drawdown_limit*100:.0f}% limit"
+                        reason=f"Drawdown {drawdown*100:.2f}% exceeds {drawdown_limit*100:.0f}% limit",
+                        action=failure_action,
                     )
 
         # Rule 3: Daily loss — use simulated_time for intra-day calculation
@@ -555,7 +606,8 @@ class RiskManager:
                 if daily_loss_pct >= daily_loss_limit:
                     return RiskCheckResult(
                         allowed=False, rule="DAILY_LOSS_HALT",
-                        reason=f"Daily loss {daily_loss_pct*100:.2f}% exceeds {daily_loss_limit*100:.0f}% limit"
+                        reason=f"Daily loss {daily_loss_pct*100:.2f}% exceeds {daily_loss_limit*100:.0f}% limit",
+                        action=failure_action,
                     )
 
         # Rule 4: Balance sufficiency
@@ -566,7 +618,8 @@ class RiskManager:
             if Decimal(str(current_balance)) < total_cost:
                 return RiskCheckResult(
                     allowed=False, rule="INSUFFICIENT_BALANCE",
-                    reason=f"Balance ${current_balance:.2f} < required ${float(total_cost):.2f}"
+                    reason=f"Balance ${current_balance:.2f} < required ${float(total_cost):.2f}",
+                    action=failure_action,
                 )
 
         return RiskCheckResult(allowed=True)
@@ -679,6 +732,9 @@ class RiskManager:
         daily_loss_limit = config.get("MAX_DAILY_LOSS_PCT", 0.05)
         single_pos_limit = config.get("MAX_SINGLE_POSITION_PCT", 0.20)
         exposure_limit = config.get("MAX_TOTAL_EXPOSURE_PCT", 1.0)
+        min_order_notional = float(config.get("MIN_ORDER_NOTIONAL", 5.0))
+        wait_policy = str(config.get("WAIT_ORDER_INTENT_POLICY", "record_flat")).lower()
+        failure_action = str(config.get("RISK_FAILURE_ACTION", "block")).lower()
         positions = positions or []
         position_values = [
             abs(float(pos.get("quantity", 0.0))) * float(pos.get("mark_price", pos.get("markPrice", pos.get("avg_price", 0.0))))
@@ -726,6 +782,9 @@ class RiskManager:
                 rule_row("最大回撤", round(drawdown * 100, 4), round(drawdown_limit * 100, 4), drawdown < drawdown_limit, "账户回撤超过阈值时触发保护。"),
                 rule_row("禁止交易标的", ", ".join(forbidden_symbols) if forbidden_symbols else "无", "无禁用标的被交易", True, "禁用列表中的标的不允许模拟下单。"),
                 rule_row("最大杠杆", max_leverage, max_leverage, True, "模拟订单杠杆不得超过动态上限。"),
+                rule_row("最小订单金额", "执行前按订单检查", round(min_order_notional, 4), min_order_notional >= 0, "低于最小名义金额的订单会被 RiskGuard 拦截。"),
+                rule_row("WAIT 处理策略", wait_policy, "record_flat|skip", wait_policy in {"record_flat", "skip"}, "WAIT/flat 决策必须记录为 flat intent 或显式跳过。"),
+                rule_row("失败动作", failure_action, "block|reduce|warn", failure_action in {"block", "reduce", "warn"}, "模拟执行中失败检查仍然有效阻断，reduce/warn 作为审计意图保留。"),
             ],
             "config":               config
         }

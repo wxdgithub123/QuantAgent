@@ -121,11 +121,42 @@ async def close_db_connections() -> None:
 # Redis – Async Client with MsgPack & Distributed Lock
 # ─────────────────────────────────────────────────────────────────────────────
 _redis_client = None
+_redis_unavailable_until = 0.0
+_REDIS_UNAVAILABLE_RETRY_SECONDS = 30.0
+_REDIS_OPERATION_TIMEOUT_SECONDS = 0.5
+
+
+def _redis_short_circuited() -> bool:
+    return time.monotonic() < _redis_unavailable_until
+
+
+async def _close_redis_client() -> None:
+    global _redis_client
+    client = _redis_client
+    _redis_client = None
+    if client is not None:
+        try:
+            await client.aclose()
+        except AttributeError:
+            result = client.close()
+            if hasattr(result, "__await__"):
+                await result
+        except Exception:
+            pass
+
+
+async def _mark_redis_unavailable(reason: Exception) -> None:
+    global _redis_unavailable_until
+    _redis_unavailable_until = time.monotonic() + _REDIS_UNAVAILABLE_RETRY_SECONDS
+    await _close_redis_client()
+    logger.warning(f"Redis unavailable, short-circuiting for {_REDIS_UNAVAILABLE_RETRY_SECONDS:.0f}s: {reason}")
 
 
 def get_redis():
     """Get (lazily initialized) Redis client. Returns None if unavailable."""
     global _redis_client
+    if _redis_short_circuited():
+        return None
     if _redis_client is not None:
         return _redis_client
     try:
@@ -135,6 +166,9 @@ def get_redis():
             settings.REDIS_URL,
             encoding="utf-8",
             decode_responses=False, 
+            socket_connect_timeout=_REDIS_OPERATION_TIMEOUT_SECONDS,
+            socket_timeout=_REDIS_OPERATION_TIMEOUT_SECONDS,
+            retry_on_timeout=False,
         )
         return _redis_client
     except Exception as e:
@@ -148,11 +182,12 @@ async def redis_get(key: str) -> Optional[Any]:
     if r is None:
         return None
     try:
-        raw = await r.get(key)
+        raw = await asyncio.wait_for(r.get(key), timeout=_REDIS_OPERATION_TIMEOUT_SECONDS)
         # raw=False ensures strings are decoded to str, not bytes
         return msgpack.unpackb(raw, raw=False) if raw else None
     except Exception as e:
-        logger.warning(f"Redis GET {key} failed: {e}")
+        await _mark_redis_unavailable(e)
+        logger.debug(f"Redis GET {key} failed: {e}")
         return None
 
 
@@ -163,10 +198,11 @@ async def redis_set(key: str, value: Any, ttl: int = 5) -> bool:
         return False
     try:
         packed = msgpack.packb(value, use_bin_type=True)
-        await r.set(key, packed, ex=ttl)
+        await asyncio.wait_for(r.set(key, packed, ex=ttl), timeout=_REDIS_OPERATION_TIMEOUT_SECONDS)
         return True
     except Exception as e:
-        logger.warning(f"Redis SET {key} failed: {e}")
+        await _mark_redis_unavailable(e)
+        logger.debug(f"Redis SET {key} failed: {e}")
         return False
 
 
@@ -176,10 +212,11 @@ async def redis_delete(key: str) -> bool:
     if r is None:
         return False
     try:
-        await r.delete(key)
+        await asyncio.wait_for(r.delete(key), timeout=_REDIS_OPERATION_TIMEOUT_SECONDS)
         return True
     except Exception as e:
-        logger.warning(f"Redis DEL {key} failed: {e}")
+        await _mark_redis_unavailable(e)
+        logger.debug(f"Redis DEL {key} failed: {e}")
         return False
 
 
@@ -189,10 +226,11 @@ async def check_redis_connection() -> bool:
     if r is None:
         return False
     try:
-        await r.ping()
+        await asyncio.wait_for(r.ping(), timeout=_REDIS_OPERATION_TIMEOUT_SECONDS)
         return True
     except Exception as e:
-        logger.warning(f"Redis ping failed: {e}")
+        await _mark_redis_unavailable(e)
+        logger.debug(f"Redis ping failed: {e}")
         return False
 
 
@@ -219,12 +257,19 @@ class RedisLock:
         start_time = time.time()
         while True:
             # Try to acquire lock
-            acquired = await self._redis.set(
-                self.key, 
-                self.token, 
-                ex=self.expire, 
-                nx=True
-            )
+            try:
+                acquired = await asyncio.wait_for(
+                    self._redis.set(
+                        self.key,
+                        self.token,
+                        ex=self.expire,
+                        nx=True,
+                    ),
+                    timeout=_REDIS_OPERATION_TIMEOUT_SECONDS,
+                )
+            except Exception as e:
+                await _mark_redis_unavailable(e)
+                raise RuntimeError("Redis is not available for locking") from e
             if acquired:
                 return self
             
@@ -248,6 +293,10 @@ class RedisLock:
         end
         """
         try:
-            await self._redis.eval(script, 1, self.key, self.token)
+            await asyncio.wait_for(
+                self._redis.eval(script, 1, self.key, self.token),
+                timeout=_REDIS_OPERATION_TIMEOUT_SECONDS,
+            )
         except Exception as e:
-            logger.warning(f"Error releasing lock {self.key}: {e}")
+            await _mark_redis_unavailable(e)
+            logger.debug(f"Error releasing lock {self.key}: {e}")

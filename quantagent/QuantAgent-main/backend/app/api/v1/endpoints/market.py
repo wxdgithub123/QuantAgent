@@ -537,6 +537,151 @@ def _build_news_panel(
     return panel
 
 
+def _pit_bar_check(bars: List[Dict[str, Any]], as_of_time: Optional[str]) -> Dict[str, Any]:
+    cutoff = None
+    if as_of_time:
+        try:
+            cutoff = _as_utc(datetime.fromisoformat(as_of_time.replace("Z", "+00:00")))
+        except Exception:
+            cutoff = None
+    violations: List[Dict[str, Any]] = []
+    max_available = None
+    for index, bar in enumerate(bars or []):
+        raw_available = bar.get("available_time") or bar.get("availableTime") or bar.get("event_time")
+        available = None
+        if raw_available:
+            try:
+                available = _as_utc(datetime.fromisoformat(str(raw_available).replace("Z", "+00:00")))
+            except Exception:
+                available = None
+        if available and (max_available is None or available > max_available):
+            max_available = available
+        if cutoff and available and available > cutoff:
+            violations.append(
+                {
+                    "recordId": bar.get("id") or bar.get("event_time") or index,
+                    "availableTime": available.isoformat(),
+                    "asOfTime": cutoff.isoformat(),
+                    "dataType": "bar",
+                    "message": "available_time is later than as_of_time",
+                }
+            )
+    return {
+        "passed": len(violations) == 0,
+        "rule": "available_time <= as_of_time",
+        "violationCount": len(violations),
+        "violations": violations[:50],
+        "maxAvailableTime": max_available.isoformat() if max_available else None,
+        "externalFallbackAllowed": False,
+    }
+
+
+async def _build_analysis_context_payload(
+    *,
+    symbol: str,
+    interval: str,
+    as_of_time: Optional[datetime],
+    bar_limit: int,
+    factor_limit: int = 40,
+    signal_limit: int = 40,
+    news_limit: int = 20,
+    macro_limit: int = 30,
+) -> Dict[str, Any]:
+    from app.services.analysis_context_builder import analysis_context_builder
+
+    canonical_symbol = Instrument.from_raw(symbol).symbol
+    context = await analysis_context_builder.build(
+        symbol=canonical_symbol,
+        interval=interval,
+        as_of_time=as_of_time,
+        bar_limit=bar_limit,
+        factor_limit=factor_limit,
+        signal_limit=signal_limit,
+        news_limit=news_limit,
+        macro_limit=macro_limit,
+    )
+    payload = context.to_agent_payload()
+    payload["symbol"] = canonical_symbol
+    payload["interval"] = interval
+    return payload
+
+
+@router.get("/bars/as-of")
+async def get_bars_as_of(
+    symbol: str = Query(..., description="Instrument symbol, e.g. BTCUSDT"),
+    interval: str = Query("1h"),
+    as_of_time: Optional[datetime] = Query(None),
+    limit: int = Query(120, ge=1, le=1000),
+) -> Dict[str, Any]:
+    """PRD-compatible PIT bars endpoint backed by local AnalysisContext."""
+    payload = await _build_analysis_context_payload(
+        symbol=symbol,
+        interval=interval,
+        as_of_time=as_of_time,
+        bar_limit=limit,
+        factor_limit=0,
+        signal_limit=0,
+        news_limit=0,
+        macro_limit=0,
+    )
+    bars = payload.get("bars") or []
+    input_snapshot_ids = payload.get("input_snapshot_ids") or {}
+    bar_meta = input_snapshot_ids.get("bar_meta") or []
+    first_meta = bar_meta[0] if bar_meta else {}
+    as_of_value = payload.get("as_of_time")
+    return {
+        "symbol": payload.get("symbol"),
+        "interval": interval,
+        "as_of_time": as_of_value,
+        "count": len(bars),
+        "bars": bars,
+        "snapshot_id": first_meta.get("ohlc_digest") or payload.get("context_hash"),
+        "context_hash": payload.get("context_hash"),
+        "input_snapshot_ids": input_snapshot_ids,
+        "data_versions": payload.get("data_versions") or {},
+        "pit": _pit_bar_check(bars, as_of_value),
+        "lineage": {
+            "source": "AnalysisContextBuilder",
+            "dataBoundary": "local_storage_only",
+            "externalFallbackAllowed": False,
+        },
+    }
+
+
+@router.get("/snapshot/{symbol}")
+async def get_data_platform_snapshot(
+    symbol: str,
+    interval: str = Query("1h"),
+    as_of_time: Optional[datetime] = Query(None),
+    bar_limit: int = Query(120, ge=1, le=1000),
+) -> Dict[str, Any]:
+    """PRD-compatible local data snapshot for Agent/backtest consumers."""
+    payload = await _build_analysis_context_payload(
+        symbol=symbol,
+        interval=interval,
+        as_of_time=as_of_time,
+        bar_limit=bar_limit,
+    )
+    bars = payload.get("bars") or []
+    as_of_value = payload.get("as_of_time")
+    return {
+        "symbol": payload.get("symbol"),
+        "interval": interval,
+        "as_of_time": as_of_value,
+        "context_hash": payload.get("context_hash"),
+        "input_snapshot_ids": payload.get("input_snapshot_ids") or {},
+        "data_versions": payload.get("data_versions") or {},
+        "analysis_context": payload,
+        "pit": _pit_bar_check(bars, as_of_value),
+        "lineage": {
+            "source": "AnalysisContextBuilder",
+            "dataBoundary": "local_storage_only",
+            "externalFallbackAllowed": False,
+            "rule": "available_time <= as_of_time",
+        },
+    }
+
+
 @router.get("/klines/{symbol}", response_model=KlineResponse)
 async def get_klines(
     symbol: str,
@@ -2343,7 +2488,8 @@ async def get_research_snapshot(
         "lineage": {
             "rule": "available_time <= as_of_time",
             "context_source": "AnalysisContextBuilder",
-            "market_data": "MarketDataGateway / ClickHouse cache / OpenBB / CCXT fallback",
-            "storage_note": "ClickHouse 和 DuckDB 是本地缓存/存储层，不是原始上游。",
+            "market_data": "MarketDataGateway / ClickHouse cache; Agent context disables external fallback",
+            "storage_note": "ClickHouse 和 DuckDB 是本地缓存/存储层。Agent/回测上下文默认只读取本地已存储快照。",
+            "externalFallbackAllowed": False,
         },
     }

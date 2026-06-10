@@ -8,14 +8,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 interface TradingViewChartProps {
   symbol?: string;
   interval?: string;
+  asOfTime?: string | null;
 }
 
 interface KlineItem {
   timestamp: string;
+  event_time?: string;
+  ts?: string;
   open: number;
   high: number;
   low: number;
   close: number;
+  volume?: number;
 }
 
 interface KlineMetadata {
@@ -24,6 +28,9 @@ interface KlineMetadata {
   provider?: string;
   exchange?: string;
   updated_at?: string | null;
+  pit_rule?: string;
+  as_of_time?: string | null;
+  count?: number;
 }
 
 function formatSourceLabel(metadata: KlineMetadata | null) {
@@ -46,7 +53,7 @@ function formatUpdatedAt(value?: string | null) {
   });
 }
 
-export function TradingViewChart({ symbol = "BTCUSDT", interval = "1h" }: TradingViewChartProps) {
+export function TradingViewChart({ symbol = "BTCUSDT", interval = "1h", asOfTime = null }: TradingViewChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -135,7 +142,7 @@ export function TradingViewChart({ symbol = "BTCUSDT", interval = "1h" }: Tradin
     };
   }, []);
 
-  // Update data when symbol or interval changes
+  // Update data when symbol, interval or PIT cutoff changes
   useEffect(() => {
     if (!candlestickSeriesRef.current || !chartRef.current) return;
     
@@ -143,17 +150,20 @@ export function TradingViewChart({ symbol = "BTCUSDT", interval = "1h" }: Tradin
       setIsLoading(true);
       setErrorMessage("");
       try {
-        const response = await fetch(`/api/v1/market/klines/${symbol}?interval=${interval}&limit=200`);
+        const endpoint = asOfTime
+          ? `/api/v1/bars/as-of?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=200&as_of_time=${encodeURIComponent(asOfTime)}`
+          : `/api/v1/market/klines/${symbol}?interval=${interval}&limit=200`;
+        const response = await fetch(endpoint);
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
-        const result = (await response.json()) as { data: KlineItem[]; metadata?: KlineMetadata };
-        setMetadata(result.metadata ?? null);
+        const result = (await response.json()) as { data: KlineItem[]; metadata?: KlineMetadata; meta?: KlineMetadata };
+        setMetadata(result.metadata ?? result.meta ?? null);
         
         if (!chartRef.current || !candlestickSeriesRef.current) return;
         
         const candleData: CandlestickData<Time>[] = result.data.map((item) => ({
-          time: (new Date(item.timestamp).getTime() / 1000) as Time,
+          time: (new Date(item.timestamp || item.event_time || item.ts || "").getTime() / 1000) as Time,
           open: item.open,
           high: item.high,
           low: item.low,
@@ -179,7 +189,7 @@ export function TradingViewChart({ symbol = "BTCUSDT", interval = "1h" }: Tradin
     };
 
     fetchData();
-  }, [symbol, interval]);
+  }, [symbol, interval, asOfTime]);
 
   return (
     <Card className="w-full h-full bg-slate-900 border-slate-800">
@@ -188,6 +198,11 @@ export function TradingViewChart({ symbol = "BTCUSDT", interval = "1h" }: Tradin
           <CardTitle className="text-slate-100 flex items-center gap-2">
             <span className="text-xl font-bold">{symbol}</span>
             <span className="text-sm font-normal text-slate-400">永续合约</span>
+            {asOfTime && (
+              <span className="rounded border border-cyan-500/25 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-normal text-cyan-200">
+                as-of
+              </span>
+            )}
           </CardTitle>
           <div className="flex flex-wrap items-center justify-end gap-2 text-[11px] text-slate-300">
             <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-emerald-200">
@@ -207,6 +222,7 @@ export function TradingViewChart({ symbol = "BTCUSDT", interval = "1h" }: Tradin
         <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500">
           <Database className="h-3 w-3" />
           这里显示的是 K 线实际来源；模拟盘的标记价格和模拟成交参考另由 CCXT/OKX 报价提供。
+          {asOfTime ? " 当前图表按 available_time <= as_of_time 回看。" : ""}
         </div>
         {errorMessage && <div className="text-xs text-amber-300 mt-2">{errorMessage}</div>}
       </CardHeader>

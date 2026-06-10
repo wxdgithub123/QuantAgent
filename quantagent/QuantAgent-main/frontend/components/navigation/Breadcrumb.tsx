@@ -2,13 +2,16 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChevronRight, Home } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { Fragment } from "react";
 
 // Breadcrumb label map — friendly Chinese names for every route
 const BREADCRUMB_LABELS: Record<string, string> = {
   "dashboard": "总览",
   "data-sources": "数据源",
+  "data-governance": "数据治理",
+  "config-center": "配置中心",
+  "paper-trading": "模拟交易台",
   "signals": "因子/信号",
   "decisions": "决策中心",
   "backtest": "策略回测",
@@ -20,6 +23,7 @@ const BREADCRUMB_LABELS: Record<string, string> = {
   "hummingbot-testnet": "测试网",
   "terminal": "对话分析",
   "profiles": "策略方案",
+  "risk": "风控配置",
   "strategies": "策略库",
   "monitor": "策略监控",
   "monitor-page": "系统监控",

@@ -134,8 +134,7 @@ class OrderIntentService:
                 "order_id": execution.get("order_id"),
                 "execution": execution,
             }
-            await self._audit(
-                "PAPER_ORDER_FILLED",
+            await self._audit_execution_link(
                 intent_obj,
                 {
                     **result,
@@ -233,7 +232,7 @@ class OrderIntentService:
                 "order_id": execution.get("order_id"),
                 "execution": execution,
             }
-            await self._audit("PAPER_ORDER_FILLED", intent, result)
+            await self._audit_execution_link(intent, result)
             return result
         except ValueError as exc:
             result = {
@@ -304,23 +303,38 @@ class OrderIntentService:
         intent: OrderIntent,
         exchange_id: str,
     ) -> Dict[str, Any]:
+        wait_policy = await self._wait_order_intent_policy()
         action = "HOLD_RECORDED" if intent.side is None else "ORDER_INTENT_CREATED"
         status = "NO_ACTION" if intent.side is None else "READY"
+        generated_order_intent = True
+        if intent.side is None and wait_policy == "skip":
+            status = "SKIPPED"
+            generated_order_intent = False
         if intent.status == "BLOCKED":
             status = "BLOCKED"
         details = {
             "stage": "decision_evidence",
             "decision": self._decision_audit_payload(decision),
             "execution_note": "Draft only. No realtime price/account/position lookup and no RiskGuard check.",
+            "wait_order_intent_policy": wait_policy,
+            "generated_order_intent": generated_order_intent,
         }
         await self._audit_once(action, intent, details)
         return {
             "status": status,
-            "message": "该决策为观望/空仓，不生成模拟盘订单。" if intent.side is None else "OrderIntent 草案已生成，等待用户显式执行。",
+            "message": (
+                "该 WAIT/flat 决策按配置跳过 OrderIntent，仅保留审计证据。"
+                if intent.side is None and wait_policy == "skip"
+                else "该决策为观望/空仓，不生成模拟盘订单。"
+                if intent.side is None
+                else "OrderIntent 草案已生成，等待用户显式执行。"
+            ),
             "data_lineage": self._data_lineage(exchange_id),
             "intent": self._intent_api(intent),
             "decision": self._decision_summary(decision),
             "draft_only": True,
+            "wait_order_intent_policy": wait_policy,
+            "generated_order_intent": generated_order_intent,
             "risk_preview": None,
             "price": None,
             "sizing": None,
@@ -431,6 +445,17 @@ class OrderIntentService:
         }
 
     @staticmethod
+    async def _wait_order_intent_policy() -> str:
+        try:
+            from app.services.risk_manager import risk_manager
+
+            config = await risk_manager.get_config()
+            policy = str(config.get("WAIT_ORDER_INTENT_POLICY", "record_flat")).lower()
+            return policy if policy in {"record_flat", "skip"} else "record_flat"
+        except Exception:
+            return "record_flat"
+
+    @staticmethod
     def _intent_api(intent: OrderIntent, *, quantity: Optional[float] = None) -> Dict[str, Any]:
         action = "HOLD" if intent.side is None else str(intent.side).upper()
         status_map = {
@@ -529,6 +554,9 @@ class OrderIntentService:
                 "reason": risk_result.reason,
                 "blockedReason": risk_result.reason or None,
                 "blocked_reason": risk_result.reason or None,
+                "failure_action": getattr(risk_result, "action", "block"),
+                "effective_failure_action": "block",
+                "failure_action_note": "RiskGuard failures are always blocked in simulated execution; reduce/warn are configuration intents recorded for review.",
                 "checkedRules": checked_rules,
                 "checked_rules": checked_rules,
                 "checked_at": datetime.now(timezone.utc).isoformat(),
@@ -569,6 +597,15 @@ class OrderIntentService:
             ip_address="internal",
             raise_on_failure=raise_on_failure,
         )
+
+    async def _audit_execution_link(self, intent: OrderIntent, details: Dict[str, Any]) -> None:
+        """Link wrapper context to the single fill row written by PaperTradingService.
+
+        PaperTradingService is the source of truth for `PAPER_ORDER_FILLED`.
+        The wrapper records only a lightweight association event so one fill is
+        not double-counted in audit-derived execution metrics.
+        """
+        await self._audit("ORDER_INTENT_EXECUTION_LINKED", intent, details)
 
     async def _audit_once(self, action: str, intent: OrderIntent, details: Dict[str, Any]) -> None:
         if await self._has_audit_event(action, intent):

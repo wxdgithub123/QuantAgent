@@ -259,6 +259,23 @@ async def get_risk_status(
         }
 
 
+@router.get("/workbench")
+async def get_paper_trading_workbench(
+    symbol: Optional[str] = Query(None, description="Optional symbol filter"),
+    exchange_id: Optional[str] = Query("okx", description="Paper execution exchange"),
+    limit: int = Query(25, ge=1, le=100),
+):
+    """Return the Phase 2 paper-trading workbench read model."""
+    from app.services.paper_trading_workbench import build_paper_trading_workbench
+
+    normalized_symbol = symbol.upper().replace("/", "") if symbol else None
+    return await build_paper_trading_workbench(
+        symbol=normalized_symbol,
+        exchange_id=exchange_id or "okx",
+        limit=limit,
+    )
+
+
 @router.get("/macro-status")
 async def get_macro_status(symbol: str = "BTCUSDT"):
     """获取当前宏观经济与链上指标状态 (Smart Beta & Anti-Black Swan)"""

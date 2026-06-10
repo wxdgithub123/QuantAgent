@@ -21,6 +21,7 @@ from app.services.clickhouse_service import clickhouse_service
 from app.services.market_data_gateway import market_data_gateway
 from app.services.database import get_db
 from app.models.db_models import (
+    AuditLog,
     BacktestResult,
     OptimizationResult,
     PaperTrade,
@@ -33,6 +34,7 @@ from app.services.backtester.signal_resolution import resolve_signal_output
 from app.services.reproducibility import enrich_pit_metadata, stable_params_hash
 from app.services.risk_manager import risk_manager
 from app.services.audit_service import audit_service
+from app.services.backtest_duckdb_store import backtest_duckdb_store, build_backtest_archive_record
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -334,6 +336,9 @@ async def _build_backtest_risk_rows(
     total_limit_pct = float(config.get("MAX_TOTAL_EXPOSURE_PCT", 1.0))
     drawdown_limit_pct = float(config.get("MAX_TOTAL_DRAWDOWN_PCT", 0.15))
     daily_loss_limit_pct = float(config.get("MAX_DAILY_LOSS_PCT", 0.05))
+    min_order_notional = float(config.get("MIN_ORDER_NOTIONAL", 5.0))
+    wait_policy = str(config.get("WAIT_ORDER_INTENT_POLICY", "record_flat")).lower()
+    failure_action = str(config.get("RISK_FAILURE_ACTION", "block")).lower()
     forbidden_symbols = {str(item).upper() for item in (config.get("FORBIDDEN_SYMBOLS") or [])}
     max_leverage = risk_manager._calculate_dynamic_leverage(portfolio)  # noqa: SLF001 - shared RiskGuard rule.
     local_drawdown_pct = max(0.0, (initial_capital - portfolio) / initial_capital) if initial_capital > 0 else 0.0
@@ -358,6 +363,9 @@ async def _build_backtest_risk_rows(
         row("Maximum drawdown", round(local_drawdown_pct * 100, 4), round(drawdown_limit_pct * 100, 4), local_drawdown_pct < drawdown_limit_pct, "Drawdown is measured from this backtest initial capital, not global paper state."),
         row("Forbidden symbol", symbol.upper(), "not forbidden", symbol.upper() not in forbidden_symbols, "Configured forbidden symbols cannot be traded."),
         row("Maximum leverage", leverage, max_leverage, int(leverage) <= max_leverage, "Leverage must stay within RiskGuard dynamic cap."),
+        row("Minimum order notional", round(order_value, 4), round(min_order_notional, 4), order_value >= min_order_notional, "Backtest orders below the configured minimum notional are blocked."),
+        row("WAIT order intent policy", wait_policy, "record_flat|skip", wait_policy in {"record_flat", "skip"}, "WAIT/flat Agent decisions are either recorded as flat intents or explicitly skipped."),
+        row("Risk failure action", failure_action, "block|reduce|warn", failure_action in {"block", "reduce", "warn"}, "Backtest audit records the configured failure-action intent; failed RiskGuard checks remain blocked."),
         row("Order notional", round(order_value, 4), round(portfolio * 1.05, 4), order_value <= portfolio * 1.05 or portfolio <= 0, "Prevents confusing USDT notional with coin quantity."),
     ]
 
@@ -1299,13 +1307,16 @@ async def run_backtest(req: BacktestRequest):
                 data_source_used = "clickhouse:klines"
                 logger.info(f"ClickHouse returned {len(df)} bars for {symbol_clean}/{req.interval}")
             else:
-                logger.warning(f"ClickHouse data insufficient ({len(df) if df is not None else 0} bars), falling back to Binance")
+                logger.warning(
+                    "ClickHouse data insufficient (%s bars), retrying local gateway without external fallback",
+                    len(df) if df is not None else 0,
+                )
                 df = None
         except Exception as e:
-            logger.warning(f"ClickHouse query failed: {e}, falling back to Binance")
+            logger.warning("ClickHouse query failed: %s; retrying local gateway without external fallback", e)
             df = None
 
-        # 如果 ClickHouse 数据不足，回退到 Binance（支持时间范围查询）
+        # 如果 ClickHouse 数据不足，仅允许本地网关补读；回测不得隐式调用外部实时/历史源。
         if df is None:
             try:
                 df = await market_data_gateway.get_dataframe(
@@ -1313,35 +1324,40 @@ async def run_backtest(req: BacktestRequest):
                     req.interval, 
                     limit=effective_limit,
                     start=req.start_time,
-                    end=effective_end_time
+                    end=effective_end_time,
+                    allow_external_fallback=False,
+                    allow_ccxt_fallback=False,
+                    allow_binance_fallback=False,
                 )
                 if df is not None and len(df) >= 50:
-                    data_source_used = "market_data_gateway:fallback"
-                    logger.warning(
-                        f"Time range query fell back to Binance (limit={effective_limit}). "
-                        f"Consider backfilling ClickHouse data for {symbol_clean}/{req.interval}"
-                    )
+                    data_source_used = "market_data_gateway:local_storage"
                 else:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"指定时间范围内数据不足，请确保 ClickHouse 中有 {symbol_clean}/{req.interval} 的历史数据"
+                        detail=(
+                            f"指定时间范围内本地数据不足：请先回填 {symbol_clean}/{req.interval}，"
+                            "回测不会隐式回退到外部数据源"
+                        ),
                     )
             except HTTPException:
                 raise
             except Exception as e:
-                raise HTTPException(status_code=503, detail=f"Failed to fetch market data: {e}")
+                raise HTTPException(status_code=503, detail=f"Failed to fetch local market data: {e}")
     else:
-        # 向后兼容：使用 limit 参数从 Binance 获取数据
+        # 使用本地持久化行情；回测必须与研究台共享 PIT/local-only 数据边界。
         try:
             df = await market_data_gateway.get_dataframe(
                 symbol_ccxt,
                 req.interval,
                 limit=effective_limit,
                 end=effective_end_time,
+                allow_external_fallback=False,
+                allow_ccxt_fallback=False,
+                allow_binance_fallback=False,
             )
-            data_source_used = "market_data_gateway"
+            data_source_used = "market_data_gateway:local_storage"
         except Exception as e:
-            raise HTTPException(status_code=503, detail=f"Failed to fetch market data: {e}")
+            raise HTTPException(status_code=503, detail=f"Failed to fetch local market data: {e}")
 
     if df is not None and pit_cutoff is not None and len(df) > 0:
         cutoff = pd.Timestamp(pit_cutoff)
@@ -1501,6 +1517,11 @@ async def run_backtest(req: BacktestRequest):
         "failedCount": 0,
         "maxAgentCalls": max_agent_calls,
     }
+    duckdb_archive_status: Dict[str, Any] = {
+        "enabled": True,
+        "status": "pending",
+        "storage": "DuckDB backtest_results",
+    }
     try:
         async with get_db() as session:
             bt_row = BacktestResult(
@@ -1576,6 +1597,20 @@ async def run_backtest(req: BacktestRequest):
             audit_record_ids.append(audit_log.id)
             metrics_dict["auditRecordIds"] = audit_record_ids
             metrics_dict["auditRecordCount"] = len(audit_record_ids)
+            duckdb_archive_status = _archive_backtest_payload(
+                backtest_id=db_id,
+                task_id=None,
+                req=req,
+                symbol=symbol_clean,
+                params_hash=params_hash,
+                metrics=metrics_dict,
+                equity_curve=equity_curve[:2000],
+                trades=normalized_trades[:100],
+                pit_metadata=pit_metadata,
+                pit_check=pit_check,
+                execution_mode=execution_mode,
+            )
+            metrics_dict["duckdbArchive"] = duckdb_archive_status
             bt_row.metrics = metrics_dict
             bt_row.trades_summary = normalized_trades[:100]
     except Exception as e:
@@ -1625,6 +1660,8 @@ async def run_backtest(req: BacktestRequest):
             "failedAgentCalls": trace_stats.get("failedAgentCalls", 0),
             "failedCount": trace_stats.get("failedCount", trace_stats.get("failedAgentCalls", 0)),
             "maxAgentCalls": max_agent_calls,
+            "duckdbArchive": duckdb_archive_status,
+            "resultStorage": "PostgreSQL backtest_results + DuckDB backtest_results archive",
         },
         auditRecordIds=audit_record_ids,
         executionMode=execution_mode,
@@ -2280,9 +2317,16 @@ async def optimize_strategy(req: OptimizeRequest):
     effective_limit = min(req.limit, MAX_LIMITS.get(req.interval, 1000))
 
     try:
-        df = await market_data_gateway.get_dataframe(symbol_ccxt, req.interval, limit=effective_limit)
+        df = await market_data_gateway.get_dataframe(
+            symbol_ccxt,
+            req.interval,
+            limit=effective_limit,
+            allow_external_fallback=False,
+            allow_ccxt_fallback=False,
+            allow_binance_fallback=False,
+        )
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Failed to fetch market data: {e}")
+        raise HTTPException(status_code=503, detail=f"Failed to fetch local market data: {e}")
 
     if df is None or len(df) < 300:
         raise HTTPException(status_code=400, detail=f"K线数据不足：当前 {len(df) if df is not None else 0} 根，至少需要 300 根")
@@ -2698,18 +2742,66 @@ def _task_public_view(task: Dict[str, Any]) -> Dict[str, Any]:
     return {
         key: value
         for key, value in task.items()
-        if key not in {"request"}
+        if key not in {"request", "param_combinations"}
     }
+
+
+def _task_is_active(task: Dict[str, Any]) -> bool:
+    return str(task.get("status") or "").lower() in {"queued", "running", "cancelling"}
+
+
+def _archive_backtest_payload(
+    *,
+    backtest_id: Optional[int],
+    task_id: Optional[str],
+    req: BacktestRequest,
+    symbol: str,
+    params_hash: Optional[str],
+    metrics: Dict[str, Any],
+    equity_curve: List[Dict[str, Any]],
+    trades: List[Dict[str, Any]],
+    pit_metadata: Dict[str, Any],
+    pit_check: Dict[str, Any],
+    execution_mode: str,
+    status: str = "completed",
+) -> Dict[str, Any]:
+    record = build_backtest_archive_record(
+        backtest_id=backtest_id,
+        task_id=task_id,
+        strategy_type=req.strategy_type,
+        symbol=symbol,
+        interval=req.interval,
+        params=req.params,
+        params_hash=params_hash,
+        metrics=metrics,
+        equity_curve=equity_curve,
+        trades=trades,
+        pit=pit_metadata,
+        pit_check=pit_check,
+        execution_mode=execution_mode,
+        status=status,
+    )
+    return backtest_duckdb_store.archive_result(record)
 
 
 async def _run_parameter_batch_task(task_id: str, req: ParameterBatchBacktestRequest, combos: List[Dict[str, Any]]) -> None:
     task = BACKTEST_TASKS[task_id]
+    if task.get("status") == "cancelled":
+        return
     task["status"] = "running"
     task["started_at"] = datetime.utcnow().isoformat()
+    backtest_duckdb_store.append_task_event(task_id, "running", "task_started", _task_public_view(task))
     semaphore = asyncio.Semaphore(max(1, min(req.max_parallel, 5)))
 
     async def run_one(index: int, combo: Dict[str, Any]) -> Dict[str, Any]:
         async with semaphore:
+            if task.get("cancel_requested"):
+                return {
+                    "index": index,
+                    "status": "cancelled",
+                    "params": {**(req.params or {}), **combo},
+                    "error": "Task cancellation requested before this run started.",
+                }
             run_req = BacktestRequest(
                 strategy_type=req.strategy_type,
                 symbol=req.symbol,
@@ -2724,6 +2816,7 @@ async def _run_parameter_batch_task(task_id: str, req: ParameterBatchBacktestReq
             try:
                 result = await run_backtest(run_req)
                 payload = result.model_dump()
+                duckdb_archive = payload.get("dataRange", {}).get("duckdbArchive") or payload.get("metrics", {}).get("duckdbArchive")
                 return {
                     "index": index,
                     "status": "completed",
@@ -2732,6 +2825,7 @@ async def _run_parameter_batch_task(task_id: str, req: ParameterBatchBacktestReq
                     "metrics": payload.get("metrics", {}),
                     "pit": payload.get("pit", {}),
                     "created_at": payload.get("created_at"),
+                    "duckdbArchive": duckdb_archive,
                 }
             except Exception as exc:
                 detail = getattr(exc, "detail", None)
@@ -2745,16 +2839,20 @@ async def _run_parameter_batch_task(task_id: str, req: ParameterBatchBacktestReq
     try:
         results = await asyncio.gather(*(run_one(index, combo) for index, combo in enumerate(combos)))
         completed = sum(1 for item in results if item.get("status") == "completed")
-        failed = len(results) - completed
+        cancelled = sum(1 for item in results if item.get("status") == "cancelled")
+        failed = len(results) - completed - cancelled
+        final_status = "cancelled" if task.get("cancel_requested") else ("completed" if failed == 0 else "completed_with_errors")
         task.update(
             {
-                "status": "completed" if failed == 0 else "completed_with_errors",
+                "status": final_status,
                 "completed_at": datetime.utcnow().isoformat(),
                 "completed_runs": completed,
                 "failed_runs": failed,
+                "cancelled_runs": cancelled,
                 "results": sorted(results, key=lambda item: item["index"]),
             }
         )
+        backtest_duckdb_store.append_task_event(task_id, task["status"], "task_completed", _task_public_view(task))
     except Exception as exc:
         task.update(
             {
@@ -2763,6 +2861,7 @@ async def _run_parameter_batch_task(task_id: str, req: ParameterBatchBacktestReq
                 "error": str(exc)[:500],
             }
         )
+        backtest_duckdb_store.append_task_event(task_id, "failed", "task_failed", _task_public_view(task))
 
 
 @router.post("/backtest/parameter-batch", response_model=BacktestTaskSubmitResponse)
@@ -2788,8 +2887,17 @@ async def submit_parameter_batch_backtest(req: ParameterBatchBacktestRequest):
         "completed_runs": 0,
         "failed_runs": 0,
         "max_parallel": max_parallel,
-        "storage": "PostgreSQL backtest_results",
+        "storage": "PostgreSQL backtest_results + DuckDB backtest_results archive",
+        "result_storage": {
+            "primary": "PostgreSQL backtest_results",
+            "archive": "DuckDB data/backtest/backtest_results.duckdb",
+            "archive_schema": "backtest_duckdb_archive.v1",
+        },
         "queue_scope": "in_process_memory",
+        "cancel_supported": True,
+        "retry_supported": True,
+        "request": req.model_copy(deep=True),
+        "param_combinations": combos,
         "pit": {
             "requested_as_of_time": _iso(req.as_of_time),
             "requested_start_time": _iso(req.start_time),
@@ -2800,13 +2908,14 @@ async def submit_parameter_batch_backtest(req: ParameterBatchBacktestRequest):
     }
     _trim_backtest_tasks()
     req.max_parallel = max_parallel
+    backtest_duckdb_store.append_task_event(task_id, "queued", "task_submitted", _task_public_view(BACKTEST_TASKS[task_id]))
     asyncio.create_task(_run_parameter_batch_task(task_id, req, combos))
     return BacktestTaskSubmitResponse(
         task_id=task_id,
         status="queued",
         total_runs=len(combos),
         max_parallel=max_parallel,
-        note="任务在当前后端进程内异步执行；服务重启会丢失任务状态，但成功的单次回测结果会保存到 backtest_results。",
+        note="任务在当前后端进程内异步执行；服务重启会丢失任务状态，但成功的单次回测结果会保存到 PostgreSQL 并归档到 DuckDB。",
     )
 
 
@@ -2826,6 +2935,74 @@ async def get_backtest_task(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="回测任务不存在或后端服务已重启")
     return _task_public_view(task)
+
+
+@router.get("/backtest/duckdb-archive")
+async def get_backtest_duckdb_archive(limit: int = Query(20, ge=1, le=100)):
+    rows = backtest_duckdb_store.latest_results(limit=limit)
+    return {
+        "schema_version": "backtest_duckdb_archive_response.v1",
+        "storage": "DuckDB data/backtest/backtest_results.duckdb",
+        "available": backtest_duckdb_store.available,
+        "count": len(rows),
+        "results": rows,
+        "pit_rule": "available_time <= as_of_time",
+        "supports": ["result_compare", "agent_audited_metrics", "trade_replay_links", "pit_check"],
+    }
+
+
+@router.post("/backtest/tasks/{task_id}/cancel")
+async def cancel_backtest_task(task_id: str):
+    task = BACKTEST_TASKS.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="回测任务不存在或后端服务已重启")
+    if task.get("status") in {"completed", "completed_with_errors", "failed", "cancelled"}:
+        return {**_task_public_view(task), "cancelAccepted": False, "message": "任务已结束，不能取消。"}
+    task["cancel_requested"] = True
+    task["status"] = "cancelling"
+    task["cancel_requested_at"] = datetime.utcnow().isoformat()
+    backtest_duckdb_store.append_task_event(task_id, "cancelling", "task_cancel_requested", _task_public_view(task))
+    return {**_task_public_view(task), "cancelAccepted": True}
+
+
+@router.post("/backtest/tasks/{task_id}/retry", response_model=BacktestTaskSubmitResponse)
+async def retry_backtest_task(task_id: str):
+    task = BACKTEST_TASKS.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="回测任务不存在或后端服务已重启")
+    if _task_is_active(task):
+        raise HTTPException(status_code=409, detail="任务仍在运行，不能重试")
+    req = task.get("request")
+    combos = task.get("param_combinations") or []
+    if not isinstance(req, ParameterBatchBacktestRequest) or not combos:
+        raise HTTPException(status_code=400, detail="任务缺少可重试的原始配置")
+    new_task_id = f"bt-{uuid.uuid4().hex[:12]}"
+    cloned_request = req.model_copy(deep=True)
+    BACKTEST_TASKS[new_task_id] = {
+        **{key: value for key, value in task.items() if key not in {"results", "error", "completed_at", "started_at", "cancel_requested", "cancel_requested_at"}},
+        "task_id": new_task_id,
+        "status": "queued",
+        "created_at": datetime.utcnow().isoformat(),
+        "started_at": None,
+        "completed_at": None,
+        "completed_runs": 0,
+        "failed_runs": 0,
+        "cancelled_runs": 0,
+        "results": [],
+        "request": cloned_request,
+        "param_combinations": combos,
+        "retry_of": task_id,
+    }
+    _trim_backtest_tasks()
+    backtest_duckdb_store.append_task_event(new_task_id, "queued", "task_retry_submitted", _task_public_view(BACKTEST_TASKS[new_task_id]))
+    asyncio.create_task(_run_parameter_batch_task(new_task_id, cloned_request, combos))
+    return BacktestTaskSubmitResponse(
+        task_id=new_task_id,
+        status="queued",
+        total_runs=len(combos),
+        max_parallel=int(BACKTEST_TASKS[new_task_id].get("max_parallel") or 5),
+        note=f"已从 {task_id} 创建重试任务；结果继续归档到 PostgreSQL + DuckDB。",
+    )
 
 
 @router.post("/backtest/batch", response_model=BatchBacktestResponse)
@@ -2850,7 +3027,12 @@ async def batch_backtest(req: BatchBacktestRequest):
             symbol_ccxt  = _normalize_symbol(symbol)
             symbol_clean = symbol.upper()
             df = await market_data_gateway.get_dataframe(
-                symbol_ccxt, req.interval, limit=effective_limit
+                symbol_ccxt,
+                req.interval,
+                limit=effective_limit,
+                allow_external_fallback=False,
+                allow_ccxt_fallback=False,
+                allow_binance_fallback=False,
             )
             if df is None or len(df) < 300:
                 return BatchBacktestItem(symbol=symbol_clean, total_return=0, annual_return=0,

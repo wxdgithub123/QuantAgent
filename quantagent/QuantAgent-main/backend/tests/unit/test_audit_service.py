@@ -87,6 +87,29 @@ def test_audit_service_standard_columns_include_hash_and_status():
     assert columns["immutable"] is True
 
 
+def test_order_intent_execution_link_is_not_a_fill_event():
+    service = AuditService()
+    details = service._standardize_details(
+        action="ORDER_INTENT_EXECUTION_LINKED",
+        resource="BTCUSDT",
+        details={
+            "intent": {"id": "OI-MANUAL-1", "symbol": "BTCUSDT", "action": "BUY"},
+            "executionResult": {"orderId": "PT-13", "status": "FILLED"},
+        },
+    )
+    columns = service._standard_columns(
+        action="ORDER_INTENT_EXECUTION_LINKED",
+        resource="BTCUSDT",
+        details=details,
+    )
+
+    assert details["eventType"] == "ORDER_INTENT_EXECUTION_LINKED"
+    assert columns["event_type"] == "ORDER_INTENT_EXECUTION_LINKED"
+    assert columns["order_intent_id"] == "OI-MANUAL-1"
+    assert columns["order_id"] == "PT-13"
+    assert columns["execution_status"] == "FILLED"
+
+
 @pytest.mark.asyncio
 async def test_add_event_populates_standard_columns_and_prev_hash():
     service = AuditService()

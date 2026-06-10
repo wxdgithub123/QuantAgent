@@ -23,6 +23,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { ReplayProvider, useReplayStore } from "@/lib/replay-store";
 import { AppTopNav } from "@/components/navigation/AppTopNav";
+import { WorkbenchLinkBar } from "@/components/linkage/WorkbenchLinkBar";
 import { EquityCurveChart, TradeMarker } from "@/components/charts/EquityCurveChart";
 import KlineChart from "@/components/charts/KlineChart";
 import TradeList from "@/components/charts/TradeList";
@@ -39,7 +40,7 @@ const ReplayContent = dynamic(() => Promise.resolve(ReplayContentWithHydrationFi
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface ReplaySession {replay_session_id: string;strategy_id: number;symbol: string;start_time: string;end_time: string;speed: number;initial_capital: number;status: "pending" | "running" | "paused" | "completed" | "failed";current_timestamp?: string;created_at: string;is_saved?: boolean;
+interface ReplaySession {replay_session_id: string;strategy_id: number;symbol: string;start_time: string;end_time: string;speed: number;initial_capital: number;status: "pending" | "running" | "paused" | "completed" | "failed";current_timestamp?: string;created_at: string;is_saved?: boolean;interval?: string;backtest_id?: number | null;params?: Record<string, any> | null;strategy_type?: string | null;
 }
 
 interface ReplayStatus {replay_session_id: string;status: "pending" | "running" | "paused" | "completed" | "failed";current_simulated_time: string;progress: number;pnl: number;equity_curve?: { t: string; v: number }[];
@@ -140,6 +141,68 @@ interface DynamicSelectionHistoryRecord {
   expected_sharpe: number;
   created_at: string;
 }
+
+type EliminationRuleConfig = {
+  min_score_threshold: number;
+  elimination_ratio: number;
+  min_consecutive_low: number;
+  low_score_threshold: number;
+  min_strategies: number;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const asNumber = (value: unknown): number | null =>
+  typeof value === "number" && Number.isFinite(value) ? value : null;
+
+const asString = (value: unknown): string | null =>
+  typeof value === "string" && value.trim() !== "" ? value : null;
+
+const asNumberMap = (value: unknown): Record<string, number> | null => {
+  if (!isRecord(value)) return null;
+  const entries = Object.entries(value).filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1]));
+  return Object.fromEntries(entries);
+};
+
+const asAtomicStrategies = (value: unknown): AtomicStrategyConfig[] | null => {
+  if (!Array.isArray(value)) return null;
+  const strategies = value.flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const strategyId = asString(item.strategy_id);
+    const strategyType = asString(item.strategy_type);
+    if (!strategyId || !strategyType) return [];
+    return [{
+      strategy_id: strategyId,
+      strategy_type: strategyType,
+      params: isRecord(item.params) ? item.params : {},
+    }];
+  });
+  return strategies.length > 0 ? strategies : null;
+};
+
+const asEliminationRule = (value: unknown): EliminationRuleConfig | null => {
+  if (!isRecord(value)) return null;
+  const minScoreThreshold = asNumber(value.min_score_threshold);
+  const eliminationRatio = asNumber(value.elimination_ratio);
+  const minConsecutiveLow = asNumber(value.min_consecutive_low);
+  const lowScoreThreshold = asNumber(value.low_score_threshold);
+  const minStrategies = asNumber(value.min_strategies);
+  if (
+    minScoreThreshold === null ||
+    eliminationRatio === null ||
+    minConsecutiveLow === null ||
+    lowScoreThreshold === null ||
+    minStrategies === null
+  ) return null;
+  return {
+    min_score_threshold: minScoreThreshold,
+    elimination_ratio: eliminationRatio,
+    min_consecutive_low: minConsecutiveLow,
+    low_score_threshold: lowScoreThreshold,
+    min_strategies: minStrategies,
+  };
+};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const SYMBOLS = [
@@ -509,6 +572,7 @@ function ReplayContentWithHydrationFix() {
   const session = safeSession;
   const status = safeStatus;
   const isPolling = storeState.isPolling;
+  const sessionParamInterval = asString(session?.params?.interval);
   // Only consider running if mounted AND polling is active
   const running = isMounted && isPolling && storeState.status?.status === "running";
 
@@ -532,14 +596,20 @@ function ReplayContentWithHydrationFix() {
         if (storeState.session.params) {
           if (storeState.session.strategy_type === "dynamic_selection") {
             const p = storeState.session.params;
-            if (p.atomic_strategies) setAtomicStrategies(p.atomic_strategies);
-            if (p.evaluation_period) setEvaluationPeriod(p.evaluation_period);
-            if (p.weight_method) setWeightMethod(p.weight_method);
-            if (p.composition_threshold) setCompositionThreshold(p.composition_threshold);
-            if (p.elimination_rule) setEliminationRule(p.elimination_rule);
-            if (p.per_strategy_capital !== undefined) setPerStrategyCapital(p.per_strategy_capital);
+            const restoredStrategies = asAtomicStrategies(p.atomic_strategies);
+            const restoredEvaluationPeriod = asNumber(p.evaluation_period);
+            const restoredWeightMethod = asString(p.weight_method);
+            const restoredCompositionThreshold = asNumber(p.composition_threshold);
+            const restoredEliminationRule = asEliminationRule(p.elimination_rule);
+            const restoredPerStrategyCapital = asNumber(p.per_strategy_capital);
+            if (restoredStrategies) setAtomicStrategies(restoredStrategies);
+            if (restoredEvaluationPeriod !== null) setEvaluationPeriod(restoredEvaluationPeriod);
+            if (restoredWeightMethod) setWeightMethod(restoredWeightMethod);
+            if (restoredCompositionThreshold !== null) setCompositionThreshold(restoredCompositionThreshold);
+            if (restoredEliminationRule) setEliminationRule(restoredEliminationRule);
+            if (restoredPerStrategyCapital !== null) setPerStrategyCapital(restoredPerStrategyCapital);
           } else {
-            setParamValues(storeState.session.params);
+            setParamValues(asNumberMap(storeState.session.params) || {});
           }
         }
       }
@@ -1592,6 +1662,20 @@ function ReplayContentWithHydrationFix() {
       <AppTopNav activeSection="replay" title="历史回放" subtitle="K线回放、决策复盘与审计追踪" />
 
       <main className="container mx-auto px-4 py-6">
+        <WorkbenchLinkBar
+          source="replay"
+          symbol={session?.symbol || symbol}
+          interval={session?.interval || sessionParamInterval || interval}
+          asOfTime={playerAsOfTime || status?.current_simulated_time || session?.current_timestamp || urlAsOfTime || null}
+          replaySessionId={session?.replay_session_id || urlSessionId}
+          backtestId={session?.backtest_id || null}
+          auditId={selectedReplayEvent?.relatedAuditId || null}
+          decisionId={selectedReplayEvent?.relatedDecisionId || null}
+          orderIntentId={selectedReplayEvent?.relatedOrderIntentId || null}
+          orderId={selectedReplayEvent?.relatedOrderId || null}
+          className="mb-6"
+        />
+
         {/* ── History Panel ── */}
         {showHistoryPanel && (
           <Card className="bg-card border-border/50 shadow-lg mb-6">
@@ -2863,7 +2947,7 @@ function ReplayContentWithHydrationFix() {
                     <CardHeader className="pb-2">
                       <CardTitle className="text-foreground text-sm flex items-center gap-2">
                         <BarChart3 className="w-4 h-4 text-purple-400" />
-                        K线图 · {session?.symbol} · {session?.interval || session?.params?.interval || "15m"}
+                        K线图 · {session?.symbol} · {session?.interval || sessionParamInterval || "15m"}
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="p-2">

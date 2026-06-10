@@ -17,6 +17,10 @@ from . import (
     walk_forward,
     hummingbot,
     paper_bot_equity,
+    data_platform,
+    config_center,
+    data_governance,
+    linkage,
 )
 
 __all__ = [
@@ -34,4 +38,8 @@ __all__ = [
     "walk_forward",
     "hummingbot",
     "paper_bot_equity",
+    "data_platform",
+    "config_center",
+    "data_governance",
+    "linkage",
 ]

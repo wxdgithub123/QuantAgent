@@ -1,10 +1,11 @@
 """System health endpoint — L1-L6 pipeline status aggregation."""
 
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from fastapi import APIRouter
 
@@ -418,6 +419,325 @@ def _feature_status(*conditions: bool) -> str:
     return "ready" if all(conditions) else "check"
 
 
+def _redact_url(value: Any) -> str:
+    """Return a display-safe URL without credentials, query, or fragment."""
+    if not value:
+        return ""
+    text = str(value).strip()
+    try:
+        parsed = urlsplit(text)
+    except Exception:
+        return "[redacted]"
+    if not parsed.scheme or not parsed.netloc:
+        return text.split("?", 1)[0].split("#", 1)[0]
+
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    if parsed.username or parsed.password:
+        host = f"***:***@{host}"
+    return urlunsplit((parsed.scheme, host, parsed.path.rstrip("/") or "", "", ""))
+
+
+def _env_source(name: str) -> str:
+    return "environment" if name in os.environ else "default"
+
+
+def _service_detail(service_health: Dict[str, Any]) -> Dict[str, Any]:
+    detail = service_health.get("detail") if isinstance(service_health, dict) else {}
+    return detail if isinstance(detail, dict) else {}
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "ok", "healthy", "ready"}
+    return bool(value)
+
+
+def _build_tradingagents_config_status(service_health: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Build the Phase 2 P1 effective TradingAgents configuration payload."""
+    from app.core.config import settings
+
+    service_health = service_health or {}
+    detail = _service_detail(service_health)
+    native_graph = detail.get("native_graph") if isinstance(detail.get("native_graph"), dict) else {}
+
+    configured_mode = str(
+        detail.get("mode")
+        or os.getenv("TRADINGAGENTS_MODE")
+        or "context_adapter"
+    ).strip().lower()
+    full_graph_modes = {"quantagent_patched_graph", "quantagent_graph", "patched_graph", "native_graph"}
+    full_graph_requested = configured_mode in full_graph_modes
+
+    provider = str(
+        detail.get("llm_provider")
+        or os.getenv("TRADINGAGENTS_LLM_PROVIDER")
+        or settings.LLM_PROVIDER
+        or "none"
+    ).strip().lower()
+    openai_configured = (
+        _truthy(detail.get("openai_configured"))
+        if "openai_configured" in detail
+        else bool(settings.OPENAI_API_KEY)
+    )
+    ollama_enabled = _truthy(detail.get("ollama_enabled")) or provider == "ollama"
+    context_adapter_ready = bool(settings.USE_TRADINGAGENTS) and service_health.get("status") == "ok"
+    llm_ready = provider in {"none", "disabled"} or provider == "ollama" or (
+        provider in {"openai", "openai_compatible"} and openai_configured
+    )
+    graph_available = _truthy(detail.get("tradingagents_available")) or _truthy(native_graph.get("available"))
+    full_graph_ready = bool(settings.USE_TRADINGAGENTS and context_adapter_ready and full_graph_requested and graph_available and llm_ready)
+
+    quick_model = (
+        native_graph.get("quick_model")
+        or detail.get("quick_model")
+        or os.getenv("TRADINGAGENTS_NATIVE_QUICK_MODEL")
+        or detail.get("openai_model")
+        or settings.OPENAI_MODEL
+    )
+    deep_model = (
+        native_graph.get("deep_model")
+        or detail.get("deep_model")
+        or os.getenv("TRADINGAGENTS_NATIVE_DEEP_MODEL")
+        or detail.get("openai_model")
+        or settings.OPENAI_MODEL
+    )
+    selected_analysts = native_graph.get("selected_analysts")
+    if not isinstance(selected_analysts, list) or not selected_analysts:
+        selected_analysts = ["market", "news", "social", "fundamentals"]
+
+    service_status = "ready" if context_adapter_ready else ("disabled" if not settings.USE_TRADINGAGENTS else "check")
+    overall_status = "ready" if context_adapter_ready else service_status
+
+    readiness = [
+        {
+            "id": "service",
+            "label": "TradingAgents service",
+            "status": service_status,
+            "detail": "Service reachable and enabled" if context_adapter_ready else "Enable service or check connectivity",
+        },
+        {
+            "id": "context_adapter",
+            "label": "Fast research mode",
+            "status": "ready" if context_adapter_ready else "check",
+            "detail": "Uses QuantAgent AnalysisContext with optional LLM summarization.",
+        },
+        {
+            "id": "full_graph",
+            "label": "Full TradingAgentsGraph",
+            "status": "ready" if full_graph_ready else ("partial" if graph_available else "check"),
+            "detail": (
+                "Configured mode can run the full graph."
+                if full_graph_ready
+                else "Not required for P0; configure patched/native graph plus LLM credentials for strong full-graph acceptance."
+            ),
+        },
+        {
+            "id": "llm",
+            "label": "LLM configuration",
+            "status": "ready" if llm_ready else "check",
+            "detail": f"provider={provider}, quick={quick_model}, deep={deep_model}",
+        },
+        {
+            "id": "data_boundary",
+            "label": "Agent input boundary",
+            "status": "ready",
+            "detail": "Agent bars and snapshots are local_storage_only with available_time <= as_of_time.",
+        },
+    ]
+
+    return {
+        "timestamp": int(time.time()),
+        "overall_status": overall_status,
+        "enabled": settings.USE_TRADINGAGENTS,
+        "service": {
+            "status": service_health.get("status", "unavailable"),
+            "http_status": service_health.get("http_status"),
+            "url": _redact_url(service_health.get("service_url") or settings.TRADINGAGENTS_SERVICE_URL),
+            "timeout_seconds": settings.TRADINGAGENTS_TIMEOUT_SECONDS,
+            "error": None if service_health.get("status") == "ok" else str(service_health.get("detail") or "")[:200],
+        },
+        "mode": {
+            "configured": configured_mode,
+            "fastResearchReady": context_adapter_ready,
+            "fullGraphRequested": full_graph_requested,
+            "fullGraphReady": full_graph_ready,
+            "supportedModes": ["context_adapter", "quantagent_patched_graph", "native_graph"],
+            "selectedAnalysts": selected_analysts,
+            "roles": [
+                "market_analyst",
+                "news_analyst",
+                "sentiment_analyst",
+                "fundamentals_macro_analyst",
+                "bull_researcher",
+                "bear_researcher",
+                "research_manager",
+                "trader",
+                "risk_analysts",
+                "final_judge",
+            ],
+        },
+        "llm": {
+            "provider": provider,
+            "openaiConfigured": openai_configured,
+            "ollamaEnabled": ollama_enabled,
+            "baseUrl": _redact_url(detail.get("openai_base_url") or settings.OPENAI_BASE_URL),
+            "model": detail.get("openai_model") or settings.OPENAI_MODEL,
+            "quickModel": quick_model,
+            "deepModel": deep_model,
+            "sources": {
+                "LLM_PROVIDER": _env_source("LLM_PROVIDER"),
+                "OPENAI_MODEL": _env_source("OPENAI_MODEL"),
+                "OPENAI_BASE_URL": _env_source("OPENAI_BASE_URL"),
+                "TRADINGAGENTS_MODE": _env_source("TRADINGAGENTS_MODE"),
+            },
+        },
+        "graph": {
+            "tradingagentsAvailable": graph_available,
+            "importError": detail.get("tradingagents_error") or native_graph.get("import_error"),
+            "nativeGraph": {
+                "available": _truthy(native_graph.get("available")),
+                "manualOnly": _truthy(native_graph.get("manual_only")),
+                "nativeSymbolExample": native_graph.get("native_symbol"),
+                "dataSourceNote": native_graph.get("data_source_note"),
+            },
+            "strongAcceptanceEligible": full_graph_ready,
+        },
+        "data_boundary": {
+            "agent_input_policy": "local_storage_only",
+            "pit_rule": "available_time <= as_of_time",
+            "externalFallbackAllowed": False,
+            "allowCcxtFallback": False,
+            "allowBinanceFallback": False,
+            "snapshotEndpoints": [
+                "/api/v1/market/bars/as-of",
+                "/api/v1/market/snapshot/{symbol}",
+                "/api/v1/market/research-snapshot/{symbol}",
+            ],
+        },
+        "readiness": readiness,
+    }
+
+
+@router.get("/tradingagents-config")
+async def get_tradingagents_config() -> Dict[str, Any]:
+    """Return effective TradingAgents P1 configuration and readiness."""
+    try:
+        from app.agents.tradingagents_adapter import tradingagents_adapter
+
+        service_health = await tradingagents_adapter.health()
+    except Exception as exc:
+        from app.core.config import settings
+
+        service_health = {
+            "status": "unavailable" if settings.USE_TRADINGAGENTS else "disabled",
+            "service_url": settings.TRADINGAGENTS_SERVICE_URL,
+            "detail": str(exc)[:200],
+        }
+    return _build_tradingagents_config_status(service_health)
+
+
+@router.get("/phase2-p1p2-status")
+async def get_phase2_p1p2_status() -> Dict[str, Any]:
+    """Return a compact status map for Phase 2 P1/P2 follow-up work."""
+    tradingagents = await get_tradingagents_config()
+    counts = await _prd_counts()
+
+    items = [
+        {
+            "key": "tradingagents_configuration",
+            "priority": "P1",
+            "status": tradingagents.get("overall_status", "check"),
+            "page": "/monitor",
+            "api": "/api/v1/system/tradingagents-config",
+            "evidence": {
+                "mode": _layer_value(tradingagents, "mode", "configured"),
+                "provider": _layer_value(tradingagents, "llm", "provider"),
+                "fullGraphReady": _layer_value(tradingagents, "mode", "fullGraphReady"),
+            },
+        },
+        {
+            "key": "risk_configuration",
+            "priority": "P1/P2",
+            "status": "ready",
+            "page": "/risk",
+            "api": "/api/v1/risk/config",
+            "evidence": {
+                "configMetadata": "/api/v1/risk/config-metadata",
+                "configPage": "/risk",
+                "resetEndpoint": "/api/v1/risk/config/reset",
+            },
+        },
+        {
+            "key": "research_desk_linkage",
+            "priority": "P1",
+            "status": "ready",
+            "page": "/signals",
+            "api": "/api/v1/market/research-snapshot/{symbol}",
+            "evidence": {
+                "asOfReview": True,
+                "contextHash": True,
+                "backtestLinks": True,
+            },
+        },
+        {
+            "key": "system_monitoring",
+            "priority": "P1",
+            "status": "ready",
+            "page": "/monitor",
+            "api": "/api/v1/system/frontend-api-overview",
+            "evidence": {
+                "backtestResults": counts.get("backtest_results", 0),
+                "replaySessions": counts.get("replay_sessions", 0),
+                "auditLogs": counts.get("audit_logs", 0),
+            },
+        },
+        {
+            "key": "advanced_backtest_replay_analytics",
+            "priority": "P1/P2",
+            "status": "ready",
+            "page": "/analytics",
+            "api": "/api/v1/analytics/replay-backtest-comparison",
+            "evidence": {
+                "strategyComparison": "/api/v1/analytics/strategy-comparison",
+                "attributionComparison": "/api/v1/analytics/attribution/comparison",
+            },
+        },
+        {
+            "key": "deferred_p2_scope",
+            "priority": "P2",
+            "status": "deferred",
+            "page": None,
+            "api": None,
+            "evidence": {
+                "items": [
+                    "custom Agent marketplace",
+                    "complex approval workflows",
+                    "multi-market expansion",
+                    "live broker execution",
+                    "Prefect/TimescaleDB migration",
+                ],
+            },
+        },
+    ]
+    active_items = [item for item in items if item["status"] != "deferred"]
+    return {
+        "timestamp": int(time.time()),
+        "overall_status": "ready" if all(item["status"] == "ready" for item in active_items) else "partial",
+        "items": items,
+    }
+
+
+@router.get("/phase2-ops-monitor")
+async def get_phase2_ops_monitor() -> Dict[str, Any]:
+    """Return Phase 2 operations health for data, Agent, audit, risk, and backtest desks."""
+    from app.services.phase2_ops_monitor import build_phase2_ops_monitor
+
+    tradingagents = await get_tradingagents_config()
+    return await build_phase2_ops_monitor(tradingagents)
+
+
 @router.get("/prd-flow")
 async def get_prd_flow_status() -> Dict[str, Any]:
     """Return PRD v1 flow readiness for frontend and release checks."""
@@ -657,6 +977,8 @@ async def get_frontend_api_overview() -> Dict[str, Any]:
             "apis": [
                 {"method": "GET", "path": "/api/v1/system/frontend-api-overview", "purpose": "10.6 页面/API总览"},
                 {"method": "GET", "path": "/api/v1/system/health", "purpose": "系统健康"},
+                {"method": "GET", "path": "/api/v1/system/tradingagents-config", "purpose": "TradingAgents 有效配置和准备度"},
+                {"method": "GET", "path": "/api/v1/system/phase2-p1p2-status", "purpose": "Phase 2 P1/P2 状态"},
                 {"method": "GET", "path": "/api/v1/system/prd-flow", "purpose": "PRD全流程状态"},
                 {"method": "GET", "path": "/api/v1/system/pipeline", "purpose": "新闻/宏观管道状态"},
             ],
@@ -675,6 +997,7 @@ async def get_frontend_api_overview() -> Dict[str, Any]:
         {"path": "/signals", "label": "因子/信号", "role": "查看标准化数据加工后的因子和信号"},
         {"path": "/backtest", "label": "回测", "role": "创建和查看策略回测任务"},
         {"path": "/audit", "label": "回测与审计", "role": "查看 PIT、回放、审计、对比"},
+        {"path": "/risk", "label": "风控配置", "role": "查看和调整 RiskGuard 阈值、禁用标的与熔断"},
         {"path": "/monitor", "label": "系统监控", "role": "查看 10.6 前端/API/服务状态"},
     ]
 

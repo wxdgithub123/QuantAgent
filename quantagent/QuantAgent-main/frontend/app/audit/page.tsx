@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { AppTopNav } from "@/components/navigation/AppTopNav";
+import { WorkbenchLinkBar } from "@/components/linkage/WorkbenchLinkBar";
 import {
   RefreshCw, ChevronDown, ChevronUp,
   CheckCircle, Shield, XCircle, AlertTriangle,
@@ -889,6 +890,19 @@ export default function AuditPage() {
     <>
       <AppTopNav activeSection="audit" title="决策证据链与可追溯中心" subtitle="能不能被证明 · 能不能回放 · 有没有违规" />
       <div className="container mx-auto px-4 py-4 space-y-5 max-w-7xl">
+        <WorkbenchLinkBar
+          source="audit"
+          symbol={bi?.symbol || filters.symbol || linkedRecord?.symbol}
+          interval="1h"
+          asOfTime={inputAsOfTime || filters.endTime || null}
+          decisionId={selectedDecisionId}
+          auditId={selectedId}
+          backtestId={linkedBacktestId || filters.backtestId}
+          replaySessionId={linkedReplaySessionId || filters.replaySessionId}
+          orderIntentId={linkedOrderIntentId || filters.orderIntentId}
+          orderId={linkedOrderId || filters.orderId}
+          contextHash={bi?.contextHash || null}
+        />
 
         {/* ── Records list ────────────────────────────────────────────────── */}
         <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">

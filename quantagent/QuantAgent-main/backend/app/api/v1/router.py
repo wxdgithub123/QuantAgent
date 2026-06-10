@@ -4,7 +4,7 @@ API V1 Router
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import market, trading, auth, strategy, analytics, risk, replay, profiles, composition, skill, dynamic_selection, walk_forward, hummingbot, paper_bot_equity, testnet_bot, system_health, signals, coordination, audit, execution
+from app.api.v1.endpoints import market, trading, auth, strategy, analytics, risk, replay, profiles, composition, skill, dynamic_selection, walk_forward, hummingbot, paper_bot_equity, testnet_bot, system_health, signals, coordination, audit, execution, data_platform, config_center, data_governance, linkage
 
 api_router = APIRouter()
 
@@ -26,6 +26,10 @@ api_router.include_router(signals.router, prefix="/signals", tags=["Factors & Si
 api_router.include_router(coordination.router, prefix="/coordination", tags=["Coordination"])
 api_router.include_router(audit.router, prefix="/audit", tags=["Backtest Audit"])
 api_router.include_router(execution.router, prefix="/execution", tags=["Execution"])
+api_router.include_router(data_platform.router, prefix="", tags=["Financial Data Platform"])
+api_router.include_router(config_center.router, prefix="/config-center", tags=["Configuration Center"])
+api_router.include_router(data_governance.router, prefix="/data-governance", tags=["Data Governance"])
+api_router.include_router(linkage.router, prefix="/linkage", tags=["Workbench Linkage"])
 # Paper Bot Equity endpoints — 挂载在 hummingbot 路径下
 api_router.include_router(paper_bot_equity.router, prefix="/hummingbot", tags=["Hummingbot"])
 # Testnet Perpetual Bot endpoints — 挂载在 hummingbot/testnet-bots 路径下

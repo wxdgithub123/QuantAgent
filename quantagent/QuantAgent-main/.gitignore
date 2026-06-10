@@ -95,7 +95,13 @@ fix_*.js
 fix_*.py
 
 # ── Local Docs & Specs (local only, not pushed to GitHub) ──
-/docs/
+/docs/*
+!/docs/phase2_*.md
+
+# ── Local exports, reports, and backups ───────────────────────────────────────
+/backups/
+/local_dump.sql
+/*.html
 
 # ── Root-level screenshots & debugging artifacts ──
 /*.png
@@ -113,6 +119,7 @@ frontend/DDesktopQuantAgentfrontend/
 
 # ── Runtime data ──────────────────────────────────────────────────────────────
 hummingbot_data/
+/data/
 backend/data/pipeline/
 backend/data/market/
 *.duckdb

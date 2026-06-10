@@ -13,7 +13,8 @@ export interface ReplaySession {
   speed: number;
   initial_capital: number;
   interval?: string;
-  params?: Record<string, any>;
+  params?: Record<string, unknown> | null;
+  backtest_id?: number | null;
   status: "pending" | "running" | "paused" | "completed" | "failed";
   current_timestamp?: string;
   created_at: string;
@@ -54,26 +55,7 @@ type ReplayAction =
   | { type: "SET_LAST_SESSION_ID"; payload: string | null }
   | { type: "RESTORE_FROM_STORAGE"; payload: { session: ReplaySession; status: ReplayStatus | null } };
 
-// Storage key for persistence
 const STORAGE_KEY = "quantagent_replay_session";
-
-function loadStoredState(): Partial<ReplayState> {
-  if (typeof window === "undefined") return {};
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      return {
-        lastSessionId: parsed.lastSessionId || null,
-        session: parsed.session || null,
-        status: parsed.status || null,
-      };
-    }
-  } catch (e) {
-    console.warn("Failed to load stored replay state:", e);
-  }
-  return {};
-}
 
 function clearStoredState() {
   if (typeof window === "undefined") return;

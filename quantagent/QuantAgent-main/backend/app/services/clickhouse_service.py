@@ -15,6 +15,7 @@ Falls back gracefully if ClickHouse is unavailable (returns None / empty list).
 """
 
 import logging
+import time
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
@@ -72,6 +73,8 @@ SETTINGS index_granularity = 8192
 import threading
 _client = None
 _client_lock = threading.Lock()
+_unavailable_until = 0.0
+_UNAVAILABLE_RETRY_SECONDS = 30.0
 
 
 def _ch_connect(database: str, **extra):
@@ -101,7 +104,7 @@ def _ensure_database() -> bool:
     """
     try:
         # Connect to built-in 'default' database which always exists
-        admin = _ch_connect(database="default", connect_timeout=5)
+        admin = _ch_connect(database="default", connect_timeout=1, send_receive_timeout=2)
         admin.command(f"CREATE DATABASE IF NOT EXISTS {settings.CLICKHOUSE_DB}")
         logger.info(f"ClickHouse database '{settings.CLICKHOUSE_DB}' ensured.")
         return True
@@ -158,16 +161,22 @@ def _sql_literal(value: str) -> str:
 
 def _get_client():
     """Lazily initialize and return a ClickHouse HTTP client. Returns None on failure."""
-    global _client
+    global _client, _unavailable_until
     if _client is not None:
         return _client
+    if time.monotonic() < _unavailable_until:
+        return None
     try:
-        # Ensure target database exists before connecting to it
-        _ensure_database()
+        # Ensure target database exists before connecting to it. If this fails,
+        # short-circuit so an offline ClickHouse does not cost two connection
+        # attempts on every startup/request.
+        if not _ensure_database():
+            _unavailable_until = time.monotonic() + _UNAVAILABLE_RETRY_SECONDS
+            return None
         _client = _ch_connect(
             database=settings.CLICKHOUSE_DB,
-            connect_timeout=5,
-            send_receive_timeout=30,
+            connect_timeout=1,
+            send_receive_timeout=3,
         )
         logger.info(
             f"ClickHouse client connected: {settings.CLICKHOUSE_HOST}:{settings.CLICKHOUSE_PORT}/{settings.CLICKHOUSE_DB}"
@@ -179,6 +188,7 @@ def _get_client():
         )
         return None
     except Exception as e:
+        _unavailable_until = time.monotonic() + _UNAVAILABLE_RETRY_SECONDS
         logger.warning(f"ClickHouse connection failed: {e}")
         return None
 

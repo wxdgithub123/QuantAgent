@@ -51,13 +51,23 @@ def _as_utc(dt: datetime) -> datetime:
 async def _acquire_backfill_lock() -> bool:
     """Try to acquire Redis lock. Returns True if we got the lock."""
     try:
-        import redis.asyncio as redis
-        from app.core.config import settings, CORS_ORIGINS
-        r = redis.from_url(settings.REDIS_URL)
-        acquired = await r.set(BACKFILL_LOCK_KEY, "1", ex=BACKFILL_LOCK_TTL, nx=True)
-        await r.aclose()
+        from app.services import database
+
+        r = database.get_redis()
+        if r is None:
+            return False
+        acquired = await asyncio.wait_for(
+            r.set(BACKFILL_LOCK_KEY, "1", ex=BACKFILL_LOCK_TTL, nx=True),
+            timeout=database._REDIS_OPERATION_TIMEOUT_SECONDS,
+        )
         return bool(acquired)
-    except Exception:
+    except Exception as exc:
+        try:
+            from app.services import database
+
+            await database._mark_redis_unavailable(exc)
+        except Exception:
+            pass
         return False
 
 
@@ -218,6 +228,7 @@ async def lifespan(app: FastAPI):
         logger.error(f"Alembic migration failed: {e}")
 
     # Redis connectivity check (independent of DB)
+    redis_ok = False
     try:
         from app.services.database import check_redis_connection
         redis_ok = await check_redis_connection()
@@ -248,7 +259,12 @@ async def lifespan(app: FastAPI):
     # Test market data connectivity (local storage/OpenBB first)
     try:
         from app.services.market_data_gateway import market_data_gateway
-        price = await market_data_gateway.get_price("BTCUSDT")
+        price = await market_data_gateway.get_price(
+            "BTCUSDT",
+            allow_external_fallback=False,
+            allow_ccxt_fallback=False,
+            allow_binance_fallback=False,
+        )
         logger.info(f"Market data OK: BTCUSDT = {price}")
     except Exception as e:
         logger.warning(f"Market data connection test failed: {e}")
@@ -295,9 +311,12 @@ async def lifespan(app: FastAPI):
 
     # Start Scheduler
     try:
-        from scheduler import scheduler_service
-        scheduler_service.start()
-        logger.info("Scheduler started.")
+        if redis_ok:
+            from scheduler import scheduler_service
+            scheduler_service.start()
+            logger.info("Scheduler started.")
+        else:
+            logger.warning("Scheduler not started because Redis jobstore is unavailable.")
     except Exception as e:
         logger.error(f"Failed to start Scheduler: {e}")
 
